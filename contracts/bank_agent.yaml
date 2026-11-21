@@ -1017,6 +1017,7 @@ components:
       type: string
       enum:
         - OUTSIDE_RECORDS_UNAVAILABLE
+        - OUTSIDE_RECORDS_REJECTED
         - KEY_HOLDER_UNAVAILABLE
         - KEY_HOLDER_REJECTED
         - KEY_VERSION_MISMATCH
@@ -1852,6 +1853,14 @@ components:
           description: Header to cell text exactly as the lender sent it.
           additionalProperties:
             type: string
+        raw_cells:
+          type: array
+          description: The cell texts of the record in file order, exactly as parsed (nothing trimmed).
+          items:
+            type: string
+        raw_text:
+          type: string
+          description: The exact source text of the record, including its line terminator and any blank lines before it.
         row_sha256:
           $ref: '#/components/schemas/Hash'
         received_at:
