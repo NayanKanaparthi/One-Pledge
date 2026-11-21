@@ -51,6 +51,8 @@ class StepInput:
 
 @dataclass
 class _Loan:
+    """One loan of a simulated bank: its terms, state and whether it has been tokenised."""
+
     ref: tuple[str, int]
     facility_code: str
     terms: Terms
@@ -61,10 +63,13 @@ class _Loan:
 
 @dataclass
 class _Bank:
+    """One bank's loans as the oracle tracks them, oldest first."""
+
     code: str
     loans: list[_Loan] = field(default_factory=list)
 
     def active(self, facility_code: str, vin: str) -> _Loan | None:
+        """The loan of this VIN at this facility that is not RELEASED (SPEC 10.5 existing loan lookup)."""
         for loan in self.loans:
             if (
                 loan.facility_code == facility_code
@@ -75,11 +80,13 @@ class _Bank:
         return None
 
     def new_loan(self, facility_code: str, terms: Terms) -> _Loan:
+        """A new loan at this bank, numbered in creation order."""
         loan = _Loan((self.code, len(self.loans) + 1), facility_code, terms)
         self.loans.append(loan)
         return loan
 
     def loan_for_asset(self, vin: str) -> _Loan | None:
+        """The tokenised loan of this VIN an alert refers to: the newest active one, else the newest."""
         matching = [loan for loan in self.loans if loan.terms.vin == vin and loan.tokenised]
         active = [loan for loan in matching if loan.state != LoanState.RELEASED]
         candidates = active or matching
@@ -138,6 +145,7 @@ class TimelineOracle:
     def _dispose(
         self, bank: _Bank, step: StepInput, cleaned: CleanedRow, seen: set[str], row_number: int
     ) -> tuple[RowObservation, _Loan | None]:
+        """Cleaning result, duplicate VIN in the file and the loan lookup of SPEC 10.5 for one row."""
         issues = cleaned.issues
         if cleaned.rejected or cleaned.vin is None:
             return _rejected_row(step, row_number, issues), None
@@ -163,6 +171,7 @@ class TimelineOracle:
     def _dispose_release(
         step: StepInput, row_number: int, issues: tuple[Issue, ...], existing: _Loan | None
     ) -> tuple[RowObservation, _Loan | None]:
+        """A release row asks for a LOCKED loan of the facility; anything else is rejected."""
         if existing is None or existing.state != LoanState.LOCKED:
             issue = Issue("vin", Problem.RELEASE_LOAN_NOT_LOCKED, Action.REJECTED)
             return _rejected_row(step, row_number, issues, issue), None
@@ -173,6 +182,7 @@ class TimelineOracle:
     def _check(
         self, rows: Sequence[tuple[RowObservation, _Loan | None]], facility: FacilityTerms, as_of: date
     ) -> None:
+        """The four local checks for every accepted PENDING loan; a failure holds it locally."""
         for observation, loan in rows:
             accepted = observation.disposition in (Disposition.ACCEPTED_NEW, Disposition.ACCEPTED_REPRESENTED)
             if loan is None or not accepted or loan.state != LoanState.PENDING:
@@ -190,6 +200,7 @@ class TimelineOracle:
         facility: FacilityTerms,
         rows: Sequence[tuple[RowObservation, _Loan | None]],
     ) -> None:
+        """Every loan still PENDING after the checks goes to the registry, in row order."""
         for observation, loan in rows:
             accepted = observation.disposition in (Disposition.ACCEPTED_NEW, Disposition.ACCEPTED_REPRESENTED)
             if loan is None or not accepted or loan.state != LoanState.PENDING:
@@ -202,6 +213,7 @@ class TimelineOracle:
     def _release(
         state: SimulationState, bank: _Bank, rows: Sequence[tuple[RowObservation, _Loan | None]]
     ) -> None:
+        """Release every requested loan the bank holds; a refused release is outcome OTHER."""
         for observation, loan in rows:
             if loan is None or observation.disposition != Disposition.RELEASE_REQUESTED:
                 continue
@@ -223,6 +235,7 @@ class TimelineOracle:
 def _rejected_row(
     step: StepInput, row_number: int, issues: tuple[Issue, ...], *extra: Issue
 ) -> RowObservation:
+    """A REJECTED observation with its issues in reporting order."""
     ordered = tuple(sorted((*issues, *extra), key=Issue.sort_key))
     return RowObservation(
         step.step_id, row_number, Disposition.REJECTED, ordered, outcome=RowOutcome.REJECTED
@@ -249,6 +262,7 @@ def _lookup_rule(
 
 
 def _apply_lock(state: SimulationState, loan: _Loan, observation: RowObservation, decision: Decision) -> None:
+    """Record the registry decision on the loan and the row, and queue both alerts of a new case."""
     if decision.result == "LOCKED":
         loan.state = LoanState.LOCKED
         observation.outcome = RowOutcome.LOCKED

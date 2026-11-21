@@ -9,9 +9,18 @@ is invented. Only `onepledge_evaluation` reads the answer key.
 ## Commands
 
 ```
-onepledge-datagen generate --seed INT --profile {full,small,example} --out DIR [--force]
-onepledge-datagen verify --data-dir DIR
+onepledge-datagen generate --seed INT --profile {full,small,example} --out DIR [--force] [--json] [--quiet] [--debug]
+onepledge-datagen verify --data-dir DIR [--json] [--quiet] [--debug]
 ```
+
+With `--json`, stdout holds exactly one JSON document: `{"ok": true, ...}` with the facts
+of the text output (steps and their rows, outside record counts, cases, data quality rows,
+rows checked, files), or `{"ok": false, "error": {"code": ..., "message": ...}}` (plus the
+`violations` list when invariants fail) with the same sentence on stderr. Every failure is
+one sentence and exit 1, including a path the file system refuses ("Cannot write the data
+set to PATH: permission denied; choose another --out."); an unexpected error prints
+`Unexpected error. Run with --debug for details.` and `--debug` adds the traceback. The
+generator writes no log lines, so `--quiet` changes nothing.
 
 `generate` builds the data set in memory, renders every file, parses the rendered bytes
 back and checks every invariant of SPEC 5.8 on them before anything is written. It

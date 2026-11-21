@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import csv
+import errno
 import io
 import json
+import os
+import re
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -11,6 +15,8 @@ from typing import Any
 
 import pytest
 
+from onepledge_datagen.application.invariants import InvariantChecker
+from onepledge_datagen.infrastructure.directory import describe
 from onepledge_datagen.interface.cli import main
 from onepledge_datagen.interface.output import Console
 
@@ -166,3 +172,143 @@ def test_verify_refuses_a_malformed_inherent_fixes_map(
 
     code, _, err = run("verify", "--data-dir", str(tampered_key(small_dir, tmp_path / "copy", replace)))
     assert (code, err) == (1, "answer key has a malformed inherent_fixes map.\n")
+
+
+def run_json(*argv: str) -> tuple[int, dict[str, Any], str]:
+    code, out, err = run(*argv, "--json")
+    document: dict[str, Any] = json.loads(out)
+    return code, document, err
+
+
+def test_an_output_path_under_a_file_is_one_sentence(tmp_path: Path) -> None:
+    afile = tmp_path / "afile"
+    afile.write_text("x")
+    code, out, err = run("generate", "--seed", "1", "--profile", "example", "--out", str(afile / "x"))
+    assert (code, out) == (1, "")
+    target = afile / "x"
+    assert (
+        err == f"Cannot write the data set to {target}: a part of the path is a file; choose another --out.\n"
+    )
+
+
+def test_a_path_the_system_refuses_is_one_sentence() -> None:
+    target = Path("/sys/onepledge-test/data")
+    code, _, err = run("generate", "--seed", "1", "--profile", "example", "--out", str(target))
+    assert code == 1
+    assert err == f"Cannot write the data set to {target}: permission denied; choose another --out.\n"
+
+
+def test_a_missing_parent_is_created(tmp_path: Path) -> None:
+    target = tmp_path / "a" / "b" / "data"
+    assert run("generate", "--seed", "1", "--profile", "example", "--out", str(target))[0] == 0
+    assert (target / "manifest.json").is_file()
+
+
+def test_a_file_the_system_refuses_to_read_is_one_sentence(
+    example_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    copy = tmp_path / "copy"
+    shutil.copytree(example_dir, copy)
+    original = Path.read_bytes
+
+    def refuse(path: Path) -> bytes:
+        if path.name == "manifest.json":
+            raise PermissionError(errno.EACCES, "Permission denied", str(path))
+        return original(path)
+
+    monkeypatch.setattr(Path, "read_bytes", refuse)
+    code, out, err = run("verify", "--data-dir", str(copy))
+    assert (code, out, err) == (1, "", f"Cannot read the data set in {copy}: permission denied.\n")
+
+
+@pytest.mark.parametrize(
+    ("number", "words"),
+    [
+        (errno.EACCES, "permission denied"),
+        (errno.EROFS, "the file system is read-only"),
+        (errno.ENOSPC, "no space is left on the device"),
+        (errno.ENOTDIR, "a part of the path is a file"),
+        (errno.EIO, "input/output error"),
+    ],
+)
+def test_file_system_problems_are_described_in_plain_words(number: int, words: str) -> None:
+    assert describe(OSError(number, os.strerror(number))) == words
+
+
+def test_an_unexpected_error_is_one_sentence_and_debug_adds_the_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def explode(*arguments: object) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(InvariantChecker, "check", explode)
+    argv = ("generate", "--seed", "1", "--profile", "example", "--out", str(tmp_path / "d"))
+    code, out, err = run(*argv)
+    assert (code, out, err) == (1, "", "Unexpected error. Run with --debug for details.\n")
+    code, _, err = run(*argv, "--debug")
+    assert code == 1 and "Traceback (most recent call last)" in err and "RuntimeError: boom" in err
+    code, document, _ = run_json(*argv)
+    assert (code, document["error"]["code"]) == (1, "UNEXPECTED_ERROR")
+
+
+def test_generate_and_verify_print_one_json_document(tmp_path: Path) -> None:
+    target = tmp_path / "data"
+    code, document, err = run_json("generate", "--seed", "7", "--profile", "example", "--out", str(target))
+    assert (code, err, document["ok"], document["profile"], document["seed"]) == (0, "", True, "example", 7)
+    assert document["steps"][0]["rows"] == 20 and document["files"] == len(list(target.rglob("*.*")))
+    code, document, _ = run_json("verify", "--data-dir", str(target))
+    assert (code, document["ok"], document["rows_checked"]) == (0, True, 20)
+    (target / "stray.txt").write_text("x")
+    code, document, err = run_json("verify", "--data-dir", str(target))
+    assert (code, document["ok"], document["error"]["code"]) == (1, False, "INVARIANTS_VIOLATED")
+    assert document["violations"] == ["stray.txt is present but not listed in checksums.json"]
+    assert err.splitlines()[0] == f"verify: 1 invariant violation in {target}:"
+    code, document, _ = run_json("generate", "--seed", "7", "--profile", "example", "--out", str(target))
+    assert (code, document["error"]["code"]) == (1, "OUTPUT_DIRECTORY")
+
+
+def test_counted_messages_use_the_singular_for_one(tmp_path: Path) -> None:
+    target = tmp_path / "data"
+    _, out, _ = run("generate", "--seed", "7", "--profile", "example", "--out", str(target))
+    assert "Invariants: all checks passed over 20 tape rows" in out
+    (target / "a.txt").write_text("x")
+    (target / "b.txt").write_text("x")
+    _, _, err = run("verify", "--data-dir", str(target))
+    assert err.splitlines()[0] == f"verify: 2 invariant violations in {target}:"
+
+
+AMOUNT_FORMS = (r"[0-9]+", r"\$[0-9]{1,3}(,[0-9]{3})*", r"[0-9]+\.[0-9]")
+
+
+def amount_cells(data_dir: Path) -> list[str]:
+    """The amount cell of every M_AMOUNT_ALT_FORMAT row, read with the csv module."""
+    key = json.loads((data_dir / "answer_key" / "answer_key.json").read_text())
+    cells = []
+    for entry in (m for m in key["messiness"] if m["kind"] == "M_AMOUNT_ALT_FORMAT"):
+        with (data_dir / entry["file"]).open(encoding="utf-8-sig", newline="") as handle:
+            rows = [row for row in csv.reader(handle) if row][1:]
+        cells.append(rows[entry["row_number"] - 1][4])
+    return cells
+
+
+def test_the_full_profile_uses_all_three_amount_forms_in_rotation(full_dir: Path) -> None:
+    cells = amount_cells(full_dir)
+    counts = [sum(1 for cell in cells if re.fullmatch(form, cell)) for form in AMOUNT_FORMS]
+    assert len(cells) == 20 and counts == [7, 7, 6]
+    key = json.loads((full_dir / "answer_key" / "answer_key.json").read_text())
+    assert key["generator_version"] == "1.0.1"
+
+
+def test_verify_refuses_amount_forms_out_of_rotation(small_dir: Path, tmp_path: Path) -> None:
+    copy = tmp_path / "copy"
+    shutil.copytree(small_dir, copy)
+    key = json.loads((copy / "answer_key" / "answer_key.json").read_text())
+    entry = next(m for m in key["messiness"] if m["kind"] == "M_AMOUNT_ALT_FORMAT")
+    tape = copy / entry["file"]
+    with tape.open(encoding="utf-8-sig", newline="") as handle:
+        cell = [row for row in csv.reader(handle) if row][entry["row_number"]][4]
+    respelled = cell.replace("$", "").replace(",", "") if cell.startswith("$") else f"${int(cell):,}"
+    tape.write_bytes(tape.read_bytes().replace(f'"{cell}"'.encode(), f'"{respelled}"'.encode(), 1))
+    code, _, err = run("verify", "--data-dir", str(copy))
+    assert code == 1
+    assert "M_AMOUNT_ALT_FORMAT rows are not spread over the three forms in rotation" in err

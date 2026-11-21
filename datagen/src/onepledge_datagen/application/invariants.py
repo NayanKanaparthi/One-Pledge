@@ -21,6 +21,7 @@ from onepledge_datagen.application.expectations import (
     messiness_expectation,
     race_violations,
 )
+from onepledge_datagen.application.messiness import AMOUNT_FORMS, AMOUNT_KIND, expected_form_counts
 from onepledge_datagen.application.view import DataSetView, ManifestStep
 from onepledge_datagen.domain import catalog
 from onepledge_datagen.domain.entities import ContractRecord, PaymentRecord, TitleRecord
@@ -32,7 +33,8 @@ from onepledge_datagen.domain.oracle.simulation import (
     StepInput,
     TimelineOracle,
 )
-from onepledge_datagen.domain.tape_format import COLUMN_VIN, format_for
+from onepledge_datagen.domain.tape_format import COLUMN_AMOUNT, COLUMN_VIN, format_for
+from onepledge_datagen.domain.text import plural
 from onepledge_datagen.domain.vin import is_valid_vin
 
 INVALID_VIN_PROBLEMS = frozenset(
@@ -102,6 +104,7 @@ class InvariantChecker:
         self._check_case_wiring(view, report)
         self._check_labels(view, report)
         self._check_inherent_fixes(view, report)
+        self._check_amount_forms(view, records, report)
         self._check_outcomes(view, report)
         report.violations = list(dict.fromkeys(report.violations))
         report.rows_checked = sum(len(rows) for rows in records.values())
@@ -119,7 +122,7 @@ class InvariantChecker:
             found = len(records[step.step_id])
             if found != step.data_rows:
                 report.violations.append(
-                    f"{step.step_id}: manifest says {step.data_rows} rows, the file has {found}"
+                    f"{step.step_id}: manifest says {plural(step.data_rows, 'row')}, the file has {found:,}"
                 )
         return records
 
@@ -149,7 +152,8 @@ class InvariantChecker:
         for places in occurrences.values():
             if len(places) > 1 and not _explained(set(places), case_sets, duplicates):
                 report.violations.append(
-                    f"a VIN appears in {len(places)} rows ({', '.join(places)}) with no planted reason"
+                    f"a VIN appears in {plural(len(places), 'row')} ({', '.join(places)}) "
+                    "with no planted reason"
                 )
 
     @staticmethod
@@ -187,6 +191,32 @@ class InvariantChecker:
             found = [word for word in catalog.LABEL_WORDS if word in upper]
             if found:
                 report.violations.append(f"{name} contains the label words {found}")
+
+    @staticmethod
+    def _check_amount_forms(
+        view: DataSetView, records: dict[str, tuple[tuple[str, ...], ...]], report: CheckReport
+    ) -> None:
+        """M_AMOUNT_ALT_FORMAT rows use the three forms of SPEC 5.7 in rotation (SPEC_DECISIONS 22.11)."""
+        counts = [0] * len(AMOUNT_FORMS)
+        entries = [m for m in view.messiness if m.kind == AMOUNT_KIND]
+        for entry in entries:
+            rows = records.get(entry.step_id, ())
+            cell = rows[entry.row_number - 1][COLUMN_AMOUNT] if 0 < entry.row_number <= len(rows) else ""
+            forms = [i for i, form in enumerate(AMOUNT_FORMS) if form.pattern.fullmatch(cell)]
+            if len(forms) != 1:
+                report.violations.append(
+                    f"{entry.step_id} row {entry.row_number}: the {AMOUNT_KIND} amount "
+                    "is not one of the three forms"
+                )
+                continue
+            counts[forms[0]] += 1
+        if counts != expected_form_counts(len(entries)):
+            shown = ", ".join(
+                f"{form.name}: {count}" for form, count in zip(AMOUNT_FORMS, counts, strict=True)
+            )
+            report.violations.append(
+                f"{AMOUNT_KIND} rows are not spread over the three forms in rotation ({shown})"
+            )
 
     @staticmethod
     def _check_inherent_fixes(view: DataSetView, report: CheckReport) -> None:

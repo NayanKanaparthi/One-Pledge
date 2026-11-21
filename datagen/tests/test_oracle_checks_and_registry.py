@@ -7,6 +7,7 @@ from datetime import date, timedelta
 
 import pytest
 
+from onepledge_datagen.application.invariants import OutsideRecordsIndex
 from onepledge_datagen.domain.entities import ContractRecord, PaymentRecord, TitleRecord
 from onepledge_datagen.domain.oracle.checks import LocalChecks, holds_locally
 from onepledge_datagen.domain.oracle.lender_names import names_match, normalise_lender_name
@@ -180,3 +181,51 @@ def test_registry_rules_a_b_c_and_release() -> None:
     assert model.release("B", "AUTO|" + VIN) == "REJECTED"
     assert model.release("A", "AUTO|" + VIN) == "RELEASED"
     assert model.lock("B", inputs()).result == "LOCKED"
+
+
+WINDOW_FIRST, WINDOW_LAST = date(2026, 8, 7), date(2026, 11, 5)
+
+
+def index_with_payments(*days: date) -> OutsideRecordsIndex:
+    """The oracle's own outside records index, holding one payment per given day for VIN."""
+    payments = [PaymentRecord(f"p-{day.isoformat()}", VIN, day, 10_000, "HARBOR") for day in days]
+    other = PaymentRecord("p-other", "2HGCM82633A004352", WINDOW_FIRST, 10_000, "HARBOR")
+    return OutsideRecordsIndex([], [*payments, other], [])
+
+
+@pytest.mark.parametrize(
+    ("day", "inside"),
+    [
+        (WINDOW_FIRST - timedelta(days=1), False),
+        (WINDOW_FIRST, True),
+        (WINDOW_FIRST + timedelta(days=1), True),
+        (WINDOW_LAST - timedelta(days=1), True),
+        (WINDOW_LAST, True),
+        (WINDOW_LAST + timedelta(days=1), False),
+    ],
+)
+def test_the_oracle_payment_window_is_inclusive_at_both_ends(day: date, inside: bool) -> None:
+    found = index_with_payments(day).payments(VIN, WINDOW_FIRST, WINDOW_LAST)
+    assert [p.paid_on for p in found] == ([day] if inside else [])
+
+
+def test_the_oracle_payment_window_keeps_every_payment_inside_in_date_order() -> None:
+    days = [WINDOW_LAST + timedelta(days=1), WINDOW_LAST, WINDOW_FIRST, WINDOW_FIRST - timedelta(days=1)]
+    found = index_with_payments(*days).payments(VIN, WINDOW_FIRST, WINDOW_LAST)
+    assert [p.paid_on for p in found] == [WINDOW_FIRST, WINDOW_LAST]
+    assert index_with_payments().payments(VIN, WINDOW_FIRST, WINDOW_LAST) == []
+
+
+@pytest.mark.parametrize("exact_first", [True, False])
+def test_a_repeated_conflict_reports_the_items_own_match(exact_first: bool) -> None:
+    model = RegistryModel()
+    assert model.lock("A", inputs()).result == "LOCKED"
+    changed = inputs(cents=2_345_017 + 40_000)
+    first_inputs, second_inputs = (inputs(), changed) if exact_first else (changed, inputs())
+    first, second = model.lock("B", first_inputs), model.lock("B", second_inputs)
+    for decision, exact in ((first, exact_first), (second, not exact_first)):
+        assert decision.result == "CONFLICT"
+        assert decision.match_kind == ("EXACT" if exact else "LIKELY")
+        assert ("AMOUNT_EXACT" in decision.kinds_matched) is exact
+    assert first.new_case is not None and second.new_case is None
+    assert len(model.cases) == 1 and model.cases[0].match_kind == first.match_kind

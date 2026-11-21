@@ -11,9 +11,10 @@ from onepledge_datagen.application.invariants import InvariantChecker
 from onepledge_datagen.application.verify import VerifyDataSet
 from onepledge_datagen.domain.entities import Profile
 from onepledge_datagen.domain.errors import DataGenError, InvariantsViolatedError
+from onepledge_datagen.domain.text import plural
 from onepledge_datagen.infrastructure.codec import FileCodec
 from onepledge_datagen.infrastructure.directory import LocalDataDirectory
-from onepledge_datagen.interface.output import Console
+from onepledge_datagen.interface.output import Console, Json, common_options, run_guarded
 
 MAX_LISTED_VIOLATIONS = 50
 
@@ -27,6 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
     generate = commands.add_parser(
         "generate",
+        parents=[common_options()],
         help="generate a data set from a seed and a profile",
         description="Generate tapes, outside records, reference data, the timeline and the answer key. "
         "Every invariant is checked on the rendered files before anything is written.",
@@ -46,6 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--force", action="store_true", help="replace an existing data set in --out")
     verify = commands.add_parser(
         "verify",
+        parents=[common_options()],
         help="re-check checksums and every invariant of a data directory",
         description="Re-check the checksums and every invariant of SPEC 5.8 on an existing data directory. "
         "Exits 1 and lists the violations when any is found.",
@@ -60,18 +63,46 @@ def _report_generation(console: Console, summary: GenerationSummary, target: Pat
     rows = [(s[0], s[1], s[2], s[3], s[4], f"{s[5]:,}") for s in summary.steps]
     console.table(("Step", "Bank", "Facility", "Kind", "As-of", "Rows"), rows)
     console.line()
-    records = f"{summary.titles:,} titles, {summary.payments:,} payments, {summary.contracts:,} contracts"
+    records = ", ".join(
+        (
+            plural(summary.titles, "title"),
+            plural(summary.payments, "payment"),
+            plural(summary.contracts, "contract"),
+        )
+    )
     console.line(f"Outside records: {records}")
-    console.line(f"Answer key: {summary.cases:,} planted cases, {summary.messiness:,} data quality rows")
-    console.line(f"Invariants: all checks passed over {summary.rows_checked:,} tape rows")
-    console.line(f"Wrote {summary.files} files to {target}")
+    cases, quality = plural(summary.cases, "planted case"), plural(summary.messiness, "data quality row")
+    console.line(f"Answer key: {cases}, {quality}")
+    console.line(f"Invariants: all checks passed over {plural(summary.rows_checked, 'tape row')}")
+    console.line(f"Wrote {plural(summary.files, 'file')} to {target}")
+    steps: list[Json] = [
+        {"step_id": s[0], "bank_code": s[1], "facility_code": s[2], "kind": s[3], "as_of": s[4], "rows": s[5]}
+        for s in summary.steps
+    ]
+    console.result(
+        {
+            "profile": summary.profile,
+            "seed": summary.seed,
+            "out": str(target),
+            "files": summary.files,
+            "steps": steps,
+            "outside_records": {
+                "titles": summary.titles,
+                "payments": summary.payments,
+                "contracts": summary.contracts,
+            },
+            "cases": summary.cases,
+            "messiness": summary.messiness,
+            "rows_checked": summary.rows_checked,
+        }
+    )
 
 
 def _list_violations(console: Console, violations: Sequence[str]) -> None:
     for violation in violations[:MAX_LISTED_VIOLATIONS]:
         console.error(f"  {violation}")
     if len(violations) > MAX_LISTED_VIOLATIONS:
-        console.error(f"  and {len(violations) - MAX_LISTED_VIOLATIONS} more")
+        console.error(f"  and {len(violations) - MAX_LISTED_VIOLATIONS:,} more")
 
 
 def run(arguments: argparse.Namespace, console: Console) -> int:
@@ -87,11 +118,12 @@ def run(arguments: argparse.Namespace, console: Console) -> int:
     source: Path = arguments.data_dir
     report = VerifyDataSet(codec, directory, checker).run(source)
     if report.ok:
-        console.line(
-            f"verify: OK ({report.files} files, {report.rows_checked:,} tape rows, every invariant holds)"
-        )
+        files, rows = plural(report.files, "file"), plural(report.rows_checked, "tape row")
+        console.line(f"verify: OK ({files}, {rows}, every invariant holds)")
+        console.result({"data_dir": str(source), "files": report.files, "rows_checked": report.rows_checked})
         return 0
-    console.error(f"verify: {len(report.violations)} invariant violations in {source}:")
+    sentence = f"verify: {plural(len(report.violations), 'invariant violation')} in {source}:"
+    console.failure("INVARIANTS_VIOLATED", sentence, {"violations": list(report.violations)})
     _list_violations(console, report.violations)
     return 1
 
@@ -100,12 +132,18 @@ def main(argv: Sequence[str] | None = None, console: Console | None = None) -> i
     """Entry point. Exit 0 on success, 1 on failure, 2 on a usage error."""
     out = console or Console()
     arguments = build_parser().parse_args(argv)
+    out.json_mode = arguments.json
+    return run_guarded(lambda: _run_reporting(arguments, out), out, debug=arguments.debug)
+
+
+def _run_reporting(arguments: argparse.Namespace, console: Console) -> int:
     try:
-        return run(arguments, out)
+        return run(arguments, console)
     except InvariantsViolatedError as error:
-        out.error(f"{error.sentence} Nothing was written. This is a generator defect; please report it.")
-        _list_violations(out, error.violations)
+        sentence = f"{error.sentence} Nothing was written. This is a generator defect; please report it."
+        console.failure(error.code, sentence, {"violations": list(error.violations)})
+        _list_violations(console, error.violations)
         return 1
     except DataGenError as error:
-        out.error(error.sentence)
+        console.failure(error.code, error.sentence)
         return 1

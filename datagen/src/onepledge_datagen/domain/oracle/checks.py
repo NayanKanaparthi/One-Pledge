@@ -79,6 +79,7 @@ class LocalChecks:
         )
 
     def _payments(self, vin: str, age: int, as_of: date) -> CheckResult:
+        """PAYMENTS_RECEIVED: UNKNOWN before the first payment is due, else a payment in the window."""
         window_start = as_of - timedelta(days=self._settings.payment_window_days)
         found = self._records.payments(vin, window_start, as_of)
         if age < self._settings.first_payment_grace_days:
@@ -90,6 +91,7 @@ class LocalChecks:
         return CheckResult(CheckType.PAYMENTS_RECEIVED, CheckOutcome.FAIL, Reason.NO_PAYMENT_IN_WINDOW)
 
     def _contract(self, terms: Terms, lender_legal_name: str) -> CheckResult:
+        """CONTRACT_PRESENT: a contract of the facility lender with the amount and a near signing date."""
         contracts = self._records.contracts(terms.vin)
         if not contracts:
             return CheckResult(CheckType.CONTRACT_PRESENT, CheckOutcome.FAIL, Reason.NO_CONTRACT_RECORD)

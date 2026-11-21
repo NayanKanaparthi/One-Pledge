@@ -87,6 +87,16 @@ class LoanFactory:
         dollars = self._rng.triangular_int(DOLLARS_LOW, DOLLARS_MODE, DOLLARS_HIGH)
         return dollars * 100 + self._rng.integer(0, 99)
 
+    def whole_dollar_amount_cents(self) -> int:
+        """Triangular dollars as above with the cents conditioned to zero.
+
+        Used only for the honest loans that will carry the whole dollar spellings
+        `23450` and `$23,450` of M_AMOUNT_ALT_FORMAT, which a lender writes only for an
+        amount without cents. Uniform cents give such an amount once in a hundred
+        loans, too rarely for a small profile to be sure of one.
+        """
+        return self._rng.triangular_int(DOLLARS_LOW, DOLLARS_MODE, DOLLARS_HIGH) * 100
+
     def create(
         self,
         lender_code: str,

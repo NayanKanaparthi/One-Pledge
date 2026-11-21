@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from onepledge_datagen.domain.text import plural
+
 
 class DataGenError(Exception):
     """Base class of every error the generator reports."""
@@ -25,7 +27,7 @@ class InvariantsViolatedError(DataGenError):
     code = "INVARIANTS_VIOLATED"
 
     def __init__(self, violations: list[str]) -> None:
-        super().__init__(f"The data set violates {len(violations)} invariants.")
+        super().__init__(f"The data set violates {plural(len(violations), 'invariant')}.")
         self.violations = violations
 
 

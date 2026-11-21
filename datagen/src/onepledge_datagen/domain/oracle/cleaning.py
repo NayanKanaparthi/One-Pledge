@@ -12,6 +12,7 @@ from datetime import date
 from types import MappingProxyType
 
 from onepledge_datagen.domain.calendar import MONTH_ABBREVIATIONS
+from onepledge_datagen.domain.errors import DataGenError
 from onepledge_datagen.domain.oracle.model import Action, CleanedRow, Issue, Problem, Terms
 from onepledge_datagen.domain.vin import ALPHABET, VIN_LENGTH, is_valid_vin
 
@@ -44,8 +45,10 @@ _MONTHS: Mapping[str, int] = MappingProxyType(
 )
 
 
-class TapeFormatError(Exception):
+class TapeFormatError(DataGenError):
     """A whole file cannot be read as a tape (not UTF-8, malformed CSV, or a bad header)."""
+
+    code = "TAPE_FORMAT"
 
 
 @dataclass(frozen=True)
@@ -95,6 +98,7 @@ def map_header(header: Sequence[str], required: Sequence[str]) -> dict[str, int]
 
 
 def _unsafe(raw: str, trimmed: str) -> bool:
+    """A formula leading character (raw or trimmed) or any control character."""
     if (raw and raw[0] in UNSAFE_LEADING) or (trimmed and trimmed[0] in UNSAFE_LEADING):
         return True
     return any(unicodedata.category(char) == "Cc" for char in raw)
@@ -102,11 +106,14 @@ def _unsafe(raw: str, trimmed: str) -> bool:
 
 @dataclass(frozen=True)
 class _FieldResult:
+    """The cleaned value of one field and the issues found on it."""
+
     value: str | int | None
     issues: tuple[Issue, ...]
 
 
 def _rejected(field: str, problem: Problem, *fixed: Issue) -> _FieldResult:
+    """A REJECTED result for one field, after the FIXED issues already found on it."""
     return _FieldResult(None, (*fixed, Issue(field, problem, Action.REJECTED)))
 
 
@@ -153,6 +160,7 @@ def clean_loan_number(text: str) -> _FieldResult:
 
 
 def _parse_date(text: str) -> tuple[date | None, bool]:
+    """The date of an ISO, US or 14-Aug-2026 cell, and whether the third (alternative) form was used."""
     try:
         if match := _ISO.fullmatch(text):
             return date(int(match[1]), int(match[2]), int(match[3])), False
@@ -234,6 +242,7 @@ class RowCleaner:
         return CleanedRow(ordered, vin=vin, terms=terms)
 
     def _clean_field(self, field: str, raw: str) -> _FieldResult:
+        """Trim, then empty, then unsafe, then the field's own rule; the first rejection ends the field."""
         trimmed = raw.strip()
         trim_issue = (Issue(field, Problem.WHITESPACE_TRIMMED, Action.FIXED),) if trimmed != raw else ()
         if not trimmed:
@@ -246,6 +255,7 @@ class RowCleaner:
         return _FieldResult(result.value, (*trim_issue, *result.issues))
 
     def _field_rule(self, field: str, text: str) -> _FieldResult:
+        """The SPEC 10.4 rule of one field on its trimmed, safe, non-empty text."""
         if field == "vin":
             return clean_vin(text)
         if field == "borrower_ref":
@@ -257,6 +267,7 @@ class RowCleaner:
         return clean_amount(field, text)
 
     def _balance_rules(self, values: Mapping[str, str | int | None]) -> list[Issue]:
+        """Original amount range, zero balance and balance above the original (SPEC 10.4)."""
         if "original_amount" not in self._fields:
             return []
         issues: list[Issue] = []

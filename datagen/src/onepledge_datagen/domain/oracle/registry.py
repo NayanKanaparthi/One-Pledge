@@ -81,6 +81,8 @@ class Decision:
 
 @dataclass(frozen=True)
 class _Match:
+    """A conflicting lock with the kind, basis and token kinds of the match."""
+
     lock: OracleLock
     kind: str
     basis: str
@@ -88,6 +90,7 @@ class _Match:
 
 
 def _matched(inputs: dict[str, str], lock: OracleLock) -> tuple[str, ...]:
+    """Token kinds whose inputs equal the lock's, in contract order."""
     return tuple(kind for kind in KINDS if inputs[kind] == lock.inputs[kind])
 
 
@@ -100,6 +103,7 @@ class RegistryModel:
     _next_id: int = 1
 
     def _new_id(self) -> int:
+        """The next case number."""
         value = self._next_id
         self._next_id += 1
         return value
@@ -128,6 +132,7 @@ class RegistryModel:
         return Decision("LOCKED")
 
     def _conflict(self, member: str, inputs: dict[str, str], match: _Match) -> Decision:
+        """CONFLICT with this item's own match; a new case unless the claimant already has an OPEN one."""
         for case in self.cases:
             if (
                 case.open
@@ -135,7 +140,8 @@ class RegistryModel:
                 and case.claimant == member
                 and case.claimant_asset == inputs["ASSET"]
             ):
-                return Decision("CONFLICT", case.match_kind, case.match_basis, case.kinds_matched)
+                # The OPEN case is reused (no new case, no alert); the item reports its own match.
+                return Decision("CONFLICT", match.kind, match.basis, match.kinds_matched)
         case = OracleCase(
             self._new_id(), match.lock, member, inputs["ASSET"], match.kind, match.basis, match.kinds_matched
         )

@@ -61,11 +61,14 @@ class PlantingKit:
             step_id, self.workspace.lender_format(step_id).release_cells(loan), loan
         )
 
-    def honest_loan(self, step_id: str, first: date | None = None, last: date | None = None) -> LoanRecord:
+    def honest_loan(
+        self, step_id: str, first: date | None = None, last: date | None = None, whole_dollars: bool = False
+    ) -> LoanRecord:
         """A new honest loan of the step's lender (origination in the honest window unless given)."""
         window_first, window_last = self.loans.honest_window(self.workspace.step(step_id).as_of)
         lender = self.workspace.lender_code(step_id)
-        return self.loans.create(lender, first or window_first, last or window_last)
+        amount = self.loans.whole_dollar_amount_cents() if whole_dollars else None
+        return self.loans.create(lender, first or window_first, last or window_last, amount_cents=amount)
 
     def plan_records(self, loan: LoanRecord, bank_code: str, choices: RecordChoices | None = None) -> None:
         """Title, payments and contract of a loan as SPEC 5.4 describes for an honest loan."""

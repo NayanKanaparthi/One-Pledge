@@ -109,10 +109,12 @@ class GenerateDataSet:
         streams = SeededStreams(seed)
         workspace = Workspace(streams, plan.steps, catalog.TIMELINE_END)
         kit = PlantingKit(workspace, streams, LoanFactory(streams))
-        PortfolioBuilder(plan.baseline).build(kit)
+        PortfolioBuilder(plan.baseline, plan.messiness.whole_dollar_counts()).build(kit)
+        applier = MessinessApplier(plan.messiness)
+        applier.reserve(kit)
         for planter in plan.planters:
             planter.plant(kit)
-        messiness = MessinessApplier(plan.messiness).apply(kit)
+        messiness = applier.apply(kit)
         layout = TimelineLayout(plan.totals_rows)
         layout.lay_out(workspace, messiness)
         titles, payments, contracts = OutsideRecordsBuilder(

@@ -86,6 +86,7 @@ class AlteredNoTitlePlanter:
         as_of = kit.workspace.step("S09").as_of
 
         def old_enough(row: TapeRow) -> bool:
+            """Originated more than the no-title minimum age before the S09 as-of date."""
             return row.loan is not None and (as_of - row.loan.origination).days > NO_TITLE_MIN_AGE_DAYS
 
         for original in kit.workspace.take_baseline("S01", self._count, old_enough):

@@ -5,4 +5,4 @@ would send them, the outside records, the reference data, the timeline and the
 answer key. Only `onepledge_evaluation` reads the answer key.
 """
 
-GENERATOR_VERSION = "1.0.0"
+GENERATOR_VERSION = "1.0.1"

@@ -8,6 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from onepledge_datagen.domain.errors import DataGenError
+from onepledge_datagen.domain.oracle.cleaning import TapeFormatError
+
 pytestmark = pytest.mark.unit
 
 SOURCE = Path(__file__).resolve().parents[1] / "src" / "onepledge_datagen"
@@ -72,3 +75,23 @@ def test_the_generator_reads_no_environment_and_uses_no_clock_or_os_randomness()
 
 def test_no_source_module_looks_like_a_test_module() -> None:
     assert not [p for p in SOURCE.rglob("*.py") if p.name.startswith("test_")]
+
+
+def test_every_generator_error_derives_from_one_base() -> None:
+    assert issubclass(TapeFormatError, DataGenError)
+    assert TapeFormatError.code == "TAPE_FORMAT"
+    for path in SOURCE.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ClassDef) and node.name.endswith("Error"):
+                bases = {ast.unparse(base) for base in node.bases}
+                assert (
+                    bases & {"DataGenError", "PlanError", "InvariantsViolatedError"}
+                    or node.name == "DataGenError"
+                ), f"{path.name}:{node.name} derives from {sorted(bases)}"
+
+
+def test_the_oracle_reads_completely() -> None:
+    for path in (SOURCE / "domain" / "oracle").rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ClassDef | ast.FunctionDef) and not node.name.startswith("__"):
+                assert ast.get_docstring(node), f"{path.name}:{node.name} has no docstring"

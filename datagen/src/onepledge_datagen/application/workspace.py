@@ -11,6 +11,7 @@ from onepledge_datagen.domain.entities import LoanRecord, StepDefinition
 from onepledge_datagen.domain.errors import PlanError
 from onepledge_datagen.domain.randomness import SeededStreams
 from onepledge_datagen.domain.tape_format import LenderFormat, format_for
+from onepledge_datagen.domain.text import plural
 
 
 @dataclass(frozen=True)
@@ -159,7 +160,8 @@ class Workspace:
         candidates = [row for row in pool if accept is None or accept(row)]
         if len(candidates) < count:
             raise PlanError(
-                f"Step {step_id} has {len(candidates)} suitable baseline rows; {count} are needed."
+                f"Step {step_id} has {plural(len(candidates), 'suitable baseline row')}; "
+                f"{count:,} are needed."
             )
         chosen = self.streams.stream(f"originals:{step_id}:{len(pool)}").sample(candidates, count)
         chosen_ids = {row.row_id for row in chosen}
