@@ -45,6 +45,7 @@ class BankAgentHarness:
             "CHECK_CHUNK_LOANS": "20",
             **dict(environment or {}),
         }
+        self.environment = database.environment(**variables)
         self.settings = database.settings(variables)
         self.collaborators = Collaborators(
             clock=clock or SystemClock(),

@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
 
 from bank_testkit.database import BankDatabase
+from bank_testkit.programs import run_program
 from onepledge_bank_agent.application.seed_reference import SeedReferenceData
 from onepledge_bank_agent.infrastructure.audit import HashChainedAuditWriter
 from onepledge_bank_agent.infrastructure.clock import SystemClock
@@ -25,11 +24,10 @@ SMALL_SEED = 4711
 
 def generate(profile: str, seed: int, out: Path) -> Path:
     """A data set written by the installed datagen command (`make setup` installs it)."""
-    command = shutil.which("onepledge-datagen")
-    if command is None:
-        pytest.fail("onepledge-datagen is not installed; run make setup.")
-    arguments = [command, "generate", "--seed", str(seed), "--profile", profile, "--out", str(out)]
-    subprocess.run(arguments, check=True, capture_output=True)  # noqa: S603 - the datagen command, fixed arguments
+    arguments = ["generate", "--seed", str(seed), "--profile", profile, "--out", str(out)]
+    finished = run_program("onepledge-datagen", arguments)
+    if finished.returncode != 0:
+        pytest.fail(f"onepledge-datagen failed: {finished.stderr.strip()}")
     return out
 
 
