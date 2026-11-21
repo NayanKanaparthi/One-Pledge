@@ -104,6 +104,13 @@ class InvalidValueError(DomainError):
         self.issue = issue
 
 
+class NonCanonicalValueError(InvalidValueError, TypeError):
+    """A value canonical JSON cannot hold: a float, or an object key that is not a string (SPEC 4).
+
+    It is a `TypeError`, as SPEC 4 requires, and a `DomainError` like every business error.
+    """
+
+
 class InvalidVinError(InvalidValueError):
     """A VIN of the wrong length, with a character outside the alphabet, or a bad check digit."""
 

@@ -11,7 +11,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 
-from onepledge_bank_agent.domain.errors import InvalidValueError
+from onepledge_bank_agent.domain.errors import NonCanonicalValueError
 
 type JsonValue = str | int | bool | Sequence[JsonValue] | Mapping[str, JsonValue] | None
 
@@ -20,11 +20,11 @@ ZERO_HASH = "0" * 64
 
 def _refuse_floats(value: object) -> None:
     if isinstance(value, float):
-        raise InvalidValueError("canonical_json", "FLOAT")
+        raise NonCanonicalValueError("canonical_json", "FLOAT")
     if isinstance(value, Mapping):
         for key, item in value.items():
             if not isinstance(key, str):
-                raise InvalidValueError("canonical_json", "NON_STRING_KEY")
+                raise NonCanonicalValueError("canonical_json", "NON_STRING_KEY")
             _refuse_floats(item)
     elif isinstance(value, list | tuple):
         for item in value:
@@ -32,7 +32,7 @@ def _refuse_floats(value: object) -> None:
 
 
 def canonical_json(value: object) -> bytes:
-    """The canonical UTF-8 bytes of a JSON value; raises `InvalidValueError` on a float."""
+    """The canonical UTF-8 bytes of a JSON value; a float raises `NonCanonicalValueError` (a `TypeError`)."""
     _refuse_floats(value)
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
