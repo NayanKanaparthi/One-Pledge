@@ -45,7 +45,8 @@ def test_a_missing_required_field_fails_and_names_the_file(contracts_dir: Path, 
     code, text = run(broken)
     assert code == 1
     assert "examples/registry/outbox.response.json" in text and "has_more" in text
-    assert text.splitlines()[-1].startswith("contracts-check: FAILED (")
+    assert "contracts-check: FAIL examples: 1 problem" in text.splitlines()
+    assert text.splitlines()[-1] == "contracts-check: FAILED (1 problem)"
 
 
 def test_a_wrong_format_fails(contracts_dir: Path, tmp_path: Path) -> None:

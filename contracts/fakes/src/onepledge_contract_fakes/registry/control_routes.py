@@ -1,4 +1,4 @@
-"""The `/_test/` endpoints of the registry double (TEST CONTROLS, SPEC 7.3, not part of any contract)."""
+"""The `/_test/` endpoints of the registry test double (TEST CONTROLS, SPEC 7.3, not in any contract)."""
 
 from __future__ import annotations
 

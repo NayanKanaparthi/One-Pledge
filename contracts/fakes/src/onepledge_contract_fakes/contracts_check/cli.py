@@ -38,14 +38,21 @@ def build_parser() -> argparse.ArgumentParser:
 def render(report: CheckReport, out: CliOutput) -> None:
     """One line per check, the problems under failed checks, then the closing line."""
     for outcome in report.outcomes:
-        out.line(f"contracts-check: {'OK  ' if outcome.ok else 'FAIL'} {outcome.name}: {outcome.summary}")
+        if outcome.ok:
+            out.line(f"contracts-check: OK   {outcome.name}: {outcome.summary}")
+            continue
+        out.line(f"contracts-check: FAIL {outcome.name}: {_problems(len(outcome.problems))}")
         for problem in outcome.problems:
             out.line(f"    {problem}")
     if report.ok:
         out.line(f"contracts-check: OK ({report.contract_count} files, {report.example_count} examples)")
     else:
         failures = sum(len(outcome.problems) for outcome in report.outcomes)
-        out.line(f"contracts-check: FAILED ({failures} problems)")
+        out.line(f"contracts-check: FAILED ({_problems(failures)})")
+
+
+def _problems(count: int) -> str:
+    return f"{count} problem" if count == 1 else f"{count} problems"
 
 
 def main(argv: Sequence[str] | None = None, output: CliOutput | None = None) -> int:

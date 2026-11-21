@@ -1,4 +1,4 @@
-"""Statistics, state dump and tamper modes of the registry double (TEST CONTROLS, SPEC 7.3).
+"""Statistics, state dump and tamper modes of the registry test double (TEST CONTROLS, SPEC 7.3).
 
 None of this is part of the contract. The tamper modes exist so the bank agent's
 integrity checks can be proven to detect a rewritten history, an edited event, a
