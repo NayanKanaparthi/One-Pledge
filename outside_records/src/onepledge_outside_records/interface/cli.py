@@ -64,7 +64,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="Replace title_records, payments and contracts from DIR/outside_records/*.csv "
         "as the owner role.",
     )
-    seed.add_argument("--data-dir", type=Path, required=True, help="a directory written by onepledge-datagen")
+    seed.add_argument(
+        "--data-dir", type=Path, required=True, metavar="DIR", help="a directory written by onepledge-datagen"
+    )
     clients = commands.add_parser(
         "clients", help="manage API clients", description="API client administration."
     )
@@ -75,8 +77,10 @@ def build_parser() -> argparse.ArgumentParser:
         description="Store the SHA-256 of the key read from an environment variable; "
         "the key itself is never stored.",
     )
-    add.add_argument("--name", required=True, help="client name, for example harbor")
-    add.add_argument("--key-env", required=True, help="name of the environment variable that holds the key")
+    add.add_argument("--name", required=True, metavar="NAME", help="client name, for example harbor")
+    add.add_argument(
+        "--key-env", required=True, metavar="VAR", help="name of the environment variable that holds the key"
+    )
     commands.add_parser(
         "serve",
         help="serve the API on BIND_HOST:PORT",
