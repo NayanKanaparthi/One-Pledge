@@ -77,7 +77,8 @@ def create_key_holder_app(config: KeyHolderConfig, clock: Clock | None = None) -
         )
 
     @app.get("/healthz")
-    async def healthz() -> JSONResponse:
+    async def healthz(request: Request) -> JSONResponse:
+        QueryParameters(request.query_params.multi_items(), ()).finish()
         return JSONResponse(
             {
                 "status": "ok",

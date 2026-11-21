@@ -175,5 +175,6 @@ def _mount_reads(app: FastAPI, double: RegistryDouble, guard: _Guard) -> None:
         return JSONResponse(double.latest_checkpoint())
 
     @app.get("/healthz")
-    async def healthz() -> JSONResponse:
+    async def healthz(request: Request) -> JSONResponse:
+        QueryParameters(request.query_params.multi_items(), ()).finish()
         return JSONResponse({"status": "ok", "service": "registry", "test_double": True})

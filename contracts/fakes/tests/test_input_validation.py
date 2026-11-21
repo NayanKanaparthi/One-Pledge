@@ -281,3 +281,11 @@ def test_the_key_holder_refuses_unknown_query_parameters(
     assert refused(client.post(f"/v1/evaluate?{CANARY}=1", json=body, headers=auth)) == [
         ("query", "UNKNOWN_PARAMETER")
     ]
+
+
+def test_health_refuses_unknown_query_parameters(
+    registry: tuple[AsgiTestClient, dict[str, str]], key_holder: tuple[AsgiTestClient, dict[str, str]]
+) -> None:
+    for client, _ in (registry, key_holder):
+        assert refused(client.get(f"/healthz?{CANARY}=1")) == [("query", "UNKNOWN_PARAMETER")]
+        assert client.get("/healthz").status_code == 200
