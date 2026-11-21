@@ -145,6 +145,11 @@ class SubmissionProcessor:
         return ItemResult(item.item_ref, item.asset_token, ItemOutcome.LOCKED, lock_id, False)
 
     def _conflict(self, member_id: str, submission_id: str, item: SubmissionItem, match: Match) -> ItemResult:
+        """A CONFLICT result carrying this item's own match against the lock (registry.yaml).
+
+        A repeated conflict of the same claimant with the same lock reuses the OPEN case
+        (no new event, no new alert); the stored case keeps the match it was opened with.
+        """
         case = self._cases.open_case_for(member_id, item.asset_token, match.lock.lock_id)
         if case is None:
             self._publisher.event(
@@ -179,9 +184,9 @@ class SubmissionProcessor:
             item_ref=item.item_ref,
             asset_token=item.asset_token,
             result=ItemOutcome.CONFLICT,
-            match_kind=case.match_kind,
-            match_basis=case.match_basis,
-            kinds_matched=case.kinds_matched,
+            match_kind=match.kind,
+            match_basis=match.basis,
+            kinds_matched=match.kinds_matched,
             case_id=case.case_id,
         )
 

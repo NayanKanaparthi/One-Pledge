@@ -243,6 +243,42 @@ def test_a_repeated_conflict_reuses_the_open_case_without_new_events_or_alerts(w
     assert len(world.messages(1, "ALERT")) == 1
 
 
+EXACT_COPY_KINDS = ALL_KINDS
+CHANGED_COPY_KINDS = ["ASSET", "VIN", "BORROWER", "AMOUNT_1000", "DATE_MONTH"]
+
+
+@pytest.mark.parametrize(
+    ("first_copy", "second_copy"),
+    [
+        (Loan("VIN-R"), Loan("VIN-R", cents=2_345_017 + 40_000, day="2026-08-20")),
+        (Loan("VIN-R", cents=2_345_017 + 40_000, day="2026-08-20"), Loan("VIN-R")),
+    ],
+    ids=["exact-then-changed", "changed-then-exact"],
+)
+def test_a_repeated_conflict_reports_this_items_own_match(
+    world: World, first_copy: Loan, second_copy: Loan
+) -> None:
+    world.pledge(0, Loan("VIN-R"))
+    first = world.pledge(1, first_copy)[0]
+    events_before, alerts_before = world.events(), len(world.messages(1, "ALERT"))
+    submitted = world.submit(1, SubmissionKind.PLEDGE, second_copy.item())
+    second = submitted["results"][0]
+    for result, loan in ((first, first_copy), (second, second_copy)):
+        exact = loan == Loan("VIN-R")
+        assert result["result"] == "CONFLICT"
+        assert (result["match_kind"], result["match_basis"]) == ("EXACT" if exact else "LIKELY", "ASSET")
+        assert result["kinds_matched"] == (EXACT_COPY_KINDS if exact else CHANGED_COPY_KINDS)
+    assert second["case_id"] == first["case_id"]
+    added = world.events()[len(events_before) :]
+    assert "CASE_OPENED" not in added and "CONFLICT_DETECTED" not in added
+    assert len(world.messages(1, "ALERT")) == alerts_before
+    case = next(c for c in plain(world.registry.cases(world.ids[1], None, 50, 0))["items"])
+    assert (case["case_id"], case["match_kind"]) == (first["case_id"], first["match_kind"])
+    assert case["kinds_matched"] == first["kinds_matched"]
+    certificate = plain(world.registry.certificate(world.ids[1], submitted["certificate_id"]))
+    assert [item["status"] for item in certificate["body"]["items"]] == ["HELD"]
+
+
 def test_a_third_member_claiming_the_same_car_gets_its_own_case(world: World) -> None:
     loan = Loan("VIN-F3")
     world.pledge(0, loan)
