@@ -120,3 +120,8 @@ def test_every_module_has_a_docstring_and_never_names_the_scoring_file() -> None
         if path.name != "__init__.py":
             assert ast.get_docstring(ast.parse(source)), path.name
         assert "answer" + "_key" not in source, path.name
+
+
+def test_no_type_check_is_suppressed() -> None:
+    for path in [*PACKAGE.rglob("*.py")]:
+        assert "type: " + "ignore" not in path.read_text(encoding="utf-8"), path.name

@@ -59,3 +59,9 @@ def test_every_module_says_it_is_a_test_double() -> None:
         assert (
             "test double" in text or "test controls" in text or "contract checker" in text or "check" in text
         ), f"{path.relative_to(SOURCE)} does not say what it is"
+
+
+def test_no_type_check_is_suppressed() -> None:
+    package = SOURCE.parents[1]
+    for path in [*package.joinpath("src").rglob("*.py"), *package.joinpath("tests").rglob("*.py")]:
+        assert "type: " + "ignore" not in path.read_text(encoding="utf-8"), path.name

@@ -29,3 +29,8 @@ repos:
         language: fail
         files: '(^|/)\.env(\..*)?$'
         exclude: '(^|/)\.env\.example$'
+      - id: codeowners-without-handles
+        name: CODEOWNERS holds no handle until the team confirms them (SPEC_DECISIONS 11)
+        entry: '^[^#]|@'
+        language: pygrep
+        files: '^CODEOWNERS$'
