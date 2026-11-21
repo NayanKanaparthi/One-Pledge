@@ -145,7 +145,7 @@ class SubmissionProcessor:
         return ItemResult(item.item_ref, item.asset_token, ItemOutcome.LOCKED, lock_id, False)
 
     def _conflict(self, member_id: str, submission_id: str, item: SubmissionItem, match: Match) -> ItemResult:
-        case = self._cases.open_case_for(item.asset_token, match.lock.lock_id)
+        case = self._cases.open_case_for(member_id, item.asset_token, match.lock.lock_id)
         if case is None:
             self._publisher.event(
                 EventType.CONFLICT_DETECTED,

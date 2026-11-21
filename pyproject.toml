@@ -42,8 +42,8 @@ ignore_missing_imports = true
 addopts = "-ra --strict-markers --import-mode=importlib"
 testpaths = ["contracts/fakes/tests", "datagen/tests", "outside_records/tests"]
 markers = [
-  "unit: pure tests with no I/O beyond the process",
-  "integration: tests against a real PostgreSQL server",
+  "unit: pure tests with no I/O",
+  "integration: tests that use a real PostgreSQL server, the file system or child processes",
   "contract: tests that check behaviour against the files in contracts/",
   "e2e: end to end tests that start the real services as processes",
 ]

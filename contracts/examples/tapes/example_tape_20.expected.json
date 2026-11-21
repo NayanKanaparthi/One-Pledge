@@ -1,0 +1,564 @@
+{
+  "description": "Expected bank agent results for example_tape_20.csv after intake, cleaning and local checks against example_outside_records, with the default check settings.",
+  "tape": "example_tape_20.csv",
+  "facility_code": "HARBOR-SUMMIT",
+  "lender_legal_name": "Summit Auto Finance LLC",
+  "kind": "PLEDGE",
+  "as_of_date": "2026-10-15",
+  "check_settings": {
+    "title_pending_window_days": 30,
+    "first_payment_grace_days": 45,
+    "payment_window_days": 90,
+    "contract_date_tolerance_days": 3
+  },
+  "rows": [
+    {
+      "row_number": 1,
+      "disposition": "ACCEPTED_NEW",
+      "cleaning_issues": [],
+      "checks": [
+        {
+          "check_type": "TITLE_EXISTS",
+          "result": "PASS",
+          "reason_code": "TITLE_FOUND"
+        },
+        {
+          "check_type": "LIENHOLDER_MATCH",
+          "result": "PASS",
+          "reason_code": "LIENHOLDER_MATCHES"
+        },
+        {
+          "check_type": "PAYMENTS_RECEIVED",
+          "result": "PASS",
+          "reason_code": "PAYMENT_IN_WINDOW"
+        },
+        {
+          "check_type": "CONTRACT_PRESENT",
+          "result": "PASS",
+          "reason_code": "CONTRACT_MATCHES"
+        }
+      ],
+      "local_state": "PENDING"
+    },
+    {
+      "row_number": 2,
+      "disposition": "ACCEPTED_NEW",
+      "cleaning_issues": [],
+      "checks": [
+        {
+          "check_type": "TITLE_EXISTS",
+          "result": "PASS",
+          "reason_code": "TITLE_FOUND"
+        },
+        {
+          "check_type": "LIENHOLDER_MATCH",
+          "result": "PASS",
+          "reason_code": "LIENHOLDER_MATCHES"
+        },
+        {
+          "check_type": "PAYMENTS_RECEIVED",
+          "result": "PASS",
+          "reason_code": "PAYMENT_IN_WINDOW"
+        },
+        {
+          "check_type": "CONTRACT_PRESENT",
+          "result": "PASS",
+          "reason_code": "CONTRACT_MATCHES"
+        }
+      ],
+      "local_state": "PENDING"
+    },
+    {
+      "row_number": 3,
+      "disposition": "ACCEPTED_NEW",
+      "cleaning_issues": [],
+      "checks": [
+        {
+          "check_type": "TITLE_EXISTS",
+          "result": "PASS",
+          "reason_code": "TITLE_FOUND"
+        },
+        {
+          "check_type": "LIENHOLDER_MATCH",
+          "result": "PASS",
+          "reason_code": "LIENHOLDER_MATCHES"
+        },
+        {
+          "check_type": "PAYMENTS_RECEIVED",
+          "result": "PASS",
+          "reason_code": "PAYMENT_IN_WINDOW"
+        },
+        {
+          "check_type": "CONTRACT_PRESENT",
+          "result": "PASS",
+          "reason_code": "CONTRACT_MATCHES"
+        }
+      ],
+      "local_state": "PENDING"
+    },
+    {
+      "row_number": 4,
+      "disposition": "ACCEPTED_NEW",
+      "cleaning_issues": [],
+      "checks": [
+        {
+          "check_type": "TITLE_EXISTS",
+          "result": "PASS",
+          "reason_code": "TITLE_FOUND"
+        },
+        {
+          "check_type": "LIENHOLDER_MATCH",
+          "result": "FAIL",
+          "reason_code": "LIENHOLDER_MISMATCH"
+        },
+        {
+          "check_type": "PAYMENTS_RECEIVED",
+          "result": "PASS",
+          "reason_code": "PAYMENT_IN_WINDOW"
+        },
+        {
+          "check_type": "CONTRACT_PRESENT",
+          "result": "PASS",
+          "reason_code": "CONTRACT_MATCHES"
+        }
+      ],
+      "local_state": "HELD_LOCAL"
+    },
+    {
+      "row_number": 5,
+      "disposition": "ACCEPTED_NEW",
+      "cleaning_issues": [],
+      "checks": [
+        {
+          "check_type": "TITLE_EXISTS",
+          "result": "PASS",
+          "reason_code": "TITLE_FOUND"
+        },
+        {
+          "check_type": "LIENHOLDER_MATCH",
+          "result": "PASS",
+          "reason_code": "LIENHOLDER_MATCHES"
+        },
+        {
+          "check_type": "PAYMENTS_RECEIVED",
+          "result": "PASS",
+          "reason_code": "PAYMENT_IN_WINDOW"
+        },
+        {
+          "check_type": "CONTRACT_PRESENT",
+          "result": "PASS",
+          "reason_code": "CONTRACT_MATCHES"
+        }
+      ],
+      "local_state": "PENDING"
+    },
+    {
+      "row_number": 6,
+      "disposition": "ACCEPTED_NEW",
+      "cleaning_issues": [
+        {
+          "field": "vin",
+          "problem": "VIN_CASE_NORMALISED",
+          "action": "FIXED"
+        }
+      ],
+      "checks": [
+        {
+          "check_type": "TITLE_EXISTS",
+          "result": "PASS",
+          "reason_code": "TITLE_FOUND"
+        },
+        {
+          "check_type": "LIENHOLDER_MATCH",
+          "result": "PASS",
+          "reason_code": "LIENHOLDER_MATCHES"
+        },
+        {
+          "check_type": "PAYMENTS_RECEIVED",
+          "result": "PASS",
+          "reason_code": "PAYMENT_IN_WINDOW"
+        },
+        {
+          "check_type": "CONTRACT_PRESENT",
+          "result": "PASS",
+          "reason_code": "CONTRACT_MATCHES"
+        }
+      ],
+      "local_state": "PENDING"
+    },
+    {
+      "row_number": 7,
+      "disposition": "ACCEPTED_NEW",
+      "cleaning_issues": [],
+      "checks": [
+        {
+          "check_type": "TITLE_EXISTS",
+          "result": "FAIL",
+          "reason_code": "NO_TITLE_RECORD"
+        },
+        {
+          "check_type": "LIENHOLDER_MATCH",
+          "result": "UNKNOWN",
+          "reason_code": "NO_TITLE_RECORD"
+        },
+        {
+          "check_type": "PAYMENTS_RECEIVED",
+          "result": "FAIL",
+          "reason_code": "NO_PAYMENT_IN_WINDOW"
+        },
+        {
+          "check_type": "CONTRACT_PRESENT",
+          "result": "PASS",
+          "reason_code": "CONTRACT_MATCHES"
+        }
+      ],
+      "local_state": "HELD_LOCAL"
+    },
+    {
+      "row_number": 8,
+      "disposition": "ACCEPTED_NEW",
+      "cleaning_issues": [],
+      "checks": [
+        {
+          "check_type": "TITLE_EXISTS",
+          "result": "PASS",
+          "reason_code": "TITLE_FOUND"
+        },
+        {
+          "check_type": "LIENHOLDER_MATCH",
+          "result": "PASS",
+          "reason_code": "LIENHOLDER_MATCHES"
+        },
+        {
+          "check_type": "PAYMENTS_RECEIVED",
+          "result": "PASS",
+          "reason_code": "PAYMENT_IN_WINDOW"
+        },
+        {
+          "check_type": "CONTRACT_PRESENT",
+          "result": "PASS",
+          "reason_code": "CONTRACT_MATCHES"
+        }
+      ],
+      "local_state": "PENDING"
+    },
+    {
+      "row_number": 9,
+      "disposition": "REJECTED",
+      "cleaning_issues": [
+        {
+          "field": "original_amount",
+          "problem": "AMOUNT_UNPARSEABLE",
+          "action": "REJECTED"
+        }
+      ],
+      "checks": [],
+      "local_state": null
+    },
+    {
+      "row_number": 10,
+      "disposition": "ACCEPTED_NEW",
+      "cleaning_issues": [],
+      "checks": [
+        {
+          "check_type": "TITLE_EXISTS",
+          "result": "PASS",
+          "reason_code": "TITLE_FOUND"
+        },
+        {
+          "check_type": "LIENHOLDER_MATCH",
+          "result": "PASS",
+          "reason_code": "LIENHOLDER_MATCHES"
+        },
+        {
+          "check_type": "PAYMENTS_RECEIVED",
+          "result": "PASS",
+          "reason_code": "PAYMENT_IN_WINDOW"
+        },
+        {
+          "check_type": "CONTRACT_PRESENT",
+          "result": "PASS",
+          "reason_code": "CONTRACT_MATCHES"
+        }
+      ],
+      "local_state": "PENDING"
+    },
+    {
+      "row_number": 11,
+      "disposition": "ACCEPTED_NEW",
+      "cleaning_issues": [],
+      "checks": [
+        {
+          "check_type": "TITLE_EXISTS",
+          "result": "PASS",
+          "reason_code": "TITLE_FOUND"
+        },
+        {
+          "check_type": "LIENHOLDER_MATCH",
+          "result": "PASS",
+          "reason_code": "LIENHOLDER_MATCHES"
+        },
+        {
+          "check_type": "PAYMENTS_RECEIVED",
+          "result": "PASS",
+          "reason_code": "PAYMENT_IN_WINDOW"
+        },
+        {
+          "check_type": "CONTRACT_PRESENT",
+          "result": "PASS",
+          "reason_code": "CONTRACT_MATCHES"
+        }
+      ],
+      "local_state": "PENDING"
+    },
+    {
+      "row_number": 12,
+      "disposition": "ACCEPTED_NEW",
+      "cleaning_issues": [],
+      "checks": [
+        {
+          "check_type": "TITLE_EXISTS",
+          "result": "PASS",
+          "reason_code": "TITLE_FOUND"
+        },
+        {
+          "check_type": "LIENHOLDER_MATCH",
+          "result": "PASS",
+          "reason_code": "LIENHOLDER_MATCHES"
+        },
+        {
+          "check_type": "PAYMENTS_RECEIVED",
+          "result": "PASS",
+          "reason_code": "PAYMENT_IN_WINDOW"
+        },
+        {
+          "check_type": "CONTRACT_PRESENT",
+          "result": "PASS",
+          "reason_code": "CONTRACT_MATCHES"
+        }
+      ],
+      "local_state": "PENDING"
+    },
+    {
+      "row_number": 13,
+      "disposition": "ACCEPTED_NEW",
+      "cleaning_issues": [],
+      "checks": [
+        {
+          "check_type": "TITLE_EXISTS",
+          "result": "PASS",
+          "reason_code": "TITLE_FOUND"
+        },
+        {
+          "check_type": "LIENHOLDER_MATCH",
+          "result": "PASS",
+          "reason_code": "LIENHOLDER_MATCHES"
+        },
+        {
+          "check_type": "PAYMENTS_RECEIVED",
+          "result": "FAIL",
+          "reason_code": "NO_PAYMENT_IN_WINDOW"
+        },
+        {
+          "check_type": "CONTRACT_PRESENT",
+          "result": "PASS",
+          "reason_code": "CONTRACT_MATCHES"
+        }
+      ],
+      "local_state": "HELD_LOCAL"
+    },
+    {
+      "row_number": 14,
+      "disposition": "ACCEPTED_NEW",
+      "cleaning_issues": [
+        {
+          "field": "vin",
+          "problem": "VIN_SEPARATORS_REMOVED",
+          "action": "FIXED"
+        }
+      ],
+      "checks": [
+        {
+          "check_type": "TITLE_EXISTS",
+          "result": "PASS",
+          "reason_code": "TITLE_FOUND"
+        },
+        {
+          "check_type": "LIENHOLDER_MATCH",
+          "result": "PASS",
+          "reason_code": "LIENHOLDER_MATCHES"
+        },
+        {
+          "check_type": "PAYMENTS_RECEIVED",
+          "result": "PASS",
+          "reason_code": "PAYMENT_IN_WINDOW"
+        },
+        {
+          "check_type": "CONTRACT_PRESENT",
+          "result": "PASS",
+          "reason_code": "CONTRACT_MATCHES"
+        }
+      ],
+      "local_state": "PENDING"
+    },
+    {
+      "row_number": 15,
+      "disposition": "ACCEPTED_NEW",
+      "cleaning_issues": [],
+      "checks": [
+        {
+          "check_type": "TITLE_EXISTS",
+          "result": "PASS",
+          "reason_code": "TITLE_FOUND"
+        },
+        {
+          "check_type": "LIENHOLDER_MATCH",
+          "result": "PASS",
+          "reason_code": "LIENHOLDER_MATCHES"
+        },
+        {
+          "check_type": "PAYMENTS_RECEIVED",
+          "result": "PASS",
+          "reason_code": "PAYMENT_IN_WINDOW"
+        },
+        {
+          "check_type": "CONTRACT_PRESENT",
+          "result": "PASS",
+          "reason_code": "CONTRACT_MATCHES"
+        }
+      ],
+      "local_state": "PENDING"
+    },
+    {
+      "row_number": 16,
+      "disposition": "ACCEPTED_NEW",
+      "cleaning_issues": [],
+      "checks": [
+        {
+          "check_type": "TITLE_EXISTS",
+          "result": "PASS",
+          "reason_code": "TITLE_FOUND"
+        },
+        {
+          "check_type": "LIENHOLDER_MATCH",
+          "result": "PASS",
+          "reason_code": "LIENHOLDER_MATCHES"
+        },
+        {
+          "check_type": "PAYMENTS_RECEIVED",
+          "result": "PASS",
+          "reason_code": "PAYMENT_IN_WINDOW"
+        },
+        {
+          "check_type": "CONTRACT_PRESENT",
+          "result": "PASS",
+          "reason_code": "CONTRACT_MATCHES"
+        }
+      ],
+      "local_state": "PENDING"
+    },
+    {
+      "row_number": 17,
+      "disposition": "ACCEPTED_NEW",
+      "cleaning_issues": [
+        {
+          "field": "origination_date",
+          "problem": "DATE_FORMAT_NORMALISED",
+          "action": "FIXED"
+        }
+      ],
+      "checks": [
+        {
+          "check_type": "TITLE_EXISTS",
+          "result": "PASS",
+          "reason_code": "TITLE_FOUND"
+        },
+        {
+          "check_type": "LIENHOLDER_MATCH",
+          "result": "PASS",
+          "reason_code": "LIENHOLDER_MATCHES"
+        },
+        {
+          "check_type": "PAYMENTS_RECEIVED",
+          "result": "PASS",
+          "reason_code": "PAYMENT_IN_WINDOW"
+        },
+        {
+          "check_type": "CONTRACT_PRESENT",
+          "result": "PASS",
+          "reason_code": "CONTRACT_MATCHES"
+        }
+      ],
+      "local_state": "PENDING"
+    },
+    {
+      "row_number": 18,
+      "disposition": "ACCEPTED_NEW",
+      "cleaning_issues": [],
+      "checks": [
+        {
+          "check_type": "TITLE_EXISTS",
+          "result": "PASS",
+          "reason_code": "TITLE_FOUND"
+        },
+        {
+          "check_type": "LIENHOLDER_MATCH",
+          "result": "PASS",
+          "reason_code": "LIENHOLDER_MATCHES"
+        },
+        {
+          "check_type": "PAYMENTS_RECEIVED",
+          "result": "PASS",
+          "reason_code": "PAYMENT_IN_WINDOW"
+        },
+        {
+          "check_type": "CONTRACT_PRESENT",
+          "result": "PASS",
+          "reason_code": "CONTRACT_MATCHES"
+        }
+      ],
+      "local_state": "PENDING"
+    },
+    {
+      "row_number": 19,
+      "disposition": "REJECTED",
+      "cleaning_issues": [
+        {
+          "field": "vin",
+          "problem": "VIN_CHECK_DIGIT_INVALID",
+          "action": "REJECTED"
+        }
+      ],
+      "checks": [],
+      "local_state": null
+    },
+    {
+      "row_number": 20,
+      "disposition": "ACCEPTED_NEW",
+      "cleaning_issues": [],
+      "checks": [
+        {
+          "check_type": "TITLE_EXISTS",
+          "result": "PASS",
+          "reason_code": "TITLE_FOUND"
+        },
+        {
+          "check_type": "LIENHOLDER_MATCH",
+          "result": "PASS",
+          "reason_code": "LIENHOLDER_MATCHES"
+        },
+        {
+          "check_type": "PAYMENTS_RECEIVED",
+          "result": "PASS",
+          "reason_code": "PAYMENT_IN_WINDOW"
+        },
+        {
+          "check_type": "CONTRACT_PRESENT",
+          "result": "PASS",
+          "reason_code": "CONTRACT_MATCHES"
+        }
+      ],
+      "local_state": "PENDING"
+    }
+  ]
+}

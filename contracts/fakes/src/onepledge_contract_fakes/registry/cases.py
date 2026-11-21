@@ -86,12 +86,13 @@ class CaseBook:
         self._cases: dict[str, Case] = {}
         self._exempt: set[tuple[str, str]] = set()
 
-    def open_case_for(self, claimant_asset_token: str, lock_id: str) -> Case | None:
-        """The OPEN case of this claimant asset code against this lock, if any."""
+    def open_case_for(self, claimant: str, claimant_asset_token: str, lock_id: str) -> Case | None:
+        """The OPEN case of this claimant member and asset code against this lock, if any."""
         for case in self._cases.values():
             if (
                 case.status == CaseStatus.OPEN
                 and case.lock_id == lock_id
+                and case.claimant_member_id == claimant
                 and case.claimant_asset_token == claimant_asset_token
             ):
                 return case

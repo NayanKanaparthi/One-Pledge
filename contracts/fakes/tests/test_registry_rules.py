@@ -243,6 +243,17 @@ def test_a_repeated_conflict_reuses_the_open_case_without_new_events_or_alerts(w
     assert len(world.messages(1, "ALERT")) == 1
 
 
+def test_a_third_member_claiming_the_same_car_gets_its_own_case(world: World) -> None:
+    loan = Loan("VIN-F3")
+    world.pledge(0, loan)
+    second = world.pledge(1, loan)[0]
+    third = world.pledge(2, Loan("VIN-F3", cents=2_400_000))[0]
+    assert third["case_id"] != second["case_id"]
+    assert (third["match_kind"], second["match_kind"]) == ("LIKELY", "EXACT")
+    assert len(world.messages(2, "ALERT")) == 1
+    assert len(world.messages(0, "ALERT")) == 2
+
+
 def test_events_of_one_submission_in_order_and_as_of_seq(world: World) -> None:
     world.pledge(0, Loan("VIN-G1"))
     before = len(world.events())

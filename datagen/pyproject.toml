@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "onepledge-datagen"
+version = "1.0.0"
+description = "Seeded synthetic data for OnePledge layer 1: lender tapes, outside records, reference data, timeline and answer key."
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-cov>=5",
+  "hypothesis>=6.100",
+  "ruff>=0.5",
+  "mypy>=1.10",
+]
+
+[project.scripts]
+onepledge-datagen = "onepledge_datagen.interface.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+onepledge_datagen = ["py.typed"]
