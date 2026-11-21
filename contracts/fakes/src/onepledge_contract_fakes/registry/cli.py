@@ -1,0 +1,49 @@
+"""Command line of the registry double: `onepledge-fake-registry serve` (TEST DOUBLE)."""
+
+from __future__ import annotations
+
+import argparse
+from collections.abc import Sequence
+
+from onepledge_contract_fakes.cli_output import CliOutput
+from onepledge_contract_fakes.errors import ConfigurationError
+from onepledge_contract_fakes.registry.app import create_registry_app
+from onepledge_contract_fakes.registry.settings import load_settings
+from onepledge_contract_fakes.server import PortUnavailableError, run_server
+
+SERVICE_NAME = "registry-fake"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Argument parser with one `serve` subcommand."""
+    parser = argparse.ArgumentParser(
+        prog="onepledge-fake-registry",
+        description="Run the registry TEST DOUBLE (contracts/registry.yaml). Not production code.",
+    )
+    commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
+    commands.add_parser(
+        "serve",
+        help="serve the registry double over HTTP",
+        description="Serve the registry double on BIND_HOST:PORT. Configuration comes from the environment "
+        "(PORT, FAKE_REGISTRY_SIGNING_SEED_B64, REGISTRY_SIGNING_KEY_ID, FAKE_REGISTRY_MEMBERS, "
+        "FAKE_REGISTRY_AUDITOR_KEY_SHA256, FAKE_REGISTRY_KEY_VERSION, FAKE_REGISTRY_DAILY_ITEM_CAP, "
+        "FAKE_TEST_CONTROLS, FAKE_TEST_CONTROL_KEY, BIND_HOST, LOG_LEVEL). State is kept in memory only.",
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None, output: CliOutput | None = None) -> int:
+    """Entry point. Returns the process exit code."""
+    out = output or CliOutput()
+    build_parser().parse_args(argv)
+    try:
+        settings = load_settings()
+        app = create_registry_app(settings.to_config())
+        run_server(app, SERVICE_NAME, settings.bind_host, settings.port, settings.log_level)
+    except ConfigurationError as error:
+        out.error(error.sentence())
+        return 1
+    except PortUnavailableError as error:
+        out.error(f"Port {error.port} on {error.host} is already in use or not available; set another PORT.")
+        return 1
+    return 0
