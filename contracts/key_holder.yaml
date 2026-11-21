@@ -231,6 +231,8 @@ components:
               enum:
                 - UNAUTHENTICATED
                 - VALIDATION_ERROR
+                - NOT_FOUND
+                - METHOD_NOT_ALLOWED
                 - INVALID_ELEMENT
                 - KEY_VERSION_UNAVAILABLE
                 - PAYLOAD_TOO_LARGE

@@ -995,6 +995,8 @@ components:
                 - UNAUTHENTICATED
                 - FORBIDDEN
                 - VALIDATION_ERROR
+                - NOT_FOUND
+                - METHOD_NOT_ALLOWED
                 - IDEMPOTENCY_KEY_REUSED
                 - KEY_VERSION_MISMATCH
                 - SUBMISSION_NOT_FOUND

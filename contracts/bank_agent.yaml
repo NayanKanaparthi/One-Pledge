@@ -2206,6 +2206,7 @@ components:
                 - FORBIDDEN
                 - VALIDATION_ERROR
                 - NOT_FOUND
+                - METHOD_NOT_ALLOWED
                 - FACILITY_NOT_FOUND
                 - TAPE_DUPLICATE
                 - TAPE_TOO_LARGE

@@ -339,6 +339,8 @@ components:
               enum:
                 - UNAUTHENTICATED
                 - VALIDATION_ERROR
+                - NOT_FOUND
+                - METHOD_NOT_ALLOWED
                 - TITLE_NOT_FOUND
                 - CONTRACT_NOT_FOUND
                 - RATE_LIMITED
