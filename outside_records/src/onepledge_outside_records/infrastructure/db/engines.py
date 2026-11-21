@@ -27,6 +27,25 @@ def make_engine(url: str) -> Engine:
     return create_engine(sqlalchemy_url(url), hide_parameters=True, pool_pre_ping=True)
 
 
+class EngineSet:
+    """The engines made for one command, disposed together when the command ends."""
+
+    def __init__(self) -> None:
+        self._engines: list[Engine] = []
+
+    def engine(self, url: str) -> Engine:
+        """A new engine on `url`, remembered for disposal."""
+        engine = make_engine(url)
+        self._engines.append(engine)
+        return engine
+
+    def dispose(self) -> None:
+        """Close every pooled connection of every engine."""
+        for engine in self._engines:
+            engine.dispose()
+        self._engines.clear()
+
+
 @dataclass(frozen=True)
 class DatabaseTarget:
     """Names and passwords of one database and its two roles, taken from the two role URLs."""

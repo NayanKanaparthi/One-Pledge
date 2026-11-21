@@ -20,7 +20,7 @@ repos:
         types: [python]
       - id: no-em-dash
         name: reject the em dash character (U+2014)
-        entry: "—"
+        entry: '\u2014'
         language: pygrep
         types: [text]
       - id: no-env-file

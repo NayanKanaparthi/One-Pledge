@@ -66,13 +66,15 @@ def _contract_json(contract: Contract) -> dict[str, object]:
 def _date(value: str | None, name: str, details: list[ErrorDetail]) -> date | None:
     if value is None:
         return None
+    parsed: date | None = None
     if len(value) == len("YYYY-MM-DD"):
         try:
-            return date.fromisoformat(value)
+            parsed = date.fromisoformat(value)
         except ValueError:
-            pass
-    details.append(ErrorDetail(name, "INVALID_DATE"))
-    return None
+            parsed = None
+    if parsed is None:
+        details.append(ErrorDetail(name, "INVALID_DATE"))
+    return parsed
 
 
 def _integer(

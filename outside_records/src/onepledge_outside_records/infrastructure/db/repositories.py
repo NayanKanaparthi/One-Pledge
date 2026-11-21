@@ -70,6 +70,16 @@ class SqlRecordsReader:
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
 
+    def ensure_readable(self) -> None:
+        """Check before serving that the role can read the migrated tables, or say what to run."""
+        try:
+            with self._engine.connect() as connection:
+                connection.execute(select(ApiClientRow.client_id).limit(1))
+        except DBAPIError:
+            raise OperatorError(
+                "The database at DATABASE_URL cannot be read; run db provision and db migrate first."
+            ) from None
+
     def title(self, vin: VinText) -> TitleRecord | None:
         """The title record of a VIN."""
         with _connection(self._engine) as connection:

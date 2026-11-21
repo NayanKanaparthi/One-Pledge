@@ -6,13 +6,10 @@ from types import TracebackType
 from typing import Self
 
 from fastapi import FastAPI
-from sqlalchemy import Engine, text
-from sqlalchemy.exc import DBAPIError
 
 from onepledge_outside_records.application.administration import RegisterClient, SeedRecords
-from onepledge_outside_records.domain.errors import OperatorError
 from onepledge_outside_records.infrastructure.csv_source import CsvRecordsSource
-from onepledge_outside_records.infrastructure.db.engines import DatabaseTarget, make_engine
+from onepledge_outside_records.infrastructure.db.engines import DatabaseTarget, EngineSet
 from onepledge_outside_records.infrastructure.db.migrations import MigrationRunner
 from onepledge_outside_records.infrastructure.db.provisioning import DatabaseProvisioner
 from onepledge_outside_records.infrastructure.db.repositories import (
@@ -29,7 +26,7 @@ class Composition:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._engines: list[Engine] = []
+        self._engines = EngineSet()
 
     def __enter__(self) -> Self:
         """Use as a context manager so every engine is disposed."""
@@ -39,14 +36,7 @@ class Composition:
         self, kind: type[BaseException] | None, error: BaseException | None, trace: TracebackType | None
     ) -> None:
         """Dispose every engine made by this composition."""
-        for engine in self._engines:
-            engine.dispose()
-        self._engines.clear()
-
-    def _engine(self, url: str) -> Engine:
-        engine = make_engine(url)
-        self._engines.append(engine)
-        return engine
+        self._engines.dispose()
 
     def provisioner(self) -> tuple[DatabaseProvisioner, DatabaseTarget]:
         """The superuser provisioner and the database it provisions."""
@@ -61,21 +51,15 @@ class Composition:
 
     def seed_records(self) -> SeedRecords:
         """Seeding as the owner role."""
-        engine = self._engine(self._settings.require_migration_url())
+        engine = self._engines.engine(self._settings.require_migration_url())
         return SeedRecords(CsvRecordsSource(), SqlRecordsWriter(engine))
 
     def register_client(self) -> RegisterClient:
         """Client registration as the owner role."""
-        return RegisterClient(SqlClientRegistry(self._engine(self._settings.require_migration_url())))
+        return RegisterClient(SqlClientRegistry(self._engines.engine(self._settings.require_migration_url())))
 
     def service(self) -> FastAPI:
         """The API on the read-only app role, after checking the schema is in place."""
-        engine = self._engine(self._settings.require_database_url())
-        try:
-            with engine.connect() as connection:
-                connection.execute(text("SELECT 1 FROM api_clients LIMIT 1"))
-        except DBAPIError:
-            raise OperatorError(
-                "The database at DATABASE_URL cannot be read; run db provision and db migrate first."
-            ) from None
-        return create_app(SqlRecordsReader(engine))
+        reader = SqlRecordsReader(self._engines.engine(self._settings.require_database_url()))
+        reader.ensure_readable()
+        return create_app(reader)
