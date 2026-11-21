@@ -1,0 +1,348 @@
+"""Every status and code of the bank agent as a `StrEnum` (SPEC 8.1, 10.4, 11.1, 17.2).
+
+Values are upper snake case and equal to the member names. The database holds the
+same lists as named CHECK constraints; a test compares the two.
+"""
+
+from __future__ import annotations
+
+from enum import StrEnum, auto
+
+
+class TapeKind(StrEnum):
+    """What a tape asks for."""
+
+    BACK_BOOK = "BACK_BOOK"
+    PLEDGE = "PLEDGE"
+    RELEASE = "RELEASE"
+
+
+class TapeSource(StrEnum):
+    """How a tape reached the bank agent."""
+
+    FILE_UPLOAD = "FILE_UPLOAD"
+    API_INSTRUCTION = "API_INSTRUCTION"
+
+
+class TapeStatus(StrEnum):
+    """The last pipeline stage a submission completed (SPEC 8.3)."""
+
+    RECEIVED = "RECEIVED"
+    CLEANED = "CLEANED"
+    CHECKED = "CHECKED"
+    TOKENIZED = "TOKENIZED"
+    SUBMITTED = "SUBMITTED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class FailureCode(StrEnum):
+    """Why a submission is FAILED."""
+
+    OUTSIDE_RECORDS_UNAVAILABLE = "OUTSIDE_RECORDS_UNAVAILABLE"
+    KEY_HOLDER_UNAVAILABLE = "KEY_HOLDER_UNAVAILABLE"
+    KEY_HOLDER_REJECTED = "KEY_HOLDER_REJECTED"
+    KEY_VERSION_MISMATCH = "KEY_VERSION_MISMATCH"
+    REGISTRY_UNAVAILABLE = "REGISTRY_UNAVAILABLE"
+    REGISTRY_REJECTED_REQUEST = "REGISTRY_REJECTED_REQUEST"
+    CERTIFICATE_INVALID = "CERTIFICATE_INVALID"
+    REGISTRY_INTEGRITY_BROKEN = "REGISTRY_INTEGRITY_BROKEN"
+    INTERNAL_ERROR = "INTERNAL_ERROR"
+
+
+class LoanState(StrEnum):
+    """Bank side state of one loan row (SPEC 8.4)."""
+
+    PENDING = "PENDING"
+    HELD_LOCAL = "HELD_LOCAL"
+    LOCKED = "LOCKED"
+    CONFLICT = "CONFLICT"
+    RELEASED = "RELEASED"
+
+
+class RowDisposition(StrEnum):
+    """What the clean stage decided for one raw row (SPEC 10.5)."""
+
+    ACCEPTED_NEW = "ACCEPTED_NEW"
+    ACCEPTED_REPRESENTED = "ACCEPTED_REPRESENTED"
+    ALREADY_LOCKED = "ALREADY_LOCKED"
+    RELEASE_REQUESTED = "RELEASE_REQUESTED"
+    REJECTED = "REJECTED"
+
+
+class CheckType(StrEnum):
+    """The four local checks, in their fixed order (SPEC 11.1)."""
+
+    TITLE_EXISTS = "TITLE_EXISTS"
+    LIENHOLDER_MATCH = "LIENHOLDER_MATCH"
+    PAYMENTS_RECEIVED = "PAYMENTS_RECEIVED"
+    CONTRACT_PRESENT = "CONTRACT_PRESENT"
+
+
+class _NamedStrEnum(StrEnum):
+    """A StrEnum whose `auto()` values equal the member names."""
+
+    @staticmethod
+    def _generate_next_value_(name: str, start: int, count: int, last_values: list[str]) -> str:
+        return name
+
+
+class CheckOutcome(_NamedStrEnum):
+    """Result of one local check."""
+
+    PASS = auto()
+    FAIL = auto()
+    UNKNOWN = auto()
+
+
+class CheckReason(StrEnum):
+    """The rule a local check result rests on (SPEC 11.1)."""
+
+    TITLE_FOUND = "TITLE_FOUND"
+    TITLE_PENDING_WINDOW = "TITLE_PENDING_WINDOW"
+    NO_TITLE_RECORD = "NO_TITLE_RECORD"
+    LIENHOLDER_MATCHES = "LIENHOLDER_MATCHES"
+    LIENHOLDER_MISMATCH = "LIENHOLDER_MISMATCH"
+    FIRST_PAYMENT_NOT_DUE = "FIRST_PAYMENT_NOT_DUE"
+    PAYMENT_IN_WINDOW = "PAYMENT_IN_WINDOW"
+    NO_PAYMENT_IN_WINDOW = "NO_PAYMENT_IN_WINDOW"
+    NO_CONTRACT_RECORD = "NO_CONTRACT_RECORD"
+    CONTRACT_LENDER_MISMATCH = "CONTRACT_LENDER_MISMATCH"
+    CONTRACT_TERMS_MISMATCH = "CONTRACT_TERMS_MISMATCH"
+    CONTRACT_MATCHES = "CONTRACT_MATCHES"
+
+
+class CleaningProblem(StrEnum):
+    """Problems found by cleaning (SPEC 10.4 and 10.5)."""
+
+    WHITESPACE_TRIMMED = "WHITESPACE_TRIMMED"
+    MISSING_REQUIRED_FIELD = "MISSING_REQUIRED_FIELD"
+    NON_DATA_ROW = "NON_DATA_ROW"
+    COLUMN_COUNT_MISMATCH = "COLUMN_COUNT_MISMATCH"
+    UNSAFE_CHARACTERS = "UNSAFE_CHARACTERS"
+    VIN_CASE_NORMALISED = "VIN_CASE_NORMALISED"
+    VIN_SEPARATORS_REMOVED = "VIN_SEPARATORS_REMOVED"
+    VIN_CHARACTER_SUBSTITUTED = "VIN_CHARACTER_SUBSTITUTED"
+    VIN_LENGTH_INVALID = "VIN_LENGTH_INVALID"
+    VIN_CHARACTER_INVALID = "VIN_CHARACTER_INVALID"
+    VIN_CHECK_DIGIT_INVALID = "VIN_CHECK_DIGIT_INVALID"
+    BORROWER_REF_NORMALISED = "BORROWER_REF_NORMALISED"
+    BORROWER_REF_INVALID = "BORROWER_REF_INVALID"
+    LOAN_NUMBER_INVALID = "LOAN_NUMBER_INVALID"
+    DATE_FORMAT_NORMALISED = "DATE_FORMAT_NORMALISED"
+    DATE_UNPARSEABLE = "DATE_UNPARSEABLE"
+    DATE_IN_FUTURE = "DATE_IN_FUTURE"
+    DATE_TOO_OLD = "DATE_TOO_OLD"
+    AMOUNT_FORMAT_NORMALISED = "AMOUNT_FORMAT_NORMALISED"
+    AMOUNT_UNPARSEABLE = "AMOUNT_UNPARSEABLE"
+    AMOUNT_OUT_OF_RANGE = "AMOUNT_OUT_OF_RANGE"
+    ZERO_BALANCE = "ZERO_BALANCE"
+    BALANCE_EXCEEDS_ORIGINAL = "BALANCE_EXCEEDS_ORIGINAL"
+    DUPLICATE_VIN_IN_FILE = "DUPLICATE_VIN_IN_FILE"
+    TERMS_CHANGED_AFTER_TOKENIZATION = "TERMS_CHANGED_AFTER_TOKENIZATION"
+    TERMS_CHANGED_WHILE_LOCKED = "TERMS_CHANGED_WHILE_LOCKED"
+    OPEN_CONFLICT = "OPEN_CONFLICT"
+    RELEASE_LOAN_NOT_LOCKED = "RELEASE_LOAN_NOT_LOCKED"
+
+
+class CleaningAction(StrEnum):
+    """What cleaning did about a problem."""
+
+    FIXED = "FIXED"
+    REJECTED = "REJECTED"
+
+
+class TokenKind(StrEnum):
+    """The eight codes derived from one loan, in their fixed order (SPEC 9.2)."""
+
+    ASSET = "ASSET"
+    VIN = "VIN"
+    BORROWER = "BORROWER"
+    AMOUNT_EXACT = "AMOUNT_EXACT"
+    AMOUNT_100 = "AMOUNT_100"
+    AMOUNT_1000 = "AMOUNT_1000"
+    DATE_DAY = "DATE_DAY"
+    DATE_MONTH = "DATE_MONTH"
+
+
+class MatchKind(StrEnum):
+    """How closely another member's pledge agrees with a loan."""
+
+    EXACT = "EXACT"
+    LIKELY = "LIKELY"
+
+
+class MatchBasis(StrEnum):
+    """What a registry match rests on."""
+
+    ASSET = "ASSET"
+    FIELDS = "FIELDS"
+
+
+class AlertRole(StrEnum):
+    """This bank's side of a case."""
+
+    HOLDER = "HOLDER"
+    CLAIMANT = "CLAIMANT"
+
+
+class AlertStatus(StrEnum):
+    """Bank side review status of an alert (SPEC 8.5)."""
+
+    NEW = "NEW"
+    REVIEWING = "REVIEWING"
+    CLEARED = "CLEARED"
+    ESCALATED = "ESCALATED"
+
+
+class CaseStatus(StrEnum):
+    """Registry side status of a case."""
+
+    OPEN = "OPEN"
+    CLEARED_DATA_ERROR = "CLEARED_DATA_ERROR"
+    CLEARED_LATE_RELEASE = "CLEARED_LATE_RELEASE"
+    CONFIRMED = "CONFIRMED"
+
+
+class BankPosition(StrEnum):
+    """The position a credit officer records on a case."""
+
+    DATA_ERROR = "DATA_ERROR"
+    CONFIRMED_DOUBLE_PLEDGE = "CONFIRMED_DOUBLE_PLEDGE"
+
+
+class RegistryItemResult(StrEnum):
+    """Per item result of a registry submission."""
+
+    LOCKED = "LOCKED"
+    CONFLICT = "CONFLICT"
+    RELEASED = "RELEASED"
+    REJECTED = "REJECTED"
+
+
+class RequestOrigin(StrEnum):
+    """Why a registry request exists."""
+
+    TAPE = "TAPE"
+    RESUBMIT = "RESUBMIT"
+
+
+class Role(StrEnum):
+    """Bank user roles (SPEC 18.2)."""
+
+    ANALYST = "ANALYST"
+    CREDIT_OFFICER = "CREDIT_OFFICER"
+    ADMIN = "ADMIN"
+
+
+class FacilityStatus(StrEnum):
+    """Status of one credit line."""
+
+    ACTIVE = "ACTIVE"
+    SUSPENDED = "SUSPENDED"
+    CLOSED = "CLOSED"
+
+
+class ExplanationSource(StrEnum):
+    """Who wrote an alert explanation."""
+
+    TEMPLATE = "TEMPLATE"
+    MODEL = "MODEL"
+
+
+class CertificateFailure(StrEnum):
+    """Why a stored certificate failed verification (SPEC 15.2)."""
+
+    BAD_SIGNATURE = "BAD_SIGNATURE"
+    UNKNOWN_SIGNING_KEY = "UNKNOWN_SIGNING_KEY"
+    BODY_HASH_MISMATCH = "BODY_HASH_MISMATCH"
+    CONTENT_MISMATCH = "CONTENT_MISMATCH"
+
+
+class CheckpointFailure(StrEnum):
+    """Why a received checkpoint failed verification (SPEC 15.3)."""
+
+    BAD_SIGNATURE = "BAD_SIGNATURE"
+    UNKNOWN_SIGNING_KEY = "UNKNOWN_SIGNING_KEY"
+    NON_MONOTONIC = "NON_MONOTONIC"
+    FORK = "FORK"
+    CHAIN_BREAK = "CHAIN_BREAK"
+    HEAD_MISMATCH = "HEAD_MISMATCH"
+
+
+class IntegrityRunStatus(StrEnum):
+    """Overall result of one deep verification."""
+
+    OK = "OK"
+    BROKEN = "BROKEN"
+
+
+class ActorType(StrEnum):
+    """Who performed an audited action."""
+
+    USER = "USER"
+    SYSTEM = "SYSTEM"
+
+
+class AuditOutcome(StrEnum):
+    """How an audited action ended."""
+
+    SUCCESS = "SUCCESS"
+    DENIED = "DENIED"
+    FAILURE = "FAILURE"
+
+
+class AuditObjectType(StrEnum):
+    """The kind of object an audit entry is about (SPEC 17.2)."""
+
+    USER = "USER"
+    ROUTE = "ROUTE"
+    TAPE_SUBMISSION = "TAPE_SUBMISSION"
+    LOAN = "LOAN"
+    REGISTRY_REQUEST = "REGISTRY_REQUEST"
+    CERTIFICATE = "CERTIFICATE"
+    ALERT = "ALERT"
+    CHECKPOINT = "CHECKPOINT"
+    REGISTRY_MESSAGE = "REGISTRY_MESSAGE"
+    REGISTRY = "REGISTRY"
+    INTEGRITY_RUN = "INTEGRITY_RUN"
+    AUDIT_LOG = "AUDIT_LOG"
+    CONFIG = "CONFIG"
+
+
+class AuditAction(StrEnum):
+    """Every audited action (SPEC 17.2)."""
+
+    LOGIN_SUCCEEDED = "LOGIN_SUCCEEDED"
+    LOGIN_FAILED = "LOGIN_FAILED"
+    LOGIN_RATE_LIMITED = "LOGIN_RATE_LIMITED"
+    ACCESS_DENIED = "ACCESS_DENIED"
+    USER_CREATED = "USER_CREATED"
+    USER_UPDATED = "USER_UPDATED"
+    TAPE_UPLOADED = "TAPE_UPLOADED"
+    TAPE_UPLOAD_REJECTED = "TAPE_UPLOAD_REJECTED"
+    RELEASE_REQUESTED = "RELEASE_REQUESTED"
+    TAPE_STAGE_ADVANCED = "TAPE_STAGE_ADVANCED"
+    TAPE_STAGE_ATTEMPT_FAILED = "TAPE_STAGE_ATTEMPT_FAILED"
+    TAPE_FAILED = "TAPE_FAILED"
+    TAPE_RETRY_REQUESTED = "TAPE_RETRY_REQUESTED"
+    LOAN_STATE_CHANGED = "LOAN_STATE_CHANGED"
+    REGISTRY_REQUEST_SENT = "REGISTRY_REQUEST_SENT"
+    REGISTRY_RESPONSE_RECEIVED = "REGISTRY_RESPONSE_RECEIVED"
+    REGISTRY_ITEM_REJECTED = "REGISTRY_ITEM_REJECTED"
+    CERTIFICATE_VERIFIED = "CERTIFICATE_VERIFIED"
+    CERTIFICATE_REJECTED = "CERTIFICATE_REJECTED"
+    ALERT_RECEIVED = "ALERT_RECEIVED"
+    ALERT_UNMATCHED = "ALERT_UNMATCHED"
+    ALERT_REVIEW_STARTED = "ALERT_REVIEW_STARTED"
+    ALERT_POSITION_SUBMITTED = "ALERT_POSITION_SUBMITTED"
+    ALERT_CASE_UPDATED = "ALERT_CASE_UPDATED"
+    LOAN_RESUBMITTED = "LOAN_RESUBMITTED"
+    CHECKPOINT_VERIFIED = "CHECKPOINT_VERIFIED"
+    CHECKPOINT_REJECTED = "CHECKPOINT_REJECTED"
+    REGISTRY_MESSAGE_IGNORED = "REGISTRY_MESSAGE_IGNORED"
+    REGISTRY_SYNC_REQUESTED = "REGISTRY_SYNC_REQUESTED"
+    INTEGRITY_VERIFICATION_RUN = "INTEGRITY_VERIFICATION_RUN"
+    LINEAGE_VIEWED = "LINEAGE_VIEWED"
+    AUDIT_LOG_VIEWED = "AUDIT_LOG_VIEWED"
+    HALT_RULE_DISABLED = "HALT_RULE_DISABLED"
