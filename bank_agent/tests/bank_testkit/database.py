@@ -61,6 +61,12 @@ class BankDatabase:
         return psycopg.connect(url, autocommit=True)
 
 
+def pairs(database: BankDatabase, query: str, parameters: tuple[object, ...] = ()) -> dict[str, str]:
+    """A two column query as the superuser, first column to second, both as text."""
+    with database.connect("admin") as connection:
+        return {str(row[0]): str(row[1]) for row in connection.execute(query, parameters)}
+
+
 def new_bank_database(code: str = "harbor") -> BankDatabase:
     """Names and passwords for a fresh bank database; nothing is created yet."""
     name = f"{TEST_PREFIX}_{secrets.token_hex(4)}_bank_{code}"
