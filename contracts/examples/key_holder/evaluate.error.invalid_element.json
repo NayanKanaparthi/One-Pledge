@@ -1,0 +1,13 @@
+{
+  "error": {
+    "code": "INVALID_ELEMENT",
+    "message": "One or more elements are not valid group elements.",
+    "request_id": "983e2beb-2d83-5d32-a3b5-83a68e98f84a",
+    "details": [
+      {
+        "field": "elements[3]",
+        "issue": "NOT_A_VALID_POINT"
+      }
+    ]
+  }
+}

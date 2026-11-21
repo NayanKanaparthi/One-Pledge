@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "TITLE_NOT_FOUND",
+    "message": "No title record exists for the requested vehicle.",
+    "request_id": "96a4d190-20c5-52c3-b22e-329bf794eb31"
+  }
+}

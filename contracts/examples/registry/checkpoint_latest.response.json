@@ -1,0 +1,11 @@
+{
+  "body": {
+    "schema_version": 1,
+    "checkpoint_seq": 1,
+    "last_event_seq": 6,
+    "head_hash": "f3f435a3ccf9e47009bbd36804ee18e6c09ae4bd660e65afe70700fa4e5e69b3",
+    "signed_at": "2026-10-22T14:03:12Z"
+  },
+  "signature": "bbGLIDTligHIdefkZjnPf4LCqv4QUcwEPX5979voqL3MZlujOW9chcckQdLctpbZMq8vBlX37inRRviZvhcSBA==",
+  "signing_key_id": "registry-test-vector-1"
+}

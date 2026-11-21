@@ -1,0 +1,2234 @@
+openapi: 3.1.0
+info:
+  title: OnePledge Bank Agent API (DRAFT)
+  version: 1.0.0-draft.1
+  summary: Contract A, bank agent part. DRAFT pending approval by Shreyas and Vedant.
+  description: |
+    The program that runs inside one bank. One instance, one database and one
+    signing secret per bank, so a token issued by one bank's agent is rejected
+    by every other bank's agent.
+
+    Conventions:
+    - Money is integer cents. Times are RFC 3339 UTC. IDs are UUIDs.
+    - Lists are paged with `limit` (1 to 200, default 50) and `offset`, and
+      return `{items, total, limit, offset}`.
+    - Every response carries `X-Request-ID` (the caller's value when it sent a
+      valid UUID, otherwise a new one).
+    - Errors always use `ErrorResponse`. Messages are fixed sentences per code
+      and never echo a submitted value. Validation details name the field and
+      an issue code only.
+    - No raw loan value is accepted in a path or query string. Search by VIN
+      uses a POST body.
+
+    Roles (`x-roles` on each operation is authoritative):
+    - ANALYST: uploads back book and pledge tapes, reads loans, alerts,
+      certificates and lineage, starts alert reviews.
+    - CREDIT_OFFICER: everything an analyst can do, plus releases, retries,
+      resubmissions, case positions, registry sync, deep verification and the
+      audit log.
+    - ADMIN: manages users, reads integrity and the audit log, runs deep
+      verification and registry sync. Has no access to loan, tape, alert or
+      certificate data (segregation of duties).
+  license:
+    name: Proprietary (course project, synthetic data only)
+    identifier: LicenseRef-OnePledge-Course
+servers:
+  - url: http://localhost:8101
+    description: Harbor Bank (local default)
+  - url: http://localhost:8102
+    description: Northgate Bank (local default)
+  - url: http://localhost:8103
+    description: Calder Credit Fund (local default)
+security:
+  - BearerAuth: []
+tags:
+  - name: auth
+  - name: facilities
+  - name: tapes
+  - name: loans
+  - name: alerts
+  - name: certificates
+  - name: integrity
+  - name: audit
+  - name: users
+  - name: health
+paths:
+  /v1/auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      summary: Exchange email and password for a short-lived access token
+      security: []
+      x-roles: [PUBLIC]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            examples:
+              default:
+                externalValue: examples/bank_agent/login.request.json
+      responses:
+        '200':
+          description: Authenticated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/login.response.json
+        '401':
+          description: INVALID_CREDENTIALS. Same response for an unknown email, a wrong password and an inactive user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/login.error.invalid_credentials.json
+        '422':
+          $ref: '#/components/responses/Error'
+        '429':
+          description: LOGIN_RATE_LIMITED. Too many failed attempts for this email or client address.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/auth/me:
+    get:
+      tags: [auth]
+      operationId: getCurrentUser
+      summary: The authenticated user and bank
+      x-roles: [ANALYST, CREDIT_OFFICER, ADMIN]
+      responses:
+        '200':
+          description: Current session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/me.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+  /v1/facilities:
+    get:
+      tags: [facilities]
+      operationId: listFacilities
+      summary: Credit lines this bank extends, with loan counts by state
+      x-roles: [ANALYST, CREDIT_OFFICER]
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of facilities ordered by name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FacilityPage'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/facilities.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /v1/tapes:
+    post:
+      tags: [tapes]
+      operationId: uploadTape
+      summary: Upload a lender loan file (back book, pledge or release)
+      description: |
+        Stores the file fingerprint and every raw row in one transaction, then
+        returns 202. Cleaning, local checks, tokenisation and registry
+        submission run in the background; poll `GET /v1/tapes/{submission_id}`.
+        Limits: 5 MiB, 20,000 data rows, 64 columns, 512 characters per cell,
+        UTF-8 only. A RELEASE upload requires CREDIT_OFFICER.
+      x-roles: [ANALYST, CREDIT_OFFICER]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TapeUpload'
+      responses:
+        '202':
+          description: Received and stored. Processing continues in the background.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TapeSubmission'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/tape_upload.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          description: FACILITY_NOT_FOUND.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: TAPE_DUPLICATE. The same file was already uploaded for this facility and kind. `details` carries the existing submission_id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/tape_upload.error.duplicate.json
+        '413':
+          description: TAPE_TOO_LARGE (bytes, rows, columns or cell length).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: VALIDATION_ERROR, TAPE_NOT_UTF8, TAPE_EMPTY, TAPE_HEADER_INVALID or TAPE_MALFORMED.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      tags: [tapes]
+      operationId: listTapes
+      summary: Tape submissions, newest first
+      x-roles: [ANALYST, CREDIT_OFFICER]
+      parameters:
+        - name: facility_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/TapeStatus'
+        - name: kind
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/TapeKind'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of submissions ordered by uploaded_at descending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TapeSubmissionPage'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/tapes.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /v1/tapes/{submission_id}:
+    get:
+      tags: [tapes]
+      operationId: getTape
+      summary: One tape submission with stage, counts and stage history
+      x-roles: [ANALYST, CREDIT_OFFICER]
+      parameters:
+        - $ref: '#/components/parameters/SubmissionId'
+      responses:
+        '200':
+          description: The submission.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TapeSubmission'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/tape.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /v1/tapes/{submission_id}/items:
+    get:
+      tags: [tapes]
+      operationId: listTapeItems
+      summary: Per row outcome of a tape (review list included)
+      x-roles: [ANALYST, CREDIT_OFFICER]
+      parameters:
+        - $ref: '#/components/parameters/SubmissionId'
+        - name: disposition
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/RowDisposition'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of rows ordered by row_number.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TapeItemPage'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/tape_items.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /v1/tapes/{submission_id}/retry:
+    post:
+      tags: [tapes]
+      operationId: retryTape
+      summary: Resume a FAILED submission from the stage where it failed
+      x-roles: [CREDIT_OFFICER]
+      parameters:
+        - $ref: '#/components/parameters/SubmissionId'
+      responses:
+        '202':
+          description: Queued again at its last completed stage.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TapeSubmission'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/tape.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          description: TAPE_NOT_RETRYABLE. The submission is not FAILED, or failed for a reason a retry cannot fix.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/releases:
+    post:
+      tags: [tapes]
+      operationId: createRelease
+      summary: Release locked loans by ID (console friendly alternative to a RELEASE file)
+      description: Creates a RELEASE submission with source API_INSTRUCTION that runs through the same pipeline.
+      x-roles: [CREDIT_OFFICER]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseRequest'
+            examples:
+              default:
+                externalValue: examples/bank_agent/release.request.json
+      responses:
+        '202':
+          description: Release submission created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TapeSubmission'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/release.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          description: TAPE_DUPLICATE (identical instruction) or LOAN_NOT_LOCKED (details list the loan_ids).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          $ref: '#/components/responses/Error'
+  /v1/loans:
+    get:
+      tags: [loans]
+      operationId: listLoans
+      summary: This bank's loans
+      x-roles: [ANALYST, CREDIT_OFFICER]
+      parameters:
+        - name: facility_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: state
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/LoanState'
+        - name: submission_id
+          in: query
+          required: false
+          description: Only loans that appeared on this tape.
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of loans ordered by updated_at descending then loan_id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanPage'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/loans.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /v1/loans/search:
+    post:
+      tags: [loans]
+      operationId: searchLoans
+      summary: Find loans by VIN or lender loan number (values in the body, never in the URL)
+      x-roles: [ANALYST, CREDIT_OFFICER]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoanSearchRequest'
+            examples:
+              default:
+                externalValue: examples/bank_agent/loan_search.request.json
+      responses:
+        '200':
+          description: Matching loans (at most 50), newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanPage'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+  /v1/loans/{loan_id}:
+    get:
+      tags: [loans]
+      operationId: getLoan
+      summary: One loan
+      x-roles: [ANALYST, CREDIT_OFFICER]
+      parameters:
+        - $ref: '#/components/parameters/LoanId'
+      responses:
+        '200':
+          description: The loan.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Loan'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/loan.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /v1/loans/{loan_id}/lineage:
+    get:
+      tags: [loans]
+      operationId: getLoanLineage
+      summary: Everything this loan's current state rests on
+      description: Raw row, cleaning issues, local checks with evidence, tokens (codes only), registry request and result, certificate, alerts and audit entries.
+      x-roles: [ANALYST, CREDIT_OFFICER]
+      parameters:
+        - $ref: '#/components/parameters/LoanId'
+      responses:
+        '200':
+          description: The lineage.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanLineage'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/loan_lineage.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /v1/loans/{loan_id}/resubmit:
+    post:
+      tags: [loans]
+      operationId: resubmitLoan
+      summary: Submit a CONFLICT loan again after every one of its cases was cleared
+      x-roles: [CREDIT_OFFICER]
+      parameters:
+        - $ref: '#/components/parameters/LoanId'
+      responses:
+        '200':
+          description: Registry decision applied. The loan is LOCKED or still CONFLICT.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Loan'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/loan.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          description: LOAN_NOT_RESUBMITTABLE. The loan is not in CONFLICT or has an alert that is not CLEARED.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: DEPENDENCY_UNAVAILABLE. Nothing changed; repeat the call (it is idempotent).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/alerts:
+    get:
+      tags: [alerts]
+      operationId: listAlerts
+      summary: Alerts on this bank's own loans
+      x-roles: [ANALYST, CREDIT_OFFICER]
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AlertStatus'
+        - name: match_kind
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/MatchKind'
+        - name: loan_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of alerts ordered by received_at descending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertPage'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/alerts.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /v1/alerts/{alert_id}:
+    get:
+      tags: [alerts]
+      operationId: getAlert
+      summary: One alert
+      x-roles: [ANALYST, CREDIT_OFFICER]
+      parameters:
+        - $ref: '#/components/parameters/AlertId'
+      responses:
+        '200':
+          description: The alert.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alert'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/alert.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /v1/alerts/{alert_id}/review:
+    post:
+      tags: [alerts]
+      operationId: reviewAlert
+      summary: Start a review, or record the bank's position on the case
+      description: |
+        START_REVIEW moves NEW to REVIEWING (ANALYST or CREDIT_OFFICER).
+        SUBMIT_POSITION (CREDIT_OFFICER only, alert must be REVIEWING) sends
+        the bank's position to the registry. The alert becomes CLEARED or
+        ESCALATED only when the registry reports the case outcome. `note` stays
+        inside the bank and is never sent to the registry or written to logs.
+      x-roles: [ANALYST, CREDIT_OFFICER]
+      parameters:
+        - $ref: '#/components/parameters/AlertId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertReviewRequest'
+            examples:
+              default:
+                externalValue: examples/bank_agent/alert_review.request.json
+      responses:
+        '200':
+          description: The alert after the action.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alert'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/alert_review.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          description: ALERT_TRANSITION_INVALID or POSITION_ALREADY_RECORDED.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /v1/certificates:
+    get:
+      tags: [certificates]
+      operationId: listCertificates
+      summary: Registry certificates this bank has received and verified
+      x-roles: [ANALYST, CREDIT_OFFICER]
+      parameters:
+        - name: submission_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: verified
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of certificates ordered by received_at descending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CertificatePage'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/certificates.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /v1/certificates/{certificate_id}:
+    get:
+      tags: [certificates]
+      operationId: getCertificate
+      summary: One certificate with its signed body
+      x-roles: [ANALYST, CREDIT_OFFICER]
+      parameters:
+        - name: certificate_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The certificate.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CertificateDetail'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/certificate.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /v1/integrity:
+    get:
+      tags: [integrity]
+      operationId: getIntegrity
+      summary: What this bank has verified about the registry and about its own records
+      x-roles: [ANALYST, CREDIT_OFFICER, ADMIN]
+      responses:
+        '200':
+          description: The integrity report (status BROKEN is still a 200).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrityReport'
+              examples:
+                ok:
+                  externalValue: examples/bank_agent/integrity.response.json
+                broken:
+                  externalValue: examples/bank_agent/integrity.broken.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+  /v1/integrity/verify:
+    post:
+      tags: [integrity]
+      operationId: runDeepVerification
+      summary: Re-verify everything from the start and store the result
+      description: Recomputes the audit log hash chain, raw row hashes, every stored certificate signature, every stored checkpoint signature and the registry hash chain from seq 1.
+      x-roles: [CREDIT_OFFICER, ADMIN]
+      responses:
+        '200':
+          description: The fresh report.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrityReport'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/integrity.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /v1/registry/sync:
+    post:
+      tags: [integrity]
+      operationId: syncRegistry
+      summary: Pull and process pending registry messages now (alerts, case updates, checkpoints)
+      x-roles: [CREDIT_OFFICER, ADMIN]
+      responses:
+        '200':
+          description: Counts of messages processed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncResult'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/registry_sync.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /v1/audit-log:
+    get:
+      tags: [audit]
+      operationId: listAuditLog
+      summary: Hash chained record of every user and system action in this bank
+      x-roles: [CREDIT_OFFICER, ADMIN]
+      parameters:
+        - name: after_seq
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: '^[A-Z][A-Z0-9_]*$'
+        - name: object_type
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: '^[A-Z][A-Z0-9_]*$'
+        - name: object_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: actor_user_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of entries ordered by seq ascending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditPage'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/audit_log.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /v1/users:
+    get:
+      tags: [users]
+      operationId: listUsers
+      summary: Users of this bank's agent
+      x-roles: [ADMIN]
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of users ordered by email.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPage'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/users.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [users]
+      operationId: createUser
+      summary: Create a user
+      x-roles: [ADMIN]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreate'
+            examples:
+              default:
+                externalValue: examples/bank_agent/user_create.request.json
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/user_create.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          description: USER_EMAIL_TAKEN.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          $ref: '#/components/responses/Error'
+  /v1/users/{user_id}:
+    patch:
+      tags: [users]
+      operationId: updateUser
+      summary: Change a user's name, role, active flag or password
+      description: Any change to role, active or password invalidates that user's existing tokens. The last active ADMIN cannot be deactivated or demoted (409 LAST_ADMIN).
+      x-roles: [ADMIN]
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdate'
+            examples:
+              default:
+                externalValue: examples/bank_agent/user_update.request.json
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+  /healthz:
+    get:
+      tags: [health]
+      operationId: liveness
+      summary: Liveness (no dependencies checked)
+      security: []
+      x-roles: [PUBLIC]
+      responses:
+        '200':
+          description: Process is up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/healthz.response.json
+  /readyz:
+    get:
+      tags: [health]
+      operationId: readiness
+      summary: Readiness (database reachable and migrated to head)
+      security: []
+      x-roles: [PUBLIC]
+      responses:
+        '200':
+          description: Ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              examples:
+                default:
+                  externalValue: examples/bank_agent/healthz.response.json
+        '503':
+          $ref: '#/components/responses/Error'
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token from POST /v1/auth/login. Lifetime 15 minutes. No refresh token.
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    Offset:
+      name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    SubmissionId:
+      name: submission_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    LoanId:
+      name: loan_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    AlertId:
+      name: alert_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    Error:
+      description: Error. See `error.code`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    Role:
+      type: string
+      enum: [ANALYST, CREDIT_OFFICER, ADMIN]
+    TapeKind:
+      type: string
+      enum: [BACK_BOOK, PLEDGE, RELEASE]
+    TapeStatus:
+      type: string
+      enum: [RECEIVED, CLEANED, CHECKED, TOKENIZED, SUBMITTED, COMPLETED, FAILED]
+    TapeSource:
+      type: string
+      enum: [FILE_UPLOAD, API_INSTRUCTION]
+    FailureCode:
+      type: string
+      enum:
+        - OUTSIDE_RECORDS_UNAVAILABLE
+        - KEY_HOLDER_UNAVAILABLE
+        - KEY_HOLDER_REJECTED
+        - KEY_VERSION_MISMATCH
+        - REGISTRY_UNAVAILABLE
+        - REGISTRY_REJECTED_REQUEST
+        - CERTIFICATE_INVALID
+        - REGISTRY_INTEGRITY_BROKEN
+        - INTERNAL_ERROR
+    LoanState:
+      type: string
+      enum: [PENDING, HELD_LOCAL, LOCKED, CONFLICT, RELEASED]
+    RowDisposition:
+      type: string
+      enum: [ACCEPTED_NEW, ACCEPTED_REPRESENTED, ALREADY_LOCKED, RELEASE_REQUESTED, REJECTED]
+    CheckType:
+      type: string
+      enum: [TITLE_EXISTS, LIENHOLDER_MATCH, PAYMENTS_RECEIVED, CONTRACT_PRESENT]
+    CheckOutcome:
+      type: string
+      enum: [PASS, FAIL, UNKNOWN]
+    TokenKind:
+      type: string
+      enum: [ASSET, VIN, BORROWER, AMOUNT_EXACT, AMOUNT_100, AMOUNT_1000, DATE_DAY, DATE_MONTH]
+    MatchKind:
+      type: string
+      enum: [EXACT, LIKELY]
+    MatchBasis:
+      type: string
+      enum: [ASSET, FIELDS]
+    AlertStatus:
+      type: string
+      enum: [NEW, REVIEWING, CLEARED, ESCALATED]
+    CaseStatus:
+      type: string
+      enum: [OPEN, CLEARED_DATA_ERROR, CLEARED_LATE_RELEASE, CONFIRMED]
+    RegistryItemResult:
+      type: string
+      enum: [LOCKED, CONFLICT, RELEASED, REJECTED]
+    IntegrityStatus:
+      type: string
+      enum: [OK, BROKEN, NOT_VERIFIED]
+    Code:
+      type: string
+      description: Upper snake case machine code. The full list for each field is in docs/layer1/SPEC.md.
+      pattern: '^[A-Z][A-Z0-9_]*$'
+    Hash:
+      type: string
+      pattern: '^[0-9a-f]{64}$'
+    Vin:
+      type: string
+      pattern: '^[A-HJ-NPR-Z0-9]{17}$'
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 1
+          maxLength: 256
+          writeOnly: true
+    BankInfo:
+      type: object
+      additionalProperties: false
+      required: [bank_code, bank_name]
+      properties:
+        bank_code:
+          type: string
+          pattern: '^[A-Z]{3,12}$'
+        bank_name:
+          type: string
+    User:
+      type: object
+      additionalProperties: false
+      required: [user_id, email, display_name, role, active, created_at]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+          maxLength: 100
+        role:
+          $ref: '#/components/schemas/Role'
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    Session:
+      type: object
+      additionalProperties: false
+      required: [user, bank]
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        bank:
+          $ref: '#/components/schemas/BankInfo'
+    LoginResponse:
+      type: object
+      additionalProperties: false
+      required: [access_token, token_type, expires_in, user, bank]
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_in:
+          type: integer
+          description: Seconds until the token expires (900).
+        user:
+          $ref: '#/components/schemas/User'
+        bank:
+          $ref: '#/components/schemas/BankInfo'
+    UserCreate:
+      type: object
+      additionalProperties: false
+      required: [email, display_name, role, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        role:
+          $ref: '#/components/schemas/Role'
+        password:
+          type: string
+          minLength: 12
+          maxLength: 256
+          writeOnly: true
+    UserUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        role:
+          $ref: '#/components/schemas/Role'
+        active:
+          type: boolean
+        password:
+          type: string
+          minLength: 12
+          maxLength: 256
+          writeOnly: true
+    UserPage:
+      type: object
+      additionalProperties: false
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+    Lender:
+      type: object
+      additionalProperties: false
+      required: [lender_id, legal_name, lei]
+      properties:
+        lender_id:
+          type: string
+          format: uuid
+        legal_name:
+          type: string
+        lei:
+          type: string
+          pattern: '^[A-Z0-9]{20}$'
+    LoanStateCounts:
+      type: object
+      additionalProperties: false
+      required: [PENDING, HELD_LOCAL, LOCKED, CONFLICT, RELEASED]
+      properties:
+        PENDING:
+          type: integer
+          minimum: 0
+        HELD_LOCAL:
+          type: integer
+          minimum: 0
+        LOCKED:
+          type: integer
+          minimum: 0
+        CONFLICT:
+          type: integer
+          minimum: 0
+        RELEASED:
+          type: integer
+          minimum: 0
+    Facility:
+      type: object
+      additionalProperties: false
+      required: [facility_id, code, name, lender, credit_limit_cents, advance_rate_bps, status, opened_on, loan_counts, locked_balance_cents]
+      properties:
+        facility_id:
+          type: string
+          format: uuid
+        code:
+          type: string
+          pattern: '^[A-Z0-9-]{3,40}$'
+          description: Stable human readable key, for example NORTHGATE-SUMMIT.
+        name:
+          type: string
+        lender:
+          $ref: '#/components/schemas/Lender'
+        credit_limit_cents:
+          type: integer
+          minimum: 0
+        advance_rate_bps:
+          type: integer
+          minimum: 0
+          maximum: 10000
+        status:
+          type: string
+          enum: [ACTIVE, SUSPENDED, CLOSED]
+        opened_on:
+          type: string
+          format: date
+        loan_counts:
+          $ref: '#/components/schemas/LoanStateCounts'
+        locked_balance_cents:
+          type: integer
+          minimum: 0
+          description: Sum of current_balance_cents over LOCKED loans.
+    FacilityPage:
+      type: object
+      additionalProperties: false
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Facility'
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+    TapeUpload:
+      type: object
+      required: [facility_id, kind, as_of_date, file]
+      properties:
+        facility_id:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/TapeKind'
+        as_of_date:
+          type: string
+          format: date
+          description: Cut-off date of the tape. All local check windows are measured from this date.
+        file:
+          type: string
+          format: binary
+          description: CSV, UTF-8 (BOM allowed), comma separated, first row is the header.
+    TapeCounts:
+      type: object
+      additionalProperties: false
+      required: [rows, rows_rejected, rows_fixed, loans_accepted, loans_held_local, items_submitted, items_locked, items_conflict, items_released, items_rejected]
+      properties:
+        rows:
+          type: integer
+          minimum: 0
+        rows_rejected:
+          type: integer
+          minimum: 0
+        rows_fixed:
+          type: integer
+          minimum: 0
+          description: Rows with at least one FIXED issue and no REJECTED issue.
+        loans_accepted:
+          type: integer
+          minimum: 0
+        loans_held_local:
+          type: integer
+          minimum: 0
+        items_submitted:
+          type: integer
+          minimum: 0
+          description: Items that actually left the bank for the registry.
+        items_locked:
+          type: integer
+          minimum: 0
+        items_conflict:
+          type: integer
+          minimum: 0
+        items_released:
+          type: integer
+          minimum: 0
+        items_rejected:
+          type: integer
+          minimum: 0
+    StageEntry:
+      type: object
+      additionalProperties: false
+      required: [status, at]
+      properties:
+        status:
+          $ref: '#/components/schemas/TapeStatus'
+        at:
+          type: string
+          format: date-time
+    TapeSubmission:
+      type: object
+      additionalProperties: false
+      required: [submission_id, facility_id, kind, source, file_name, file_sha256, as_of_date, row_count, status, failed_stage, failure_code, attempts, uploaded_by, uploaded_at, updated_at, completed_at, counts, stage_history]
+      properties:
+        submission_id:
+          type: string
+          format: uuid
+        facility_id:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/TapeKind'
+        source:
+          $ref: '#/components/schemas/TapeSource'
+        file_name:
+          type: string
+          maxLength: 255
+        file_sha256:
+          $ref: '#/components/schemas/Hash'
+        as_of_date:
+          type: string
+          format: date
+        row_count:
+          type: integer
+          minimum: 0
+        status:
+          $ref: '#/components/schemas/TapeStatus'
+        failed_stage:
+          description: The stage that was being attempted when the submission failed.
+          oneOf:
+            - $ref: '#/components/schemas/TapeStatus'
+            - type: 'null'
+        failure_code:
+          oneOf:
+            - $ref: '#/components/schemas/FailureCode'
+            - type: 'null'
+        attempts:
+          type: integer
+          minimum: 0
+          description: Failed attempts at the current stage.
+        uploaded_by:
+          type: string
+          format: uuid
+        uploaded_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: [string, 'null']
+          format: date-time
+        counts:
+          $ref: '#/components/schemas/TapeCounts'
+        stage_history:
+          type: array
+          items:
+            $ref: '#/components/schemas/StageEntry'
+    TapeSubmissionPage:
+      type: object
+      additionalProperties: false
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TapeSubmission'
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+    CleaningIssue:
+      type: object
+      additionalProperties: false
+      required: [issue_id, field, problem, action]
+      properties:
+        issue_id:
+          type: string
+          format: uuid
+        field:
+          type: string
+          description: Canonical field name, or `row` for whole row problems.
+        problem:
+          $ref: '#/components/schemas/Code'
+        action:
+          type: string
+          enum: [FIXED, REJECTED]
+    CheckSummary:
+      type: object
+      additionalProperties: false
+      required: [check_type, result, reason_code]
+      properties:
+        check_type:
+          $ref: '#/components/schemas/CheckType'
+        result:
+          $ref: '#/components/schemas/CheckOutcome'
+        reason_code:
+          $ref: '#/components/schemas/Code'
+    RegistryItemOutcome:
+      type: object
+      additionalProperties: false
+      required: [request_id, result, match_kind, match_basis, kinds_matched, registry_case_id, certificate_id]
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        result:
+          oneOf:
+            - $ref: '#/components/schemas/RegistryItemResult'
+            - type: 'null'
+          description: Null while the request has not been answered.
+        match_kind:
+          oneOf:
+            - $ref: '#/components/schemas/MatchKind'
+            - type: 'null'
+        match_basis:
+          oneOf:
+            - $ref: '#/components/schemas/MatchBasis'
+            - type: 'null'
+        kinds_matched:
+          type: array
+          items:
+            $ref: '#/components/schemas/TokenKind'
+        registry_case_id:
+          type: [string, 'null']
+          format: uuid
+        certificate_id:
+          type: [string, 'null']
+          format: uuid
+    TapeItem:
+      type: object
+      additionalProperties: false
+      required: [row_number, raw_id, disposition, loan_id, loan_state, issues, checks, registry]
+      properties:
+        row_number:
+          type: integer
+          minimum: 1
+          description: 1 is the first data row after the header.
+        raw_id:
+          type: string
+          format: uuid
+        disposition:
+          $ref: '#/components/schemas/RowDisposition'
+        loan_id:
+          type: [string, 'null']
+          format: uuid
+        loan_state:
+          oneOf:
+            - $ref: '#/components/schemas/LoanState'
+            - type: 'null'
+        issues:
+          type: array
+          items:
+            $ref: '#/components/schemas/CleaningIssue'
+        checks:
+          type: array
+          items:
+            $ref: '#/components/schemas/CheckSummary'
+        registry:
+          oneOf:
+            - $ref: '#/components/schemas/RegistryItemOutcome'
+            - type: 'null'
+          description: Null when nothing about this row left the bank.
+    TapeItemPage:
+      type: object
+      additionalProperties: false
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TapeItem'
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+    ReleaseRequest:
+      type: object
+      additionalProperties: false
+      required: [facility_id, loan_ids, as_of_date]
+      properties:
+        facility_id:
+          type: string
+          format: uuid
+        loan_ids:
+          type: array
+          minItems: 1
+          maxItems: 500
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        as_of_date:
+          type: string
+          format: date
+    Loan:
+      type: object
+      additionalProperties: false
+      required: [loan_id, facility_id, first_submission_id, lender_loan_number, vin, borrower_ref, origination_date, original_amount_cents, current_balance_cents, state, updated_at, open_alert_count]
+      properties:
+        loan_id:
+          type: string
+          format: uuid
+        facility_id:
+          type: string
+          format: uuid
+        first_submission_id:
+          type: string
+          format: uuid
+        lender_loan_number:
+          type: string
+          maxLength: 40
+        vin:
+          $ref: '#/components/schemas/Vin'
+        borrower_ref:
+          type: string
+          pattern: '^[A-Z0-9]{4,32}$'
+        origination_date:
+          type: string
+          format: date
+        original_amount_cents:
+          type: integer
+          minimum: 1
+        current_balance_cents:
+          type: integer
+          minimum: 1
+        state:
+          $ref: '#/components/schemas/LoanState'
+        updated_at:
+          type: string
+          format: date-time
+        open_alert_count:
+          type: integer
+          minimum: 0
+          description: Alerts on this loan in NEW or REVIEWING.
+    LoanPage:
+      type: object
+      additionalProperties: false
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Loan'
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+    LoanSearchRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        vin:
+          $ref: '#/components/schemas/Vin'
+        lender_loan_number:
+          type: string
+          minLength: 1
+          maxLength: 40
+    Alert:
+      type: object
+      additionalProperties: false
+      required: [alert_id, registry_case_id, loan_id, role, match_kind, match_basis, kinds_matched, kinds_not_matched, explanation_text, explanation_source, status, case_status, bank_position, note, received_at, reviewed_by, reviewed_at]
+      properties:
+        alert_id:
+          type: string
+          format: uuid
+        registry_case_id:
+          type: string
+          format: uuid
+        loan_id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [HOLDER, CLAIMANT]
+          description: HOLDER means this bank holds the lock. CLAIMANT means this bank's pledge was not locked.
+        match_kind:
+          $ref: '#/components/schemas/MatchKind'
+        match_basis:
+          $ref: '#/components/schemas/MatchBasis'
+        kinds_matched:
+          type: array
+          items:
+            $ref: '#/components/schemas/TokenKind'
+        kinds_not_matched:
+          type: array
+          items:
+            $ref: '#/components/schemas/TokenKind'
+        explanation_text:
+          type: string
+          description: Plain language explanation naming the rule and the fields. Contains no loan value.
+        explanation_source:
+          type: string
+          enum: [TEMPLATE, MODEL]
+        status:
+          $ref: '#/components/schemas/AlertStatus'
+        case_status:
+          $ref: '#/components/schemas/CaseStatus'
+        bank_position:
+          type: [string, 'null']
+          enum: [DATA_ERROR, CONFIRMED_DOUBLE_PLEDGE, null]
+        note:
+          type: [string, 'null']
+          maxLength: 500
+        received_at:
+          type: string
+          format: date-time
+        reviewed_by:
+          type: [string, 'null']
+          format: uuid
+        reviewed_at:
+          type: [string, 'null']
+          format: date-time
+    AlertPage:
+      type: object
+      additionalProperties: false
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Alert'
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+    AlertReviewRequest:
+      type: object
+      additionalProperties: false
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [START_REVIEW, SUBMIT_POSITION]
+        position:
+          type: string
+          enum: [DATA_ERROR, CONFIRMED_DOUBLE_PLEDGE]
+          description: Required with SUBMIT_POSITION, forbidden with START_REVIEW.
+        note:
+          type: string
+          maxLength: 500
+    CertificateSummary:
+      type: object
+      additionalProperties: false
+      required: [checked, locked, held, released, rejected]
+      properties:
+        checked:
+          type: integer
+          minimum: 0
+        locked:
+          type: integer
+          minimum: 0
+        held:
+          type: integer
+          minimum: 0
+        released:
+          type: integer
+          minimum: 0
+        rejected:
+          type: integer
+          minimum: 0
+    Certificate:
+      type: object
+      additionalProperties: false
+      required: [certificate_id, request_id, submission_id, registry_submission_id, kind, as_of_seq, issued_at, summary, body_hash, signing_key_id, verified, verified_at, failure_reason, received_at]
+      properties:
+        certificate_id:
+          type: string
+          format: uuid
+        request_id:
+          type: string
+          format: uuid
+          description: The bank's registry request this certificate answers.
+        submission_id:
+          type: string
+          format: uuid
+          description: The bank's tape submission.
+        registry_submission_id:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/TapeKind'
+        as_of_seq:
+          type: integer
+          minimum: 0
+        issued_at:
+          type: string
+          format: date-time
+        summary:
+          $ref: '#/components/schemas/CertificateSummary'
+        body_hash:
+          $ref: '#/components/schemas/Hash'
+        signing_key_id:
+          type: string
+        verified:
+          type: boolean
+        verified_at:
+          type: string
+          format: date-time
+        failure_reason:
+          oneOf:
+            - $ref: '#/components/schemas/Code'
+            - type: 'null'
+        received_at:
+          type: string
+          format: date-time
+    CertificateDetail:
+      type: object
+      additionalProperties: false
+      required: [certificate, body, signature]
+      properties:
+        certificate:
+          $ref: '#/components/schemas/Certificate'
+        body:
+          type: object
+          description: The signed body exactly as received (see registry.yaml CertificateBody).
+        signature:
+          type: string
+    CertificatePage:
+      type: object
+      additionalProperties: false
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Certificate'
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+    AuditEntry:
+      type: object
+      additionalProperties: false
+      required: [audit_id, seq, at, actor_type, actor_user_id, action, object_type, object_id, outcome, request_id, detail, prev_hash, entry_hash]
+      properties:
+        audit_id:
+          type: string
+          format: uuid
+        seq:
+          type: integer
+          minimum: 1
+        at:
+          type: string
+          format: date-time
+        actor_type:
+          type: string
+          enum: [USER, SYSTEM]
+        actor_user_id:
+          type: [string, 'null']
+          format: uuid
+        action:
+          $ref: '#/components/schemas/Code'
+        object_type:
+          $ref: '#/components/schemas/Code'
+        object_id:
+          type: [string, 'null']
+          format: uuid
+        outcome:
+          type: string
+          enum: [SUCCESS, DENIED, FAILURE]
+        request_id:
+          type: [string, 'null']
+        detail:
+          type: object
+          description: Codes, counts and identifiers only. Never a raw loan value.
+        prev_hash:
+          $ref: '#/components/schemas/Hash'
+        entry_hash:
+          $ref: '#/components/schemas/Hash'
+    AuditPage:
+      type: object
+      additionalProperties: false
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEntry'
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+    LineageRawRow:
+      type: object
+      additionalProperties: false
+      required: [raw_id, row_number, raw_payload, row_sha256, received_at]
+      properties:
+        raw_id:
+          type: string
+          format: uuid
+        row_number:
+          type: integer
+          minimum: 1
+        raw_payload:
+          type: object
+          description: Header to cell text exactly as the lender sent it.
+          additionalProperties:
+            type: string
+        row_sha256:
+          $ref: '#/components/schemas/Hash'
+        received_at:
+          type: string
+          format: date-time
+    LineageCheck:
+      type: object
+      additionalProperties: false
+      required: [check_id, check_type, result, reason_code, evidence, checked_at]
+      properties:
+        check_id:
+          type: string
+          format: uuid
+        check_type:
+          $ref: '#/components/schemas/CheckType'
+        result:
+          $ref: '#/components/schemas/CheckOutcome'
+        reason_code:
+          $ref: '#/components/schemas/Code'
+        evidence:
+          type: object
+          description: What the outside source returned and the rule applied.
+        checked_at:
+          type: string
+          format: date-time
+    LineageToken:
+      type: object
+      additionalProperties: false
+      required: [token_kind, token, key_version, created_at]
+      properties:
+        token_kind:
+          $ref: '#/components/schemas/TokenKind'
+        token:
+          $ref: '#/components/schemas/Hash'
+        key_version:
+          type: string
+          pattern: '^[1-9][0-9]*\.[1-9][0-9]*$'
+        created_at:
+          type: string
+          format: date-time
+    LineageRegistryRequest:
+      type: object
+      additionalProperties: false
+      required: [request_id, kind, origin, idempotency_key, item_count, attempts, sent_at, response_status, outcome]
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/TapeKind'
+        origin:
+          type: string
+          enum: [TAPE, RESUBMIT]
+        idempotency_key:
+          $ref: '#/components/schemas/Hash'
+        item_count:
+          type: integer
+          minimum: 1
+        attempts:
+          type: integer
+          minimum: 0
+        sent_at:
+          type: [string, 'null']
+          format: date-time
+        response_status:
+          type: [integer, 'null']
+        outcome:
+          $ref: '#/components/schemas/RegistryItemOutcome'
+    LineageStep:
+      type: object
+      additionalProperties: false
+      required: [submission_id, kind, file_name, file_sha256, as_of_date, disposition, raw_row, cleaning_issues, checks, registry_request, certificate]
+      properties:
+        submission_id:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/TapeKind'
+        file_name:
+          type: string
+        file_sha256:
+          $ref: '#/components/schemas/Hash'
+        as_of_date:
+          type: string
+          format: date
+        disposition:
+          $ref: '#/components/schemas/RowDisposition'
+        raw_row:
+          $ref: '#/components/schemas/LineageRawRow'
+        cleaning_issues:
+          type: array
+          items:
+            $ref: '#/components/schemas/CleaningIssue'
+        checks:
+          type: array
+          items:
+            $ref: '#/components/schemas/LineageCheck'
+        registry_request:
+          oneOf:
+            - $ref: '#/components/schemas/LineageRegistryRequest'
+            - type: 'null'
+        certificate:
+          oneOf:
+            - $ref: '#/components/schemas/Certificate'
+            - type: 'null'
+    LoanLineage:
+      type: object
+      additionalProperties: false
+      required: [loan, steps, tokens, alerts, audit]
+      properties:
+        loan:
+          $ref: '#/components/schemas/Loan'
+        steps:
+          type: array
+          description: One entry per tape the loan appeared on, oldest first.
+          items:
+            $ref: '#/components/schemas/LineageStep'
+        tokens:
+          type: array
+          items:
+            $ref: '#/components/schemas/LineageToken'
+        alerts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Alert'
+        audit:
+          type: array
+          description: Audit entries whose object is this loan, its alerts or its submissions, oldest first (at most 200).
+          items:
+            $ref: '#/components/schemas/AuditEntry'
+    CheckpointRef:
+      type: object
+      additionalProperties: false
+      required: [checkpoint_seq, last_event_seq, head_hash, verified_at]
+      properties:
+        checkpoint_seq:
+          type: integer
+          minimum: 1
+        last_event_seq:
+          type: integer
+          minimum: 1
+        head_hash:
+          $ref: '#/components/schemas/Hash'
+        verified_at:
+          type: string
+          format: date-time
+    CheckpointFailure:
+      type: object
+      additionalProperties: false
+      required: [checkpoint_id, checkpoint_seq, failure_reason, first_bad_event_seq, received_at]
+      properties:
+        checkpoint_id:
+          type: string
+          format: uuid
+        checkpoint_seq:
+          type: integer
+        failure_reason:
+          type: string
+          enum: [BAD_SIGNATURE, UNKNOWN_SIGNING_KEY, NON_MONOTONIC, FORK, CHAIN_BREAK, HEAD_MISMATCH]
+        first_bad_event_seq:
+          type: [integer, 'null']
+          description: The first ledger seq where the chain does not verify, when the reason is CHAIN_BREAK or HEAD_MISMATCH.
+        received_at:
+          type: string
+          format: date-time
+    RegistryChainSection:
+      type: object
+      additionalProperties: false
+      required: [status, checkpoints_received, checkpoints_verified, last_verified, failures]
+      properties:
+        status:
+          $ref: '#/components/schemas/IntegrityStatus'
+        checkpoints_received:
+          type: integer
+          minimum: 0
+        checkpoints_verified:
+          type: integer
+          minimum: 0
+        last_verified:
+          oneOf:
+            - $ref: '#/components/schemas/CheckpointRef'
+            - type: 'null'
+        failures:
+          type: array
+          items:
+            $ref: '#/components/schemas/CheckpointFailure'
+    CertificateSection:
+      type: object
+      additionalProperties: false
+      required: [status, total, verified, failures]
+      properties:
+        status:
+          $ref: '#/components/schemas/IntegrityStatus'
+        total:
+          type: integer
+          minimum: 0
+        verified:
+          type: integer
+          minimum: 0
+        failures:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [certificate_id, failure_reason]
+            properties:
+              certificate_id:
+                type: string
+                format: uuid
+              failure_reason:
+                type: string
+                enum: [BAD_SIGNATURE, UNKNOWN_SIGNING_KEY, BODY_HASH_MISMATCH, CONTENT_MISMATCH]
+    AuditChainSection:
+      type: object
+      additionalProperties: false
+      required: [status, entries, last_seq, first_bad_seq]
+      properties:
+        status:
+          $ref: '#/components/schemas/IntegrityStatus'
+        entries:
+          type: integer
+          minimum: 0
+        last_seq:
+          type: integer
+          minimum: 0
+        first_bad_seq:
+          type: [integer, 'null']
+    RawDataSection:
+      type: object
+      additionalProperties: false
+      required: [status, submissions_checked, rows_checked, bad_submission_ids]
+      properties:
+        status:
+          $ref: '#/components/schemas/IntegrityStatus'
+        submissions_checked:
+          type: integer
+          minimum: 0
+        rows_checked:
+          type: integer
+          minimum: 0
+        bad_submission_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+    DatabaseControl:
+      type: object
+      additionalProperties: false
+      required: [name, ok]
+      properties:
+        name:
+          $ref: '#/components/schemas/Code'
+        ok:
+          type: boolean
+    DatabaseControlsSection:
+      type: object
+      additionalProperties: false
+      required: [status, controls]
+      properties:
+        status:
+          $ref: '#/components/schemas/IntegrityStatus'
+        controls:
+          type: array
+          items:
+            $ref: '#/components/schemas/DatabaseControl'
+    IntegrityReport:
+      type: object
+      additionalProperties: false
+      required: [status, generated_at, last_deep_verification_at, registry_chain, certificates, audit_log, raw_data, database_controls]
+      properties:
+        status:
+          type: string
+          enum: [OK, BROKEN]
+          description: BROKEN when any section is BROKEN. NOT_VERIFIED sections do not make the report BROKEN.
+        generated_at:
+          type: string
+          format: date-time
+        last_deep_verification_at:
+          type: [string, 'null']
+          format: date-time
+        registry_chain:
+          $ref: '#/components/schemas/RegistryChainSection'
+        certificates:
+          $ref: '#/components/schemas/CertificateSection'
+        audit_log:
+          $ref: '#/components/schemas/AuditChainSection'
+        raw_data:
+          $ref: '#/components/schemas/RawDataSection'
+        database_controls:
+          $ref: '#/components/schemas/DatabaseControlsSection'
+    SyncResult:
+      type: object
+      additionalProperties: false
+      required: [messages_processed, alerts_created, case_updates_applied, checkpoints_verified, checkpoints_failed]
+      properties:
+        messages_processed:
+          type: integer
+          minimum: 0
+        alerts_created:
+          type: integer
+          minimum: 0
+        case_updates_applied:
+          type: integer
+          minimum: 0
+        checkpoints_verified:
+          type: integer
+          minimum: 0
+        checkpoints_failed:
+          type: integer
+          minimum: 0
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, service, bank_code]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        service:
+          type: string
+          enum: [bank_agent]
+        bank_code:
+          type: string
+          pattern: '^[A-Z]{3,12}$'
+    ErrorDetail:
+      type: object
+      additionalProperties: false
+      required: [field, issue]
+      properties:
+        field:
+          type: string
+          description: Field name, JSON pointer or identifier name. Never a submitted loan value.
+        issue:
+          type: string
+          description: Issue code, or an identifier (UUID) when the error refers to existing objects.
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              enum:
+                - INVALID_CREDENTIALS
+                - LOGIN_RATE_LIMITED
+                - UNAUTHENTICATED
+                - FORBIDDEN
+                - VALIDATION_ERROR
+                - NOT_FOUND
+                - FACILITY_NOT_FOUND
+                - TAPE_DUPLICATE
+                - TAPE_TOO_LARGE
+                - TAPE_NOT_UTF8
+                - TAPE_EMPTY
+                - TAPE_HEADER_INVALID
+                - TAPE_MALFORMED
+                - TAPE_NOT_RETRYABLE
+                - LOAN_NOT_LOCKED
+                - LOAN_NOT_RESUBMITTABLE
+                - ALERT_TRANSITION_INVALID
+                - POSITION_ALREADY_RECORDED
+                - USER_EMAIL_TAKEN
+                - LAST_ADMIN
+                - DEPENDENCY_UNAVAILABLE
+                - NOT_READY
+                - INTERNAL_ERROR
+            message:
+              type: string
+              description: Fixed sentence for the code. Never contains request data.
+            request_id:
+              type: string
+            details:
+              type: array
+              items:
+                $ref: '#/components/schemas/ErrorDetail'

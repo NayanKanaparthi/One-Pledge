@@ -1,0 +1,13 @@
+{
+  "error": {
+    "code": "TAPE_DUPLICATE",
+    "message": "This file was already uploaded for this facility and kind.",
+    "request_id": "025057a8-cdd8-54db-8759-04bf7958f9b8",
+    "details": [
+      {
+        "field": "submission_id",
+        "issue": "a998c317-4917-56ec-a147-64f2358618ad"
+      }
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "case_id": "8b8a6c95-0dd0-5e9f-8858-c88ffc234d89",
+  "role": "CLAIMANT",
+  "asset_token": "e22fc7ef047e847a5da1987c5c08a0d05d0d589baa16aec24906bd069a0d0a9e",
+  "match_kind": "EXACT",
+  "match_basis": "ASSET",
+  "kinds_matched": [
+    "ASSET",
+    "VIN",
+    "BORROWER",
+    "AMOUNT_EXACT",
+    "AMOUNT_100",
+    "AMOUNT_1000",
+    "DATE_DAY",
+    "DATE_MONTH"
+  ],
+  "status": "OPEN",
+  "your_position": "CONFIRMED_DOUBLE_PLEDGE",
+  "awaiting_counterparty": true,
+  "opened_seq": 3,
+  "resolved_seq": null
+}

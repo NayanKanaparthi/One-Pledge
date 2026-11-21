@@ -1,0 +1,21 @@
+{
+  "items": [
+    {
+      "payment_id": "4533adac-efb9-5e38-9365-c661e0c37852",
+      "vin": "1HGCM82633A004352",
+      "paid_on": "2026-10-28",
+      "amount_cents": 48217,
+      "deposit_bank_code": "HARBOR"
+    },
+    {
+      "payment_id": "bf11a505-05b9-5477-877e-75d9f3c810b4",
+      "vin": "1HGCM82633A004352",
+      "paid_on": "2026-09-28",
+      "amount_cents": 48217,
+      "deposit_bank_code": "HARBOR"
+    }
+  ],
+  "total": 2,
+  "limit": 50,
+  "offset": 0
+}

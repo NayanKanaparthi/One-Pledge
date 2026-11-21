@@ -1,0 +1,35 @@
+{
+  "items": [
+    {
+      "alert_id": "0853df78-eeff-5f11-b3be-342bd7849015",
+      "registry_case_id": "8b8a6c95-0dd0-5e9f-8858-c88ffc234d89",
+      "loan_id": "0e536c29-42d9-5a1a-b251-7e4eb929e6da",
+      "role": "CLAIMANT",
+      "match_kind": "EXACT",
+      "match_basis": "ASSET",
+      "kinds_matched": [
+        "ASSET",
+        "VIN",
+        "BORROWER",
+        "AMOUNT_EXACT",
+        "AMOUNT_100",
+        "AMOUNT_1000",
+        "DATE_DAY",
+        "DATE_MONTH"
+      ],
+      "kinds_not_matched": [],
+      "explanation_text": "Another registry member already holds a lock on this vehicle, so this pledge was not locked. The other pledge agrees with this loan on every compared field: vehicle, borrower, original amount and origination date. This is the pattern of the same loan pledged twice. The registry does not reveal who the other member is. Review the loan with the lender and record the bank's position on the case.",
+      "explanation_source": "TEMPLATE",
+      "status": "NEW",
+      "case_status": "OPEN",
+      "bank_position": null,
+      "note": null,
+      "received_at": "2026-10-22T14:03:12Z",
+      "reviewed_by": null,
+      "reviewed_at": null
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}

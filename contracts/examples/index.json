@@ -1,0 +1,275 @@
+{
+  "description": "Maps every example file to the contract file and component schema it must validate against. Contract tests in every layer iterate this index.",
+  "examples": [
+    {
+      "file": "bank_agent/alert.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "Alert"
+    },
+    {
+      "file": "bank_agent/alert_review.request.json",
+      "contract": "bank_agent.yaml",
+      "schema": "AlertReviewRequest"
+    },
+    {
+      "file": "bank_agent/alert_review.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "Alert"
+    },
+    {
+      "file": "bank_agent/alerts.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "AlertPage"
+    },
+    {
+      "file": "bank_agent/audit_log.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "AuditPage"
+    },
+    {
+      "file": "bank_agent/certificate.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "CertificateDetail"
+    },
+    {
+      "file": "bank_agent/certificates.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "CertificatePage"
+    },
+    {
+      "file": "bank_agent/facilities.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "FacilityPage"
+    },
+    {
+      "file": "bank_agent/healthz.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "Health"
+    },
+    {
+      "file": "bank_agent/integrity.broken.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "IntegrityReport"
+    },
+    {
+      "file": "bank_agent/integrity.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "IntegrityReport"
+    },
+    {
+      "file": "bank_agent/loan.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "Loan"
+    },
+    {
+      "file": "bank_agent/loan_lineage.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "LoanLineage"
+    },
+    {
+      "file": "bank_agent/loan_search.request.json",
+      "contract": "bank_agent.yaml",
+      "schema": "LoanSearchRequest"
+    },
+    {
+      "file": "bank_agent/loans.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "LoanPage"
+    },
+    {
+      "file": "bank_agent/login.error.invalid_credentials.json",
+      "contract": "bank_agent.yaml",
+      "schema": "ErrorResponse"
+    },
+    {
+      "file": "bank_agent/login.request.json",
+      "contract": "bank_agent.yaml",
+      "schema": "LoginRequest"
+    },
+    {
+      "file": "bank_agent/login.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "LoginResponse"
+    },
+    {
+      "file": "bank_agent/me.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "Session"
+    },
+    {
+      "file": "bank_agent/registry_sync.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "SyncResult"
+    },
+    {
+      "file": "bank_agent/release.request.json",
+      "contract": "bank_agent.yaml",
+      "schema": "ReleaseRequest"
+    },
+    {
+      "file": "bank_agent/release.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "TapeSubmission"
+    },
+    {
+      "file": "bank_agent/tape.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "TapeSubmission"
+    },
+    {
+      "file": "bank_agent/tape_items.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "TapeItemPage"
+    },
+    {
+      "file": "bank_agent/tape_upload.error.duplicate.json",
+      "contract": "bank_agent.yaml",
+      "schema": "ErrorResponse"
+    },
+    {
+      "file": "bank_agent/tape_upload.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "TapeSubmission"
+    },
+    {
+      "file": "bank_agent/tapes.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "TapeSubmissionPage"
+    },
+    {
+      "file": "bank_agent/user_create.request.json",
+      "contract": "bank_agent.yaml",
+      "schema": "UserCreate"
+    },
+    {
+      "file": "bank_agent/user_create.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "User"
+    },
+    {
+      "file": "bank_agent/user_update.request.json",
+      "contract": "bank_agent.yaml",
+      "schema": "UserUpdate"
+    },
+    {
+      "file": "bank_agent/users.response.json",
+      "contract": "bank_agent.yaml",
+      "schema": "UserPage"
+    },
+    {
+      "file": "key_holder/evaluate.error.invalid_element.json",
+      "contract": "key_holder.yaml",
+      "schema": "ErrorResponse"
+    },
+    {
+      "file": "key_holder/evaluate.request.json",
+      "contract": "key_holder.yaml",
+      "schema": "EvaluateRequest"
+    },
+    {
+      "file": "key_holder/evaluate.response.json",
+      "contract": "key_holder.yaml",
+      "schema": "EvaluateResponse"
+    },
+    {
+      "file": "key_holder/healthz.response.json",
+      "contract": "key_holder.yaml",
+      "schema": "Health"
+    },
+    {
+      "file": "outside_records/contracts.error.not_found.json",
+      "contract": "outside_records.yaml",
+      "schema": "ErrorResponse"
+    },
+    {
+      "file": "outside_records/contracts.response.json",
+      "contract": "outside_records.yaml",
+      "schema": "ContractList"
+    },
+    {
+      "file": "outside_records/healthz.response.json",
+      "contract": "outside_records.yaml",
+      "schema": "Health"
+    },
+    {
+      "file": "outside_records/payments.response.json",
+      "contract": "outside_records.yaml",
+      "schema": "PaymentPage"
+    },
+    {
+      "file": "outside_records/title.error.not_found.json",
+      "contract": "outside_records.yaml",
+      "schema": "ErrorResponse"
+    },
+    {
+      "file": "outside_records/title.response.json",
+      "contract": "outside_records.yaml",
+      "schema": "TitleRecord"
+    },
+    {
+      "file": "registry/case_resolution.request.json",
+      "contract": "registry.yaml",
+      "schema": "CasePositionRequest"
+    },
+    {
+      "file": "registry/case_resolution.response.json",
+      "contract": "registry.yaml",
+      "schema": "CaseView"
+    },
+    {
+      "file": "registry/cases.response.json",
+      "contract": "registry.yaml",
+      "schema": "CasePage"
+    },
+    {
+      "file": "registry/certificate.response.json",
+      "contract": "registry.yaml",
+      "schema": "SignedCertificate"
+    },
+    {
+      "file": "registry/checkpoint_latest.response.json",
+      "contract": "registry.yaml",
+      "schema": "SignedCheckpoint"
+    },
+    {
+      "file": "registry/healthz.response.json",
+      "contract": "registry.yaml",
+      "schema": "Health"
+    },
+    {
+      "file": "registry/ledger_events.headers.response.json",
+      "contract": "registry.yaml",
+      "schema": "LedgerEventPage"
+    },
+    {
+      "file": "registry/outbox.response.json",
+      "contract": "registry.yaml",
+      "schema": "OutboxPage"
+    },
+    {
+      "file": "registry/submission.error.idempotency_key_reused.json",
+      "contract": "registry.yaml",
+      "schema": "ErrorResponse"
+    },
+    {
+      "file": "registry/submission.pledge.request.json",
+      "contract": "registry.yaml",
+      "schema": "SubmissionRequest"
+    },
+    {
+      "file": "registry/submission.pledge.response.json",
+      "contract": "registry.yaml",
+      "schema": "SubmissionResult"
+    },
+    {
+      "file": "registry/submission.release.request.json",
+      "contract": "registry.yaml",
+      "schema": "SubmissionRequest"
+    },
+    {
+      "file": "registry/submission.release.response.json",
+      "contract": "registry.yaml",
+      "schema": "SubmissionResult"
+    }
+  ]
+}

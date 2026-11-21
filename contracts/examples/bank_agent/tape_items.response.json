@@ -1,0 +1,62 @@
+{
+  "items": [
+    {
+      "row_number": 1,
+      "raw_id": "68862006-1000-580f-9f66-4eb8aa7b0cd9",
+      "disposition": "ACCEPTED_NEW",
+      "loan_id": "0e536c29-42d9-5a1a-b251-7e4eb929e6da",
+      "loan_state": "CONFLICT",
+      "issues": [
+        {
+          "issue_id": "72e9bbd0-2e17-5d98-bd1c-fd22236e7738",
+          "field": "vin",
+          "problem": "VIN_CASE_NORMALISED",
+          "action": "FIXED"
+        }
+      ],
+      "checks": [
+        {
+          "check_type": "TITLE_EXISTS",
+          "result": "PASS",
+          "reason_code": "TITLE_FOUND"
+        },
+        {
+          "check_type": "LIENHOLDER_MATCH",
+          "result": "PASS",
+          "reason_code": "LIENHOLDER_MATCHES"
+        },
+        {
+          "check_type": "PAYMENTS_RECEIVED",
+          "result": "PASS",
+          "reason_code": "PAYMENT_IN_WINDOW"
+        },
+        {
+          "check_type": "CONTRACT_PRESENT",
+          "result": "PASS",
+          "reason_code": "CONTRACT_MATCHES"
+        }
+      ],
+      "registry": {
+        "request_id": "8ffaf16b-51b7-5fe1-bf03-fca71c3deb07",
+        "result": "CONFLICT",
+        "match_kind": "EXACT",
+        "match_basis": "ASSET",
+        "kinds_matched": [
+          "ASSET",
+          "VIN",
+          "BORROWER",
+          "AMOUNT_EXACT",
+          "AMOUNT_100",
+          "AMOUNT_1000",
+          "DATE_DAY",
+          "DATE_MONTH"
+        ],
+        "registry_case_id": "8b8a6c95-0dd0-5e9f-8858-c88ffc234d89",
+        "certificate_id": "2426ba86-decd-54ff-a844-9f712adb8354"
+      }
+    }
+  ],
+  "total": 3,
+  "limit": 1,
+  "offset": 0
+}

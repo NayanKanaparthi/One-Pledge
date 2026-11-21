@@ -1,0 +1,7 @@
+{
+  "status": "ok",
+  "service": "key_holder",
+  "holder_id": "kh1",
+  "active_key_version": 1,
+  "test_double": true
+}

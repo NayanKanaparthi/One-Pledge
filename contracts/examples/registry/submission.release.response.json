@@ -1,0 +1,24 @@
+{
+  "submission_id": "829676df-290f-54b0-803c-e97f492b8023",
+  "member_id": "b22cfcf4-0e9d-5315-8781-283c4872ae4e",
+  "kind": "RELEASE",
+  "key_version": "1.1",
+  "status": "COMPLETED",
+  "received_at": "2026-11-12T10:15:00Z",
+  "as_of_seq": 9,
+  "certificate_id": "8a0b0dd8-2b29-5ec0-ad1a-771661a53b68",
+  "results": [
+    {
+      "item_ref": "b909490e-637e-5ec3-9248-8d2a077e4284",
+      "asset_token": "260e923be1c788bc7906b060b6f6e03787f613bf99e3487c1e72e75c279c9049",
+      "result": "RELEASED",
+      "lock_id": "b56bffaa-1be7-576a-b0b4-c0d555ce66a9",
+      "already_held": false,
+      "match_kind": null,
+      "match_basis": null,
+      "kinds_matched": [],
+      "case_id": null,
+      "reason": null
+    }
+  ]
+}

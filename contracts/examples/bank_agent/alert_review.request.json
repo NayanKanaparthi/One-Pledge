@@ -1,0 +1,5 @@
+{
+  "action": "SUBMIT_POSITION",
+  "position": "CONFIRMED_DOUBLE_PLEDGE",
+  "note": "Lender could not explain the second pledge."
+}

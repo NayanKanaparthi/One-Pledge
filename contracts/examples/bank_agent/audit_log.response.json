@@ -1,0 +1,46 @@
+{
+  "items": [
+    {
+      "audit_id": "1e5b7cf9-2e62-5d46-9767-cc0ffc6e0ab6",
+      "seq": 41,
+      "at": "2026-10-22T14:03:05.120394Z",
+      "actor_type": "USER",
+      "actor_user_id": "14ff3116-f98b-5946-97f7-cc1a3e0ea087",
+      "action": "TAPE_UPLOADED",
+      "object_type": "TAPE_SUBMISSION",
+      "object_id": "a998c317-4917-56ec-a147-64f2358618ad",
+      "outcome": "SUCCESS",
+      "request_id": "025057a8-cdd8-54db-8759-04bf7958f9b8",
+      "detail": {
+        "kind": "PLEDGE",
+        "row_count": 3,
+        "file_sha256": "8027a54eef712d07706425db402d1af70c781ff0f1e074d2c9dd0beb28b77611"
+      },
+      "prev_hash": "84fd9bac333ad79154348296204fa7f8c537a96e08983e5f73b3f5aca8e8edf7",
+      "entry_hash": "bbfafc98b3d75bf8e126c0cdbefc39fef41cbd2ae82bfbf0fe3ced15bb4fd53d"
+    },
+    {
+      "audit_id": "ac2803f3-bd04-5745-9c3c-204a62ba0248",
+      "seq": 42,
+      "at": "2026-10-22T14:03:06.482911Z",
+      "actor_type": "SYSTEM",
+      "actor_user_id": null,
+      "action": "TAPE_STAGE_ADVANCED",
+      "object_type": "TAPE_SUBMISSION",
+      "object_id": "a998c317-4917-56ec-a147-64f2358618ad",
+      "outcome": "SUCCESS",
+      "request_id": null,
+      "detail": {
+        "from": "RECEIVED",
+        "to": "CLEANED",
+        "rows_rejected": 0,
+        "rows_fixed": 1
+      },
+      "prev_hash": "bbfafc98b3d75bf8e126c0cdbefc39fef41cbd2ae82bfbf0fe3ced15bb4fd53d",
+      "entry_hash": "7ae0e598c429f0c07fee7b0993cb119aaa2195077bbcf763960c6763e8de20ad"
+    }
+  ],
+  "total": 2,
+  "limit": 50,
+  "offset": 0
+}

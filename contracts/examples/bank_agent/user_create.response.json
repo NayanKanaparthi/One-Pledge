@@ -1,0 +1,8 @@
+{
+  "user_id": "3ad9cefd-9b12-58ce-8afa-db9e7859f5bc",
+  "email": "second.analyst@northgate.example",
+  "display_name": "Sam Analyst",
+  "role": "ANALYST",
+  "active": true,
+  "created_at": "2026-09-30T08:00:00Z"
+}

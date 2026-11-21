@@ -1,0 +1,36 @@
+{
+  "body": {
+    "schema_version": 1,
+    "certificate_id": "2426ba86-decd-54ff-a844-9f712adb8354",
+    "member_id": "b22cfcf4-0e9d-5315-8781-283c4872ae4e",
+    "submission_id": "ed8d28bd-cddf-5c6b-b4c8-5b7f744af329",
+    "kind": "PLEDGE",
+    "key_version": "1.1",
+    "as_of_seq": 6,
+    "issued_at": "2026-10-22T14:03:11Z",
+    "summary": {
+      "checked": 3,
+      "locked": 2,
+      "held": 1,
+      "released": 0,
+      "rejected": 0
+    },
+    "items": [
+      {
+        "asset_token": "e22fc7ef047e847a5da1987c5c08a0d05d0d589baa16aec24906bd069a0d0a9e",
+        "status": "HELD"
+      },
+      {
+        "asset_token": "260e923be1c788bc7906b060b6f6e03787f613bf99e3487c1e72e75c279c9049",
+        "status": "LOCKED"
+      },
+      {
+        "asset_token": "1da47871080e17cc219af1c18c16962b3ce5aa9379b309f8644e0cb8b55a5def",
+        "status": "LOCKED"
+      }
+    ]
+  },
+  "body_hash": "837ff95ff4abe1fa43968897a9eecba8132d34d65f2b60d96fbaa7e02c14f38c",
+  "signature": "rAsIBX6dpXwAoRRtA2+qqaqO4oxyAqM5/+MNYCwRbfuEiS4HoSIh1QFcxNn9JaFyP/YMfq/nOvK5X92TPAMyAg==",
+  "signing_key_id": "registry-test-vector-1"
+}

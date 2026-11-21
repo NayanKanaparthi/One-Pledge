@@ -1,0 +1,21 @@
+{
+  "items": [
+    {
+      "loan_id": "0e536c29-42d9-5a1a-b251-7e4eb929e6da",
+      "facility_id": "e8ed64fc-a2ab-5f75-b8b6-81385d74ce5f",
+      "first_submission_id": "a998c317-4917-56ec-a147-64f2358618ad",
+      "lender_loan_number": "SAF-0048213-01",
+      "vin": "1HGCM82633A004352",
+      "borrower_ref": "C0048213",
+      "origination_date": "2026-08-14",
+      "original_amount_cents": 2345000,
+      "current_balance_cents": 2298340,
+      "state": "CONFLICT",
+      "updated_at": "2026-10-22T14:03:12Z",
+      "open_alert_count": 1
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}

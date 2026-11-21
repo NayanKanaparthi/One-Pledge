@@ -1,0 +1,59 @@
+{
+  "events": [
+    {
+      "seq": 1,
+      "event_type": "MEMBER_JOINED",
+      "payload_hash": "d55b66bcdd2ee00c4dacf770ca21203e9e9c5da7e369c8c1f42afe96348f3245",
+      "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "event_hash": "707751a58e6a23116455b209d6c5b280a223dfd5f8005cabdcc47264421be7cd",
+      "recorded_at": "2026-09-30T09:00:00Z",
+      "schema_version": 1
+    },
+    {
+      "seq": 2,
+      "event_type": "CONFLICT_DETECTED",
+      "payload_hash": "4d7b7bbbb28c023f29671cd3e39e1e8548d1e43f5a09d375d8ddc07b217e5fa0",
+      "prev_hash": "707751a58e6a23116455b209d6c5b280a223dfd5f8005cabdcc47264421be7cd",
+      "event_hash": "c5b60b714e426ebbe9ee22a32c89dc6eef2ef6404a59b6ff0da7869cc05e5c8d",
+      "recorded_at": "2026-10-22T14:03:11Z",
+      "schema_version": 1
+    },
+    {
+      "seq": 3,
+      "event_type": "CASE_OPENED",
+      "payload_hash": "25ab2bde1896aef6821d22c9cc8ad7a248f88c810a1a196712ab20a4f6da3cbf",
+      "prev_hash": "c5b60b714e426ebbe9ee22a32c89dc6eef2ef6404a59b6ff0da7869cc05e5c8d",
+      "event_hash": "6f834b2a49dcb673746a837e5c0d944f8fdbe8a418bc4c86fcc6c55d85b165f0",
+      "recorded_at": "2026-10-22T14:03:11Z",
+      "schema_version": 1
+    },
+    {
+      "seq": 4,
+      "event_type": "LOCK_ACQUIRED",
+      "payload_hash": "5f88074d6c055e3835f46c2eb2ff2a8f6431477f1933d18a45593bf0e7dc6733",
+      "prev_hash": "6f834b2a49dcb673746a837e5c0d944f8fdbe8a418bc4c86fcc6c55d85b165f0",
+      "event_hash": "8a10ab7de2f8484ea1c3b67d996598ae6399d550dfb38f87cfaa1fcd78870f4a",
+      "recorded_at": "2026-10-22T14:03:11Z",
+      "schema_version": 1
+    },
+    {
+      "seq": 5,
+      "event_type": "LOCK_ACQUIRED",
+      "payload_hash": "10452e51272db27ad3f2ba685d62ef8f947a1d8334a734f895adfa11cc108aab",
+      "prev_hash": "8a10ab7de2f8484ea1c3b67d996598ae6399d550dfb38f87cfaa1fcd78870f4a",
+      "event_hash": "e62adf6fe37e18dceec2fd61eec718e93114e31761823e196824abd52aa1d1f1",
+      "recorded_at": "2026-10-22T14:03:11Z",
+      "schema_version": 1
+    },
+    {
+      "seq": 6,
+      "event_type": "CERTIFICATE_ISSUED",
+      "payload_hash": "fc8ee924286a000e5e52d012f257f3480f49de1cd45bbea640e4ec20636bc24c",
+      "prev_hash": "e62adf6fe37e18dceec2fd61eec718e93114e31761823e196824abd52aa1d1f1",
+      "event_hash": "f3f435a3ccf9e47009bbd36804ee18e6c09ae4bd660e65afe70700fa4e5e69b3",
+      "recorded_at": "2026-10-22T14:03:11Z",
+      "schema_version": 1
+    }
+  ],
+  "head_seq": 6
+}

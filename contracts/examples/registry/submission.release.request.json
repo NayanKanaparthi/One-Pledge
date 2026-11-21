@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "kind": "RELEASE",
+  "key_version": "1.1",
+  "items": [
+    {
+      "item_ref": "b909490e-637e-5ec3-9248-8d2a077e4284",
+      "asset_token": "260e923be1c788bc7906b060b6f6e03787f613bf99e3487c1e72e75c279c9049"
+    }
+  ]
+}

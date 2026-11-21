@@ -1,0 +1,1019 @@
+openapi: 3.1.0
+info:
+  title: OnePledge Registry API (DRAFT, bank-facing subset)
+  version: 1.0.0-draft.1
+  summary: Contract B registry endpoints called by the bank agent, plus the Contract A read endpoints. DRAFT pending approval by Shreyas and Vedant.
+  description: |
+    The registry sees codes only: 64 character lower case hex tokens produced by
+    the two-holder blind OPRF. It never receives a raw loan value.
+
+    ## Decision rules (one database transaction per submission)
+
+    For each item of a BACK_BOOK or PLEDGE submission, in request order:
+
+    - Rule A (already held): the calling member holds the active lock on
+      `asset_token`. Result LOCKED with `already_held: true`. No event.
+    - Rule B (asset match): another member holds the active lock on
+      `asset_token`. Result CONFLICT with `match_basis: ASSET`. `match_kind` is
+      EXACT when BORROWER, AMOUNT_EXACT and DATE_DAY all equal the lock's field
+      tokens, otherwise LIKELY. No lock is created. A case is opened (or the
+      existing OPEN case for the same claimant and lock is reused).
+    - Rule C (field agreement): `asset_token` is free, and an active lock of
+      another member has the same BORROWER token and at least one of these
+      pairs equal: (AMOUNT_EXACT, DATE_DAY), (AMOUNT_EXACT, DATE_MONTH),
+      (AMOUNT_100, DATE_DAY). Result CONFLICT with `match_basis: FIELDS` and
+      `match_kind: LIKELY`. No lock is created. The candidate with the most
+      equal kinds wins, ties go to the oldest lock. A (claimant asset_token,
+      lock_id) pair cleared as CLEARED_DATA_ERROR is exempt from Rule C.
+    - Otherwise: the lock is created. Result LOCKED with `already_held: false`.
+
+    `kinds_matched` always lists every token kind whose value equals the matched
+    lock's value (ASSET included when the asset token matched).
+
+    For each item of a RELEASE submission: if the caller holds the active lock
+    the lock is released (result RELEASED), and every OPEN case against that
+    lock is resolved CLEARED_LATE_RELEASE. Otherwise result REJECTED with
+    reason NOT_HOLDER.
+
+    ## Idempotency
+
+    `Idempotency-Key` is required on POST /v1/submissions. The first request
+    with a key is processed and its response stored. A repeat with the same key
+    and the same body returns the stored response byte for byte with status 200
+    and header `Idempotent-Replay: true`. A repeat with the same key and a
+    different body is rejected with 409 IDEMPOTENCY_KEY_REUSED.
+
+    ## Privacy
+
+    A member only ever sees its own tokens. No response, alert or case names
+    another member, another member's tokens, or another member's item count.
+
+    ## Signatures and hashes
+
+    Canonical JSON: UTF-8, object keys sorted, separators `,` and `:`, no
+    insignificant whitespace, integers only (no floats), non-ASCII not escaped.
+    In Python: `json.dumps(obj, sort_keys=True, separators=(",", ":"),
+    ensure_ascii=False, allow_nan=False).encode("utf-8")`.
+
+    - Certificate: `body_hash` is the SHA-256 hex of the canonical JSON of
+      `body`. `signature` is the Ed25519 signature over those same canonical
+      bytes, standard base64.
+    - Checkpoint: `signature` is the Ed25519 signature over the canonical JSON
+      of `body`, standard base64.
+    - Ledger event: `payload_hash` is the SHA-256 hex of the canonical JSON of
+      the payload. `event_hash` is the SHA-256 hex of the canonical JSON of the
+      object with exactly the keys `event_type`, `payload_hash`, `prev_hash`,
+      `recorded_at`, `schema_version`, `seq`. `prev_hash` of seq 1 is 64 zeros.
+      `seq` starts at 1 and has no gaps.
+    - A checkpoint with `last_event_seq = n` has `head_hash` equal to the
+      `event_hash` of event n.
+  license:
+    name: Proprietary (course project, synthetic data only)
+    identifier: LicenseRef-OnePledge-Course
+servers:
+  - url: http://localhost:8400
+    description: Local default
+security:
+  - MemberApiKey: []
+tags:
+  - name: submissions
+  - name: outbox
+  - name: cases
+  - name: certificates
+  - name: ledger
+  - name: health
+paths:
+  /v1/submissions:
+    post:
+      tags: [submissions]
+      operationId: createSubmission
+      summary: Submit codes to lock (BACK_BOOK, PLEDGE) or release (RELEASE)
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{64}$'
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmissionRequest'
+            examples:
+              pledge:
+                externalValue: examples/registry/submission.pledge.request.json
+              release:
+                externalValue: examples/registry/submission.release.request.json
+      responses:
+        '200':
+          description: Idempotent replay of a stored response.
+          headers:
+            Idempotent-Replay:
+              schema:
+                type: string
+                enum: ['true']
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmissionResult'
+        '201':
+          description: Decided and committed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmissionResult'
+              examples:
+                pledge:
+                  externalValue: examples/registry/submission.pledge.response.json
+                release:
+                  externalValue: examples/registry/submission.release.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '409':
+          description: IDEMPOTENCY_KEY_REUSED or KEY_VERSION_MISMATCH.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                key_reused:
+                  externalValue: examples/registry/submission.error.idempotency_key_reused.json
+        '413':
+          $ref: '#/components/responses/Error'
+        '422':
+          description: VALIDATION_ERROR. Includes a duplicate asset_token inside one request (issue DUPLICATE_ASSET_TOKEN) and field_tokens present on a RELEASE or missing on a lock request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: RATE_LIMITED. Daily item cap for this member is exhausted.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/Error'
+  /v1/submissions/{submission_id}:
+    get:
+      tags: [submissions]
+      operationId: getSubmission
+      summary: Stored result of one of the caller's submissions
+      parameters:
+        - name: submission_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: The stored result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmissionResult'
+              examples:
+                default:
+                  externalValue: examples/registry/submission.pledge.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /v1/outbox:
+    get:
+      tags: [outbox]
+      operationId: listOutbox
+      summary: Unacknowledged messages for the caller, oldest first
+      description: Delivery is at least once. A message is returned on every call until it is acknowledged.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Messages ordered by position ascending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutboxPage'
+              examples:
+                default:
+                  externalValue: examples/registry/outbox.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /v1/outbox/{message_id}/ack:
+    post:
+      tags: [outbox]
+      operationId: ackOutboxMessage
+      summary: Acknowledge one message (idempotent)
+      parameters:
+        - name: message_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '204':
+          description: Acknowledged (also returned when it was already acknowledged).
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /v1/cases:
+    get:
+      tags: [cases]
+      operationId: listCases
+      summary: Cases the caller is a party to (own side only)
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/CaseStatus'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: A page of cases ordered by opened_seq ascending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasePage'
+              examples:
+                default:
+                  externalValue: examples/registry/cases.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+  /v1/cases/{case_id}/resolution:
+    post:
+      tags: [cases]
+      operationId: postCasePosition
+      summary: Record the caller's position on a case
+      description: |
+        Each party records one position. When both parties have recorded the
+        same position the case resolves: DATA_ERROR gives CLEARED_DATA_ERROR,
+        CONFIRMED_DOUBLE_PLEDGE gives CONFIRMED. Differing positions leave the
+        case OPEN. Repeating the same position is idempotent (200). The
+        registry itself resolves a case as CLEARED_LATE_RELEASE when the
+        holder releases the matched lock. No free text is accepted, so a raw
+        value cannot reach the registry through this endpoint.
+      parameters:
+        - name: case_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CasePositionRequest'
+            examples:
+              default:
+                externalValue: examples/registry/case_resolution.request.json
+      responses:
+        '200':
+          description: The case as the caller sees it after recording the position.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaseView'
+              examples:
+                default:
+                  externalValue: examples/registry/case_resolution.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          description: CASE_ALREADY_RESOLVED, or POSITION_ALREADY_RECORDED when the caller tries to change its position.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          $ref: '#/components/responses/Error'
+  /v1/certificates/{certificate_id}:
+    get:
+      tags: [certificates]
+      operationId: getCertificate
+      summary: Signed certificate for one of the caller's submissions
+      parameters:
+        - name: certificate_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: The signed certificate.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignedCertificate'
+              examples:
+                default:
+                  externalValue: examples/registry/certificate.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /v1/ledger/events:
+    get:
+      tags: [ledger]
+      operationId: listLedgerEvents
+      summary: Ledger events in sequence order
+      description: |
+        `view=headers` (default) returns hash chain headers without payloads
+        and is open to every member, so any bank can verify that a new
+        checkpoint extends the last one it stored. `view=full` adds payloads
+        (codes only) and requires an auditor or operator key (403 FORBIDDEN
+        otherwise).
+      parameters:
+        - name: after_seq
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 500
+        - name: view
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [headers, full]
+            default: headers
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Events with seq greater than after_seq, ascending, at most limit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerEventPage'
+              examples:
+                headers:
+                  externalValue: examples/registry/ledger_events.headers.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+  /v1/checkpoints/latest:
+    get:
+      tags: [ledger]
+      operationId: getLatestCheckpoint
+      summary: The most recent signed checkpoint
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: The latest signed checkpoint.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignedCheckpoint'
+              examples:
+                default:
+                  externalValue: examples/registry/checkpoint_latest.response.json
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /healthz:
+    get:
+      tags: [health]
+      operationId: health
+      summary: Liveness
+      security: []
+      responses:
+        '200':
+          description: Service is up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              examples:
+                default:
+                  externalValue: examples/registry/healthz.response.json
+components:
+  securitySchemes:
+    MemberApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Per member service key (or an auditor key for the read endpoints). Stored only as a SHA-256 hash.
+  parameters:
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: false
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    Offset:
+      name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+  responses:
+    Error:
+      description: Error. See `error.code`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    Token:
+      type: string
+      description: OPRF derived code, lower case hex of a SHA-256 digest.
+      pattern: '^[0-9a-f]{64}$'
+    Hash:
+      type: string
+      pattern: '^[0-9a-f]{64}$'
+    Signature:
+      type: string
+      description: Ed25519 signature, standard base64 with padding (88 characters).
+      pattern: '^[A-Za-z0-9+/]{86}==$'
+    KeyVersion:
+      type: string
+      description: '`<holder 1 key version>.<holder 2 key version>`, for example `1.1`.'
+      pattern: '^[1-9][0-9]*\.[1-9][0-9]*$'
+    TokenKind:
+      type: string
+      enum: [ASSET, VIN, BORROWER, AMOUNT_EXACT, AMOUNT_100, AMOUNT_1000, DATE_DAY, DATE_MONTH]
+    SubmissionKind:
+      type: string
+      enum: [BACK_BOOK, PLEDGE, RELEASE]
+    MatchKind:
+      type: string
+      enum: [EXACT, LIKELY]
+    MatchBasis:
+      type: string
+      enum: [ASSET, FIELDS]
+    CaseStatus:
+      type: string
+      enum: [OPEN, CLEARED_DATA_ERROR, CLEARED_LATE_RELEASE, CONFIRMED]
+    FieldTokens:
+      type: object
+      additionalProperties: false
+      required: [VIN, BORROWER, AMOUNT_EXACT, AMOUNT_100, AMOUNT_1000, DATE_DAY, DATE_MONTH]
+      properties:
+        VIN:
+          $ref: '#/components/schemas/Token'
+        BORROWER:
+          $ref: '#/components/schemas/Token'
+        AMOUNT_EXACT:
+          $ref: '#/components/schemas/Token'
+        AMOUNT_100:
+          $ref: '#/components/schemas/Token'
+        AMOUNT_1000:
+          $ref: '#/components/schemas/Token'
+        DATE_DAY:
+          $ref: '#/components/schemas/Token'
+        DATE_MONTH:
+          $ref: '#/components/schemas/Token'
+    SubmissionItem:
+      type: object
+      additionalProperties: false
+      required: [item_ref, asset_token]
+      properties:
+        item_ref:
+          type: string
+          format: uuid
+          description: Caller chosen reference, unique inside the request, echoed in the result.
+        asset_token:
+          $ref: '#/components/schemas/Token'
+        field_tokens:
+          $ref: '#/components/schemas/FieldTokens'
+          description: Required for BACK_BOOK and PLEDGE. Must be absent for RELEASE.
+    SubmissionRequest:
+      type: object
+      additionalProperties: false
+      required: [schema_version, kind, key_version, items]
+      properties:
+        schema_version:
+          type: integer
+          const: 1
+        kind:
+          $ref: '#/components/schemas/SubmissionKind'
+        key_version:
+          $ref: '#/components/schemas/KeyVersion'
+        items:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/SubmissionItem'
+    ItemResult:
+      type: object
+      additionalProperties: false
+      required: [item_ref, asset_token, result, lock_id, already_held, match_kind, match_basis, kinds_matched, case_id, reason]
+      properties:
+        item_ref:
+          type: string
+          format: uuid
+        asset_token:
+          $ref: '#/components/schemas/Token'
+        result:
+          type: string
+          enum: [LOCKED, CONFLICT, RELEASED, REJECTED]
+          description: Clients must treat an unknown value as REJECTED (additive evolution).
+        lock_id:
+          type: [string, 'null']
+          format: uuid
+          description: Set for LOCKED and RELEASED.
+        already_held:
+          type: boolean
+          description: True only for LOCKED under Rule A.
+        match_kind:
+          oneOf:
+            - $ref: '#/components/schemas/MatchKind'
+            - type: 'null'
+        match_basis:
+          oneOf:
+            - $ref: '#/components/schemas/MatchBasis'
+            - type: 'null'
+        kinds_matched:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/TokenKind'
+          description: Empty unless result is CONFLICT.
+        case_id:
+          type: [string, 'null']
+          format: uuid
+          description: Set for CONFLICT.
+        reason:
+          type: [string, 'null']
+          enum: [NOT_HOLDER, null]
+          description: Set for REJECTED.
+    SubmissionResult:
+      type: object
+      additionalProperties: false
+      required: [submission_id, member_id, kind, key_version, status, received_at, as_of_seq, certificate_id, results]
+      properties:
+        submission_id:
+          type: string
+          format: uuid
+        member_id:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/SubmissionKind'
+        key_version:
+          $ref: '#/components/schemas/KeyVersion'
+        status:
+          type: string
+          enum: [COMPLETED]
+        received_at:
+          type: string
+          format: date-time
+        as_of_seq:
+          type: integer
+          minimum: 0
+          description: Last ledger seq written by (or current at) this decision.
+        certificate_id:
+          type: string
+          format: uuid
+        results:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/ItemResult'
+    AlertMessage:
+      type: object
+      additionalProperties: false
+      required: [message_id, position, type, created_at, payload]
+      properties:
+        message_id:
+          type: string
+          format: uuid
+        position:
+          type: integer
+          minimum: 1
+        type:
+          type: string
+          const: ALERT
+        created_at:
+          type: string
+          format: date-time
+        payload:
+          type: object
+          additionalProperties: false
+          required: [case_id, role, asset_token, match_kind, match_basis, kinds_matched, opened_seq]
+          properties:
+            case_id:
+              type: string
+              format: uuid
+            role:
+              type: string
+              enum: [HOLDER, CLAIMANT]
+            asset_token:
+              $ref: '#/components/schemas/Token'
+              description: The recipient's own asset token for its own loan.
+            match_kind:
+              $ref: '#/components/schemas/MatchKind'
+            match_basis:
+              $ref: '#/components/schemas/MatchBasis'
+            kinds_matched:
+              type: array
+              uniqueItems: true
+              items:
+                $ref: '#/components/schemas/TokenKind'
+            opened_seq:
+              type: integer
+              minimum: 1
+    CaseUpdateMessage:
+      type: object
+      additionalProperties: false
+      required: [message_id, position, type, created_at, payload]
+      properties:
+        message_id:
+          type: string
+          format: uuid
+        position:
+          type: integer
+          minimum: 1
+        type:
+          type: string
+          const: CASE_UPDATE
+        created_at:
+          type: string
+          format: date-time
+        payload:
+          type: object
+          additionalProperties: false
+          required: [case_id, asset_token, status, resolved_seq]
+          properties:
+            case_id:
+              type: string
+              format: uuid
+            asset_token:
+              $ref: '#/components/schemas/Token'
+            status:
+              $ref: '#/components/schemas/CaseStatus'
+            resolved_seq:
+              type: [integer, 'null']
+              minimum: 1
+    CheckpointMessage:
+      type: object
+      additionalProperties: false
+      required: [message_id, position, type, created_at, payload]
+      properties:
+        message_id:
+          type: string
+          format: uuid
+        position:
+          type: integer
+          minimum: 1
+        type:
+          type: string
+          const: CHECKPOINT
+        created_at:
+          type: string
+          format: date-time
+        payload:
+          $ref: '#/components/schemas/SignedCheckpoint'
+    OutboxPage:
+      type: object
+      additionalProperties: false
+      required: [messages, has_more]
+      properties:
+        messages:
+          type: array
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/AlertMessage'
+              - $ref: '#/components/schemas/CaseUpdateMessage'
+              - $ref: '#/components/schemas/CheckpointMessage'
+        has_more:
+          type: boolean
+    CasePositionRequest:
+      type: object
+      additionalProperties: false
+      required: [position]
+      properties:
+        position:
+          type: string
+          enum: [DATA_ERROR, CONFIRMED_DOUBLE_PLEDGE]
+    CaseView:
+      type: object
+      additionalProperties: false
+      required: [case_id, role, asset_token, match_kind, match_basis, kinds_matched, status, your_position, awaiting_counterparty, opened_seq, resolved_seq]
+      properties:
+        case_id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [HOLDER, CLAIMANT]
+        asset_token:
+          $ref: '#/components/schemas/Token'
+        match_kind:
+          $ref: '#/components/schemas/MatchKind'
+        match_basis:
+          $ref: '#/components/schemas/MatchBasis'
+        kinds_matched:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/TokenKind'
+        status:
+          $ref: '#/components/schemas/CaseStatus'
+        your_position:
+          type: [string, 'null']
+          enum: [DATA_ERROR, CONFIRMED_DOUBLE_PLEDGE, null]
+        awaiting_counterparty:
+          type: boolean
+          description: True while the case is OPEN and the other party has not recorded a position. Reveals nothing else about the other party.
+        opened_seq:
+          type: integer
+          minimum: 1
+        resolved_seq:
+          type: [integer, 'null']
+          minimum: 1
+    CasePage:
+      type: object
+      additionalProperties: false
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CaseView'
+        total:
+          type: integer
+          minimum: 0
+        limit:
+          type: integer
+        offset:
+          type: integer
+    CertificateItem:
+      type: object
+      additionalProperties: false
+      required: [asset_token, status]
+      properties:
+        asset_token:
+          $ref: '#/components/schemas/Token'
+        status:
+          type: string
+          enum: [LOCKED, HELD, RELEASED, REJECTED]
+          description: HELD is the certificate word for a CONFLICT result.
+    CertificateBody:
+      type: object
+      additionalProperties: false
+      required: [schema_version, certificate_id, member_id, submission_id, kind, key_version, as_of_seq, issued_at, summary, items]
+      properties:
+        schema_version:
+          type: integer
+          const: 1
+        certificate_id:
+          type: string
+          format: uuid
+        member_id:
+          type: string
+          format: uuid
+        submission_id:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/SubmissionKind'
+        key_version:
+          $ref: '#/components/schemas/KeyVersion'
+        as_of_seq:
+          type: integer
+          minimum: 0
+        issued_at:
+          type: string
+          format: date-time
+        summary:
+          type: object
+          additionalProperties: false
+          required: [checked, locked, held, released, rejected]
+          properties:
+            checked:
+              type: integer
+              minimum: 1
+            locked:
+              type: integer
+              minimum: 0
+            held:
+              type: integer
+              minimum: 0
+            released:
+              type: integer
+              minimum: 0
+            rejected:
+              type: integer
+              minimum: 0
+        items:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/CertificateItem'
+          description: Same order as the submission request.
+    SignedCertificate:
+      type: object
+      additionalProperties: false
+      required: [body, body_hash, signature, signing_key_id]
+      properties:
+        body:
+          $ref: '#/components/schemas/CertificateBody'
+        body_hash:
+          $ref: '#/components/schemas/Hash'
+        signature:
+          $ref: '#/components/schemas/Signature'
+        signing_key_id:
+          type: string
+          pattern: '^[a-z0-9-]{1,64}$'
+    CheckpointBody:
+      type: object
+      additionalProperties: false
+      required: [schema_version, checkpoint_seq, last_event_seq, head_hash, signed_at]
+      properties:
+        schema_version:
+          type: integer
+          const: 1
+        checkpoint_seq:
+          type: integer
+          minimum: 1
+          description: Starts at 1, increases by exactly 1.
+        last_event_seq:
+          type: integer
+          minimum: 1
+        head_hash:
+          $ref: '#/components/schemas/Hash'
+        signed_at:
+          type: string
+          format: date-time
+    SignedCheckpoint:
+      type: object
+      additionalProperties: false
+      required: [body, signature, signing_key_id]
+      properties:
+        body:
+          $ref: '#/components/schemas/CheckpointBody'
+        signature:
+          $ref: '#/components/schemas/Signature'
+        signing_key_id:
+          type: string
+          pattern: '^[a-z0-9-]{1,64}$'
+    LedgerEvent:
+      type: object
+      additionalProperties: false
+      required: [seq, event_type, payload_hash, prev_hash, event_hash, recorded_at, schema_version]
+      properties:
+        seq:
+          type: integer
+          minimum: 1
+        event_type:
+          type: string
+          enum:
+            - MEMBER_JOINED
+            - LOCK_ACQUIRED
+            - LOCK_RELEASED
+            - CONFLICT_DETECTED
+            - CASE_OPENED
+            - CASE_RESOLVED
+            - CERTIFICATE_ISSUED
+            - CHECKPOINT_SIGNED
+            - KEY_ROTATED
+        payload_hash:
+          $ref: '#/components/schemas/Hash'
+        prev_hash:
+          $ref: '#/components/schemas/Hash'
+        event_hash:
+          $ref: '#/components/schemas/Hash'
+        recorded_at:
+          type: string
+          format: date-time
+        schema_version:
+          type: integer
+          const: 1
+        payload:
+          type: object
+          description: Present only with view=full. Codes and registry identifiers only.
+    LedgerEventPage:
+      type: object
+      additionalProperties: false
+      required: [events, head_seq]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/LedgerEvent'
+        head_seq:
+          type: integer
+          minimum: 0
+          description: Highest seq in the ledger at the time of the call.
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, service]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        service:
+          type: string
+          enum: [registry]
+        test_double:
+          type: boolean
+          description: Present and true on the layer 1 contract test double.
+    ErrorDetail:
+      type: object
+      additionalProperties: false
+      required: [field, issue]
+      properties:
+        field:
+          type: string
+        issue:
+          type: string
+          pattern: '^[A-Z][A-Z0-9_]*$'
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              enum:
+                - UNAUTHENTICATED
+                - FORBIDDEN
+                - VALIDATION_ERROR
+                - IDEMPOTENCY_KEY_REUSED
+                - KEY_VERSION_MISMATCH
+                - SUBMISSION_NOT_FOUND
+                - CERTIFICATE_NOT_FOUND
+                - CASE_NOT_FOUND
+                - CASE_ALREADY_RESOLVED
+                - POSITION_ALREADY_RECORDED
+                - OUTBOX_MESSAGE_NOT_FOUND
+                - NO_CHECKPOINT
+                - PAYLOAD_TOO_LARGE
+                - RATE_LIMITED
+                - SERVICE_UNAVAILABLE
+                - INTERNAL_ERROR
+            message:
+              type: string
+              description: Fixed sentence for the code. Never contains request data.
+            request_id:
+              type: string
+            details:
+              type: array
+              items:
+                $ref: '#/components/schemas/ErrorDetail'

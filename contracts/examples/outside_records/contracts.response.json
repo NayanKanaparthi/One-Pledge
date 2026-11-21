@@ -1,0 +1,13 @@
+{
+  "vin": "1HGCM82633A004352",
+  "contracts": [
+    {
+      "contract_id": "dca3e178-6dbc-5cf7-ac28-931c3626f5b7",
+      "vin": "1HGCM82633A004352",
+      "lender_name": "Summit Auto Finance LLC",
+      "amount_cents": 2345000,
+      "signed_on": "2026-08-13",
+      "document_sha256": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793"
+    }
+  ]
+}

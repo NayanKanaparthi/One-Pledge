@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "IDEMPOTENCY_KEY_REUSED",
+    "message": "This idempotency key was already used with a different request body.",
+    "request_id": "ba852540-260c-5280-b8b8-96e54236c8cd"
+  }
+}

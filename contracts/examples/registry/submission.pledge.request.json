@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "kind": "PLEDGE",
+  "key_version": "1.1",
+  "items": [
+    {
+      "item_ref": "47e57a83-9e34-5d8c-93c1-15cdcbace5f4",
+      "asset_token": "e22fc7ef047e847a5da1987c5c08a0d05d0d589baa16aec24906bd069a0d0a9e",
+      "field_tokens": {
+        "VIN": "c2c0f1deb4bd20c282051abe6b78b5a3e308b9206b09162977c0246f10d34342",
+        "BORROWER": "f08f2004b7e8cd3049b98b8a4cd5a3bf6f18bc636fed4767f9f668c4bc49c706",
+        "AMOUNT_EXACT": "de3d6fa9f88f3668b7c299cc687db73d8f204eb0023f3f5c2292b4d9e5e3f321",
+        "AMOUNT_100": "83cc219c92ae2e2c33ca4928131783de3403aefc5e3acebe58464db0b269ae07",
+        "AMOUNT_1000": "14315d38b5f0b76e519c5f592e425c3f1fbf79185360d21412b9f56a7ee4f8c9",
+        "DATE_DAY": "1d19af21b767dcdd1a987a84f453aee4d6ad611cd7d99694210f7a1690171da5",
+        "DATE_MONTH": "4722c9ba462c7c4e9db01698b349439a36e6e1b21c252652e51fe734e347a0b7"
+      }
+    },
+    {
+      "item_ref": "18422f0e-8b82-58df-b463-998b27c43935",
+      "asset_token": "260e923be1c788bc7906b060b6f6e03787f613bf99e3487c1e72e75c279c9049",
+      "field_tokens": {
+        "VIN": "37e7868977f518a4e14b9430b1f157f71e983678d7a46eb2808a8e222a7622cf",
+        "BORROWER": "a805410f9ac9270f91130a6d97c0f22ebe86ae1fa85f8c18e25d0432c18ad253",
+        "AMOUNT_EXACT": "63ded69722512e84b0bc30ad9b37d92f15523d4f777060fc8ad96c3b9638697f",
+        "AMOUNT_100": "845f332c42d1ffa6c520c6f36d9360a9758722fa13928b34cbc949d933896091",
+        "AMOUNT_1000": "8833a781efaacdd50145d06dfe2a3190543b4653d3d4337481434702ce69440d",
+        "DATE_DAY": "302e970583e1efdbb4f11dac21da1f04e9783aeb8e9d0fd99b228b385b45fdfd",
+        "DATE_MONTH": "a8f81a2b0d1a4907a3d25efb9dc19f8a484b5f9794c28e1bfb95a2a52e66371b"
+      }
+    },
+    {
+      "item_ref": "6fd3e003-e963-5068-b240-7c030ee6312f",
+      "asset_token": "1da47871080e17cc219af1c18c16962b3ce5aa9379b309f8644e0cb8b55a5def",
+      "field_tokens": {
+        "VIN": "d301e886f12bc9d6ed69376baf89c69bc2b116c16bdd35462b2ec2f2e16fa938",
+        "BORROWER": "fa93eddc250d32efc1fb05540ed424ce200844d0cca1a49749a64661a24ecbcd",
+        "AMOUNT_EXACT": "cc47b3f87bd7dd72abb003350732c648759b24418bbbfb394d628b04396fe22a",
+        "AMOUNT_100": "7f02f8cf1efbf5e7f560c5467d7652b8434a275cefcb105fcfe645c298b9dabb",
+        "AMOUNT_1000": "0a551ef5b76c0794aa38482109879f4eb30a63d2c4aa74d4116c004a79b5670e",
+        "DATE_DAY": "ec4cc345c025b3c09f6c3316ff627e93d47f2a933f752d98ed0a54889287af9b",
+        "DATE_MONTH": "b611881f02feb5867616c006e929546a9fac9be2abd143ff291b205bb0a29e9b"
+      }
+    }
+  ]
+}

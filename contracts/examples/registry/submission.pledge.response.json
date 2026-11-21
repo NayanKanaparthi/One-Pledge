@@ -1,0 +1,57 @@
+{
+  "submission_id": "ed8d28bd-cddf-5c6b-b4c8-5b7f744af329",
+  "member_id": "b22cfcf4-0e9d-5315-8781-283c4872ae4e",
+  "kind": "PLEDGE",
+  "key_version": "1.1",
+  "status": "COMPLETED",
+  "received_at": "2026-10-22T14:03:11Z",
+  "as_of_seq": 6,
+  "certificate_id": "2426ba86-decd-54ff-a844-9f712adb8354",
+  "results": [
+    {
+      "item_ref": "47e57a83-9e34-5d8c-93c1-15cdcbace5f4",
+      "asset_token": "e22fc7ef047e847a5da1987c5c08a0d05d0d589baa16aec24906bd069a0d0a9e",
+      "result": "CONFLICT",
+      "lock_id": null,
+      "already_held": false,
+      "match_kind": "EXACT",
+      "match_basis": "ASSET",
+      "kinds_matched": [
+        "ASSET",
+        "VIN",
+        "BORROWER",
+        "AMOUNT_EXACT",
+        "AMOUNT_100",
+        "AMOUNT_1000",
+        "DATE_DAY",
+        "DATE_MONTH"
+      ],
+      "case_id": "8b8a6c95-0dd0-5e9f-8858-c88ffc234d89",
+      "reason": null
+    },
+    {
+      "item_ref": "18422f0e-8b82-58df-b463-998b27c43935",
+      "asset_token": "260e923be1c788bc7906b060b6f6e03787f613bf99e3487c1e72e75c279c9049",
+      "result": "LOCKED",
+      "lock_id": "b56bffaa-1be7-576a-b0b4-c0d555ce66a9",
+      "already_held": false,
+      "match_kind": null,
+      "match_basis": null,
+      "kinds_matched": [],
+      "case_id": null,
+      "reason": null
+    },
+    {
+      "item_ref": "6fd3e003-e963-5068-b240-7c030ee6312f",
+      "asset_token": "1da47871080e17cc219af1c18c16962b3ce5aa9379b309f8644e0cb8b55a5def",
+      "result": "LOCKED",
+      "lock_id": "9d57ddfb-a1e2-5612-be69-52423644ea58",
+      "already_held": false,
+      "match_kind": null,
+      "match_basis": null,
+      "kinds_matched": [],
+      "case_id": null,
+      "reason": null
+    }
+  ]
+}

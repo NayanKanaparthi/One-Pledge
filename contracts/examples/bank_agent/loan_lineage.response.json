@@ -1,0 +1,283 @@
+{
+  "loan": {
+    "loan_id": "0e536c29-42d9-5a1a-b251-7e4eb929e6da",
+    "facility_id": "e8ed64fc-a2ab-5f75-b8b6-81385d74ce5f",
+    "first_submission_id": "a998c317-4917-56ec-a147-64f2358618ad",
+    "lender_loan_number": "SAF-0048213-01",
+    "vin": "1HGCM82633A004352",
+    "borrower_ref": "C0048213",
+    "origination_date": "2026-08-14",
+    "original_amount_cents": 2345000,
+    "current_balance_cents": 2298340,
+    "state": "CONFLICT",
+    "updated_at": "2026-10-22T14:03:12Z",
+    "open_alert_count": 1
+  },
+  "steps": [
+    {
+      "submission_id": "a998c317-4917-56ec-a147-64f2358618ad",
+      "kind": "PLEDGE",
+      "file_name": "S03_NORTHGATE_SUMMIT_PLEDGE.csv",
+      "file_sha256": "8027a54eef712d07706425db402d1af70c781ff0f1e074d2c9dd0beb28b77611",
+      "as_of_date": "2026-10-22",
+      "disposition": "ACCEPTED_NEW",
+      "raw_row": {
+        "raw_id": "68862006-1000-580f-9f66-4eb8aa7b0cd9",
+        "row_number": 1,
+        "raw_payload": {
+          "Loan #": "SAF-0048213-01",
+          "VIN": "1hgcm82633a004352",
+          "Cust ID": "C0048213",
+          "Orig Date": "08/14/2026",
+          "Orig Amt": "$23,450.00",
+          "Curr Bal": "$22,983.40"
+        },
+        "row_sha256": "634768dae1474506e4bf7d341890542b09987d7e6aea5d446c02e37581a56954",
+        "received_at": "2026-10-22T14:03:05Z"
+      },
+      "cleaning_issues": [
+        {
+          "issue_id": "72e9bbd0-2e17-5d98-bd1c-fd22236e7738",
+          "field": "vin",
+          "problem": "VIN_CASE_NORMALISED",
+          "action": "FIXED"
+        }
+      ],
+      "checks": [
+        {
+          "check_type": "TITLE_EXISTS",
+          "result": "PASS",
+          "reason_code": "TITLE_FOUND",
+          "check_id": "db963fb3-8cdc-5a7f-bcbe-d6f479f2188f",
+          "evidence": {
+            "source": "outside_records.titles",
+            "found": true,
+            "title_status": "CLEAN",
+            "title_state": "NJ",
+            "age_days": 69,
+            "window_days": 30
+          },
+          "checked_at": "2026-10-22T14:03:08Z"
+        },
+        {
+          "check_type": "LIENHOLDER_MATCH",
+          "result": "PASS",
+          "reason_code": "LIENHOLDER_MATCHES",
+          "check_id": "e49df21e-19f8-57ea-aa49-ab021e6a8ae2",
+          "evidence": {
+            "source": "outside_records.titles",
+            "lienholder_on_title": "SUMMIT AUTO FINANCE, L.L.C.",
+            "lienholder_normalised": "SUMMIT AUTO FINANCE",
+            "lender_normalised": "SUMMIT AUTO FINANCE"
+          },
+          "checked_at": "2026-10-22T14:03:08Z"
+        },
+        {
+          "check_type": "PAYMENTS_RECEIVED",
+          "result": "PASS",
+          "reason_code": "PAYMENT_IN_WINDOW",
+          "check_id": "eeb467df-be18-519c-bb4d-5ae948dcb889",
+          "evidence": {
+            "source": "outside_records.payments",
+            "window_days": 90,
+            "window_from": "2026-07-24",
+            "window_to": "2026-10-22",
+            "payments_in_window": 1,
+            "last_paid_on": "2026-09-28",
+            "deposit_bank_codes": [
+              "HARBOR"
+            ],
+            "age_days": 69,
+            "grace_days": 45
+          },
+          "checked_at": "2026-10-22T14:03:08Z"
+        },
+        {
+          "check_type": "CONTRACT_PRESENT",
+          "result": "PASS",
+          "reason_code": "CONTRACT_MATCHES",
+          "check_id": "b1b37945-d168-5bb0-98e1-bb509dbfa208",
+          "evidence": {
+            "source": "outside_records.contracts",
+            "contracts_found": 1,
+            "lender_matching_contracts": 1,
+            "matching_contract_id": "dca3e178-6dbc-5cf7-ac28-931c3626f5b7",
+            "signed_on_tolerance_days": 3
+          },
+          "checked_at": "2026-10-22T14:03:08Z"
+        }
+      ],
+      "registry_request": {
+        "request_id": "8ffaf16b-51b7-5fe1-bf03-fca71c3deb07",
+        "kind": "PLEDGE",
+        "origin": "TAPE",
+        "idempotency_key": "b43aae102b191a96b0eef83f7a7a8004ecd2ea986f64726e2541f3d608a9d593",
+        "item_count": 3,
+        "attempts": 1,
+        "sent_at": "2026-10-22T14:03:11Z",
+        "response_status": 201,
+        "outcome": {
+          "request_id": "8ffaf16b-51b7-5fe1-bf03-fca71c3deb07",
+          "result": "CONFLICT",
+          "match_kind": "EXACT",
+          "match_basis": "ASSET",
+          "kinds_matched": [
+            "ASSET",
+            "VIN",
+            "BORROWER",
+            "AMOUNT_EXACT",
+            "AMOUNT_100",
+            "AMOUNT_1000",
+            "DATE_DAY",
+            "DATE_MONTH"
+          ],
+          "registry_case_id": "8b8a6c95-0dd0-5e9f-8858-c88ffc234d89",
+          "certificate_id": "2426ba86-decd-54ff-a844-9f712adb8354"
+        }
+      },
+      "certificate": {
+        "certificate_id": "2426ba86-decd-54ff-a844-9f712adb8354",
+        "request_id": "8ffaf16b-51b7-5fe1-bf03-fca71c3deb07",
+        "submission_id": "a998c317-4917-56ec-a147-64f2358618ad",
+        "registry_submission_id": "ed8d28bd-cddf-5c6b-b4c8-5b7f744af329",
+        "kind": "PLEDGE",
+        "as_of_seq": 6,
+        "issued_at": "2026-10-22T14:03:11Z",
+        "summary": {
+          "checked": 3,
+          "locked": 2,
+          "held": 1,
+          "released": 0,
+          "rejected": 0
+        },
+        "body_hash": "837ff95ff4abe1fa43968897a9eecba8132d34d65f2b60d96fbaa7e02c14f38c",
+        "signing_key_id": "registry-test-vector-1",
+        "verified": true,
+        "verified_at": "2026-10-22T14:03:13Z",
+        "failure_reason": null,
+        "received_at": "2026-10-22T14:03:13Z"
+      }
+    }
+  ],
+  "tokens": [
+    {
+      "token_kind": "ASSET",
+      "token": "e22fc7ef047e847a5da1987c5c08a0d05d0d589baa16aec24906bd069a0d0a9e",
+      "key_version": "1.1",
+      "created_at": "2026-10-22T14:03:10Z"
+    },
+    {
+      "token_kind": "VIN",
+      "token": "c2c0f1deb4bd20c282051abe6b78b5a3e308b9206b09162977c0246f10d34342",
+      "key_version": "1.1",
+      "created_at": "2026-10-22T14:03:10Z"
+    },
+    {
+      "token_kind": "BORROWER",
+      "token": "f08f2004b7e8cd3049b98b8a4cd5a3bf6f18bc636fed4767f9f668c4bc49c706",
+      "key_version": "1.1",
+      "created_at": "2026-10-22T14:03:10Z"
+    },
+    {
+      "token_kind": "AMOUNT_EXACT",
+      "token": "de3d6fa9f88f3668b7c299cc687db73d8f204eb0023f3f5c2292b4d9e5e3f321",
+      "key_version": "1.1",
+      "created_at": "2026-10-22T14:03:10Z"
+    },
+    {
+      "token_kind": "AMOUNT_100",
+      "token": "83cc219c92ae2e2c33ca4928131783de3403aefc5e3acebe58464db0b269ae07",
+      "key_version": "1.1",
+      "created_at": "2026-10-22T14:03:10Z"
+    },
+    {
+      "token_kind": "AMOUNT_1000",
+      "token": "14315d38b5f0b76e519c5f592e425c3f1fbf79185360d21412b9f56a7ee4f8c9",
+      "key_version": "1.1",
+      "created_at": "2026-10-22T14:03:10Z"
+    },
+    {
+      "token_kind": "DATE_DAY",
+      "token": "1d19af21b767dcdd1a987a84f453aee4d6ad611cd7d99694210f7a1690171da5",
+      "key_version": "1.1",
+      "created_at": "2026-10-22T14:03:10Z"
+    },
+    {
+      "token_kind": "DATE_MONTH",
+      "token": "4722c9ba462c7c4e9db01698b349439a36e6e1b21c252652e51fe734e347a0b7",
+      "key_version": "1.1",
+      "created_at": "2026-10-22T14:03:10Z"
+    }
+  ],
+  "alerts": [
+    {
+      "alert_id": "0853df78-eeff-5f11-b3be-342bd7849015",
+      "registry_case_id": "8b8a6c95-0dd0-5e9f-8858-c88ffc234d89",
+      "loan_id": "0e536c29-42d9-5a1a-b251-7e4eb929e6da",
+      "role": "CLAIMANT",
+      "match_kind": "EXACT",
+      "match_basis": "ASSET",
+      "kinds_matched": [
+        "ASSET",
+        "VIN",
+        "BORROWER",
+        "AMOUNT_EXACT",
+        "AMOUNT_100",
+        "AMOUNT_1000",
+        "DATE_DAY",
+        "DATE_MONTH"
+      ],
+      "kinds_not_matched": [],
+      "explanation_text": "Another registry member already holds a lock on this vehicle, so this pledge was not locked. The other pledge agrees with this loan on every compared field: vehicle, borrower, original amount and origination date. This is the pattern of the same loan pledged twice. The registry does not reveal who the other member is. Review the loan with the lender and record the bank's position on the case.",
+      "explanation_source": "TEMPLATE",
+      "status": "NEW",
+      "case_status": "OPEN",
+      "bank_position": null,
+      "note": null,
+      "received_at": "2026-10-22T14:03:12Z",
+      "reviewed_by": null,
+      "reviewed_at": null
+    }
+  ],
+  "audit": [
+    {
+      "audit_id": "1e5b7cf9-2e62-5d46-9767-cc0ffc6e0ab6",
+      "seq": 41,
+      "at": "2026-10-22T14:03:05.120394Z",
+      "actor_type": "USER",
+      "actor_user_id": "14ff3116-f98b-5946-97f7-cc1a3e0ea087",
+      "action": "TAPE_UPLOADED",
+      "object_type": "TAPE_SUBMISSION",
+      "object_id": "a998c317-4917-56ec-a147-64f2358618ad",
+      "outcome": "SUCCESS",
+      "request_id": "025057a8-cdd8-54db-8759-04bf7958f9b8",
+      "detail": {
+        "kind": "PLEDGE",
+        "row_count": 3,
+        "file_sha256": "8027a54eef712d07706425db402d1af70c781ff0f1e074d2c9dd0beb28b77611"
+      },
+      "prev_hash": "84fd9bac333ad79154348296204fa7f8c537a96e08983e5f73b3f5aca8e8edf7",
+      "entry_hash": "bbfafc98b3d75bf8e126c0cdbefc39fef41cbd2ae82bfbf0fe3ced15bb4fd53d"
+    },
+    {
+      "audit_id": "ac2803f3-bd04-5745-9c3c-204a62ba0248",
+      "seq": 42,
+      "at": "2026-10-22T14:03:06.482911Z",
+      "actor_type": "SYSTEM",
+      "actor_user_id": null,
+      "action": "TAPE_STAGE_ADVANCED",
+      "object_type": "TAPE_SUBMISSION",
+      "object_id": "a998c317-4917-56ec-a147-64f2358618ad",
+      "outcome": "SUCCESS",
+      "request_id": null,
+      "detail": {
+        "from": "RECEIVED",
+        "to": "CLEANED",
+        "rows_rejected": 0,
+        "rows_fixed": 1
+      },
+      "prev_hash": "bbfafc98b3d75bf8e126c0cdbefc39fef41cbd2ae82bfbf0fe3ced15bb4fd53d",
+      "entry_hash": "7ae0e598c429f0c07fee7b0993cb119aaa2195077bbcf763960c6763e8de20ad"
+    }
+  ]
+}

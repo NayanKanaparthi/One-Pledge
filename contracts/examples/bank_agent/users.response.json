@@ -1,0 +1,31 @@
+{
+  "items": [
+    {
+      "user_id": "5cd55505-56ae-57f5-b801-767bdd2a3920",
+      "email": "admin@northgate.example",
+      "display_name": "Nia Admin",
+      "role": "ADMIN",
+      "active": true,
+      "created_at": "2026-09-30T08:00:00Z"
+    },
+    {
+      "user_id": "14ff3116-f98b-5946-97f7-cc1a3e0ea087",
+      "email": "analyst@northgate.example",
+      "display_name": "Nora Analyst",
+      "role": "ANALYST",
+      "active": true,
+      "created_at": "2026-09-30T08:00:00Z"
+    },
+    {
+      "user_id": "bffd8d7a-0a79-5119-9605-02ba245c0a17",
+      "email": "officer@northgate.example",
+      "display_name": "Owen Officer",
+      "role": "CREDIT_OFFICER",
+      "active": true,
+      "created_at": "2026-09-30T08:00:00Z"
+    }
+  ],
+  "total": 3,
+  "limit": 50,
+  "offset": 0
+}

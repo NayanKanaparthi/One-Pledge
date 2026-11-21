@@ -1,0 +1,63 @@
+{
+  "items": [
+    {
+      "submission_id": "a998c317-4917-56ec-a147-64f2358618ad",
+      "facility_id": "e8ed64fc-a2ab-5f75-b8b6-81385d74ce5f",
+      "kind": "PLEDGE",
+      "source": "FILE_UPLOAD",
+      "file_name": "S03_NORTHGATE_SUMMIT_PLEDGE.csv",
+      "file_sha256": "8027a54eef712d07706425db402d1af70c781ff0f1e074d2c9dd0beb28b77611",
+      "as_of_date": "2026-10-22",
+      "row_count": 3,
+      "status": "COMPLETED",
+      "failed_stage": null,
+      "failure_code": null,
+      "attempts": 0,
+      "uploaded_by": "14ff3116-f98b-5946-97f7-cc1a3e0ea087",
+      "uploaded_at": "2026-10-22T14:03:05Z",
+      "updated_at": "2026-10-22T14:03:13Z",
+      "completed_at": "2026-10-22T14:03:13Z",
+      "counts": {
+        "rows": 3,
+        "rows_rejected": 0,
+        "rows_fixed": 1,
+        "loans_accepted": 3,
+        "loans_held_local": 0,
+        "items_submitted": 3,
+        "items_locked": 2,
+        "items_conflict": 1,
+        "items_released": 0,
+        "items_rejected": 0
+      },
+      "stage_history": [
+        {
+          "status": "RECEIVED",
+          "at": "2026-10-22T14:03:05Z"
+        },
+        {
+          "status": "CLEANED",
+          "at": "2026-10-22T14:03:06Z"
+        },
+        {
+          "status": "CHECKED",
+          "at": "2026-10-22T14:03:09Z"
+        },
+        {
+          "status": "TOKENIZED",
+          "at": "2026-10-22T14:03:10Z"
+        },
+        {
+          "status": "SUBMITTED",
+          "at": "2026-10-22T14:03:12Z"
+        },
+        {
+          "status": "COMPLETED",
+          "at": "2026-10-22T14:03:13Z"
+        }
+      ]
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}

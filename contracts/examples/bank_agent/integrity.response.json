@@ -1,0 +1,84 @@
+{
+  "status": "OK",
+  "generated_at": "2026-10-22T14:05:00Z",
+  "last_deep_verification_at": "2026-10-22T14:04:30Z",
+  "registry_chain": {
+    "status": "OK",
+    "checkpoints_received": 1,
+    "checkpoints_verified": 1,
+    "last_verified": {
+      "checkpoint_seq": 1,
+      "last_event_seq": 6,
+      "head_hash": "f3f435a3ccf9e47009bbd36804ee18e6c09ae4bd660e65afe70700fa4e5e69b3",
+      "verified_at": "2026-10-22T14:03:13Z"
+    },
+    "failures": []
+  },
+  "certificates": {
+    "status": "OK",
+    "total": 1,
+    "verified": 1,
+    "failures": []
+  },
+  "audit_log": {
+    "status": "OK",
+    "entries": 57,
+    "last_seq": 57,
+    "first_bad_seq": null
+  },
+  "raw_data": {
+    "status": "OK",
+    "submissions_checked": 1,
+    "rows_checked": 3,
+    "bad_submission_ids": []
+  },
+  "database_controls": {
+    "status": "OK",
+    "controls": [
+      {
+        "name": "LOANS_RAW_IMMUTABILITY_TRIGGER_ENABLED",
+        "ok": true
+      },
+      {
+        "name": "AUDIT_LOG_IMMUTABILITY_TRIGGER_ENABLED",
+        "ok": true
+      },
+      {
+        "name": "EVIDENCE_TABLES_IMMUTABILITY_TRIGGERS_ENABLED",
+        "ok": true
+      },
+      {
+        "name": "LOAN_STATE_GUARD_TRIGGER_ENABLED",
+        "ok": true
+      },
+      {
+        "name": "AUDIT_CHAIN_GUARD_TRIGGER_ENABLED",
+        "ok": true
+      },
+      {
+        "name": "APP_ROLE_CANNOT_UPDATE_LOANS_RAW",
+        "ok": true
+      },
+      {
+        "name": "APP_ROLE_CANNOT_DELETE_LOANS_RAW",
+        "ok": true
+      },
+      {
+        "name": "APP_ROLE_CANNOT_UPDATE_AUDIT_LOG",
+        "ok": true
+      },
+      {
+        "name": "APP_ROLE_CANNOT_DELETE_AUDIT_LOG",
+        "ok": true
+      },
+      {
+        "name": "APP_ROLE_IS_NOT_OWNER_OR_SUPERUSER",
+        "ok": true
+      },
+      {
+        "name": "SCHEMA_AT_MIGRATION_HEAD",
+        "ok": true
+      }
+    ]
+  }
+}

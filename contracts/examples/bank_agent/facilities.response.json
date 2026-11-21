@@ -1,0 +1,29 @@
+{
+  "items": [
+    {
+      "facility_id": "e8ed64fc-a2ab-5f75-b8b6-81385d74ce5f",
+      "code": "NORTHGATE-SUMMIT",
+      "name": "Summit Auto Warehouse Line",
+      "lender": {
+        "lender_id": "12c4ac2a-a197-53f5-9656-ea2c89ae2412",
+        "legal_name": "Summit Auto Finance LLC",
+        "lei": "00000ONEPLEDGESUM134"
+      },
+      "credit_limit_cents": 7500000000,
+      "advance_rate_bps": 8500,
+      "status": "ACTIVE",
+      "opened_on": "2025-03-01",
+      "loan_counts": {
+        "PENDING": 0,
+        "HELD_LOCAL": 0,
+        "LOCKED": 2,
+        "CONFLICT": 1,
+        "RELEASED": 0
+      },
+      "locked_balance_cents": 4871230
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}

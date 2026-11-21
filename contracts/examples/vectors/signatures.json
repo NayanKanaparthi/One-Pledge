@@ -1,0 +1,29 @@
+{
+  "warning": "TEST VECTOR ONLY. The signing seed is public. Never configure it in a running registry.",
+  "canonical_json_rule": "json.dumps(obj, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False).encode('utf-8')",
+  "signing_key_id": "registry-test-vector-1",
+  "signing_seed_b64": "DP3afnn9U4kvHSTTOnmV/d5h6POpF7+HXlvpoJZtrz8=",
+  "public_key_b64": "BlflaowBg3VkeFNDcT9cKZFMgLkwYA7l+SNUMxWPOVQ=",
+  "certificate": {
+    "file": "registry/certificate.response.json",
+    "canonical_body_utf8": "{\"as_of_seq\":6,\"certificate_id\":\"2426ba86-decd-54ff-a844-9f712adb8354\",\"issued_at\":\"2026-10-22T14:03:11Z\",\"items\":[{\"asset_token\":\"e22fc7ef047e847a5da1987c5c08a0d05d0d589baa16aec24906bd069a0d0a9e\",\"status\":\"HELD\"},{\"asset_token\":\"260e923be1c788bc7906b060b6f6e03787f613bf99e3487c1e72e75c279c9049\",\"status\":\"LOCKED\"},{\"asset_token\":\"1da47871080e17cc219af1c18c16962b3ce5aa9379b309f8644e0cb8b55a5def\",\"status\":\"LOCKED\"}],\"key_version\":\"1.1\",\"kind\":\"PLEDGE\",\"member_id\":\"b22cfcf4-0e9d-5315-8781-283c4872ae4e\",\"schema_version\":1,\"submission_id\":\"ed8d28bd-cddf-5c6b-b4c8-5b7f744af329\",\"summary\":{\"checked\":3,\"held\":1,\"locked\":2,\"rejected\":0,\"released\":0}}",
+    "body_hash": "837ff95ff4abe1fa43968897a9eecba8132d34d65f2b60d96fbaa7e02c14f38c",
+    "signature": "rAsIBX6dpXwAoRRtA2+qqaqO4oxyAqM5/+MNYCwRbfuEiS4HoSIh1QFcxNn9JaFyP/YMfq/nOvK5X92TPAMyAg=="
+  },
+  "checkpoint": {
+    "file": "registry/checkpoint_latest.response.json",
+    "canonical_body_utf8": "{\"checkpoint_seq\":1,\"head_hash\":\"f3f435a3ccf9e47009bbd36804ee18e6c09ae4bd660e65afe70700fa4e5e69b3\",\"last_event_seq\":6,\"schema_version\":1,\"signed_at\":\"2026-10-22T14:03:12Z\"}",
+    "signature": "bbGLIDTligHIdefkZjnPf4LCqv4QUcwEPX5979voqL3MZlujOW9chcckQdLctpbZMq8vBlX37inRRviZvhcSBA=="
+  },
+  "ledger_event": {
+    "file": "registry/ledger_events.headers.response.json",
+    "seq": 1,
+    "payload": {
+      "member_id": "b22cfcf4-0e9d-5315-8781-283c4872ae4e"
+    },
+    "canonical_payload_utf8": "{\"member_id\":\"b22cfcf4-0e9d-5315-8781-283c4872ae4e\"}",
+    "payload_hash": "d55b66bcdd2ee00c4dacf770ca21203e9e9c5da7e369c8c1f42afe96348f3245",
+    "canonical_header_utf8": "{\"event_type\":\"MEMBER_JOINED\",\"payload_hash\":\"d55b66bcdd2ee00c4dacf770ca21203e9e9c5da7e369c8c1f42afe96348f3245\",\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"recorded_at\":\"2026-09-30T09:00:00Z\",\"schema_version\":1,\"seq\":1}",
+    "event_hash": "707751a58e6a23116455b209d6c5b280a223dfd5f8005cabdcc47264421be7cd"
+  }
+}
