@@ -1,4 +1,4 @@
-"""The contract checker `onepledge-contracts check` (SPEC 7.4).
+"""The contract checker `onepledge-contracts check` (SPEC 7.4), shipped in the TEST DOUBLES package.
 
 It validates the four OpenAPI files, every example against its schema, the
 example references, and recomputes the published test vectors. It ships with the

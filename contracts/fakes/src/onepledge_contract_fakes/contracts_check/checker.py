@@ -1,4 +1,7 @@
-"""The four checks of `onepledge-contracts check` (SPEC 7.4)."""
+"""The four checks of `onepledge-contracts check` (SPEC 7.4).
+
+Part of the contract checker in the TEST DOUBLES package `onepledge_contract_fakes`.
+"""
 
 from __future__ import annotations
 

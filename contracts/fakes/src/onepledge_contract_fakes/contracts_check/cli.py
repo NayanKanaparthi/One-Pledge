@@ -1,4 +1,7 @@
-"""Command line of the contract checker: `onepledge-contracts check [--contracts-dir DIR]`."""
+"""Command line of the contract checker: `onepledge-contracts check [--contracts-dir DIR]`.
+
+Part of the TEST DOUBLES package `onepledge_contract_fakes`; it checks contracts and is not a service.
+"""
 
 from __future__ import annotations
 

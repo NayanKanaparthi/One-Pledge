@@ -1,5 +1,7 @@
 """Recomputing the published test vectors from their stated inputs (SPEC 7.4 item 4, SPEC 9).
 
+Part of the contract checker in the TEST DOUBLES package `onepledge_contract_fakes`.
+
 Tokenisation: canonical value strings of SPEC 9.2, input bytes and the two-holder
 blind OPRF of SPEC 9.3, with the fixed scalars and blind of the vector file.
 Signatures: canonical JSON, SHA-256 and Ed25519 over the certificate, checkpoint

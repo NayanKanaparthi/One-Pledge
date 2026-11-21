@@ -1,4 +1,7 @@
-"""Loading contract documents: YAML for the OpenAPI files, JSON for examples and vectors."""
+"""Loading contract documents: YAML for the OpenAPI files, JSON for examples and vectors.
+
+Part of the contract checker in the TEST DOUBLES package `onepledge_contract_fakes`.
+"""
 
 from __future__ import annotations
 

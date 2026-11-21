@@ -1,4 +1,4 @@
-"""JSON Schema 2020-12 validation against the schemas of an OpenAPI 3.1 contract.
+"""JSON Schema 2020-12 validation against the schemas of an OpenAPI 3.1 contract (TEST DOUBLES package).
 
 Used by the checker for the examples and by contract tests for live responses.
 Formats `date`, `date-time` and `uuid` are checked by this module itself, so the
