@@ -49,11 +49,6 @@ class CleanedRow:
     vin: Vin
     loan: LoanValues | None
 
-    @property
-    def fixed(self) -> bool:
-        """True when cleaning changed something."""
-        return bool(self.issues)
-
 
 @dataclass(frozen=True)
 class RejectedRow:

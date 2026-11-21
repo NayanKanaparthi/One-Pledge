@@ -68,21 +68,22 @@ class IngestTape:
 
     def execute(self, command: IngestCommand) -> TapeSubmission:
         """Validate and store the tape; raises the error of the first check that fails."""
-        self._authorise(command)
+        user_id = self._authorise(command)
         try:
             parsed = self._validate(command)
-            tape = self._store(command, parsed)
+            tape = self._store(command, parsed, user_id)
         except DomainError as error:
             self._reject(command, error)
             raise
         self._faults.reached(FaultPoint.AFTER_INTAKE_COMMIT)
         return tape
 
-    def _authorise(self, command: IngestCommand) -> None:
+    def _authorise(self, command: IngestCommand) -> uuid.UUID:
+        """The uploading user's id, or an audited `ForbiddenError`."""
         operation = self._policy.upload_operation(command.kind)
-        role = command.actor.role
-        if role is not None and command.actor.user_id is not None and self._policy.allows(role, operation):
-            return
+        role, user_id = command.actor.role, command.actor.user_id
+        if role is not None and user_id is not None and self._policy.allows(role, operation):
+            return user_id
         route = self._policy.route(operation)
         with self._units() as unit:
             unit.record(
@@ -109,10 +110,7 @@ class IngestTape:
             raise ValidationFailedError((ErrorDetail("as_of_date", "OUT_OF_RANGE"),))
         return parsed
 
-    def _store(self, command: IngestCommand, parsed: ParsedTape) -> TapeSubmission:
-        user_id = command.actor.user_id
-        if user_id is None:
-            raise ForbiddenError
+    def _store(self, command: IngestCommand, parsed: ParsedTape, user_id: uuid.UUID) -> TapeSubmission:
         now = self._clock.now()
         facts = TapeFacts(
             submission_id=self._ids.new_id(),

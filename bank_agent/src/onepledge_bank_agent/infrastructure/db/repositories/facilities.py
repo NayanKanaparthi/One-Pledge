@@ -28,8 +28,11 @@ class SqlFacilityRepository:
             .join(LenderRow, LenderRow.lender_id == FacilityRow.lender_id)
             .where(FacilityRow.facility_id == facility_id)
         )
-        row = self._session.execute(statement).tuples().first()
-        return facility_from_rows(*row) if row is not None else None
+        row = self._session.execute(statement).first()
+        if row is None:
+            return None
+        facility_row, lender_row = row
+        return facility_from_rows(facility_row, lender_row)
 
     def upsert_lender(self, lender: Lender) -> None:
         """Insert, or update name and LEI of, the lender with this id."""

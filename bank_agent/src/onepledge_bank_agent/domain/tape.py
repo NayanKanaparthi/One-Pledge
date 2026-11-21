@@ -39,15 +39,6 @@ RETRYABLE_FAILURES: frozenset[FailureCode] = frozenset(
 MAX_BACKOFF_SECONDS = 60
 
 
-def legal_tape_transitions() -> frozenset[tuple[TapeStatus | None, TapeStatus]]:
-    """Every (from, to) pair of SPEC 8.3, with None for creation; FAILED to X means X is the resume status."""
-    pairs: set[tuple[TapeStatus | None, TapeStatus]] = {(None, TapeStatus.RECEIVED)}
-    pairs.update(NEXT_STAGE.items())
-    pairs.update((status, TapeStatus.FAILED) for status in RESUMABLE)
-    pairs.update((TapeStatus.FAILED, status) for status in RESUMABLE)
-    return frozenset(pairs)
-
-
 @dataclass(frozen=True)
 class TapeFacts:
     """The immutable facts of an upload, fixed at intake."""

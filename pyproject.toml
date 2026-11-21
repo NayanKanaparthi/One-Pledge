@@ -21,6 +21,7 @@ max-complexity = 10
 
 [tool.ruff.lint.isort]
 known-first-party = [
+  "bank_testkit",
   "onepledge_contract_fakes",
   "onepledge_datagen",
   "onepledge_outside_records",
@@ -39,7 +40,9 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers --import-mode=importlib"
-testpaths = ["contracts/fakes/tests", "datagen/tests", "outside_records/tests"]
+testpaths = ["contracts/fakes/tests", "datagen/tests", "outside_records/tests", "bank_agent/tests"]
+# The bank agent tests share helpers through the `bank_testkit` package next to them.
+pythonpath = ["bank_agent/tests"]
 markers = [
   "unit: pure tests with no I/O",
   "integration: tests that use a real PostgreSQL server, the file system or child processes",

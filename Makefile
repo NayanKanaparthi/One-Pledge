@@ -7,9 +7,11 @@ PROFILE ?= full
 FORCE ?=
 
 # Installable packages, in dependency order.
-PACKAGES := contracts/fakes datagen outside_records
+PACKAGES := contracts/fakes datagen outside_records bank_agent
 # Import name of each package, used for the per package coverage gates.
 COVERAGE_PACKAGES := onepledge_contract_fakes onepledge_datagen onepledge_outside_records
+# The bank agent gate covers its domain and application layers combined (SPEC 2.2).
+BANK_CORE := */onepledge_bank_agent/domain/*,*/onepledge_bank_agent/application/*
 COVERAGE_MIN := 85
 # mypy runs once per package so that test helpers with the same file name do not collide.
 MYPY := $(PYTHON) -m mypy --config-file pyproject.toml
@@ -49,6 +51,8 @@ typecheck: ## Run mypy in strict mode over every source and test tree
 	@$(MYPY) datagen/src datagen/tests
 	@echo "typecheck: outside_records"
 	@$(MYPY) outside_records/src outside_records/tests outside_records/migrations
+	@echo "typecheck: bank_agent"
+	@MYPYPATH=outside_records/src $(MYPY) bank_agent/src bank_agent/tests bank_agent/migrations
 
 contracts-check: ## Validate the contracts, their examples and the test vectors
 	@echo "contracts-check: onepledge-contracts check"
@@ -57,7 +61,12 @@ contracts-check: ## Validate the contracts, their examples and the test vectors
 test: ## Run every test of every package with the coverage gates
 	@echo "test: pytest with coverage"
 	@$(PYTHON) -m coverage erase
-	@$(PYTHON) -m pytest $(TEST_PATHS) -q $(foreach m,$(COVERAGE_PACKAGES),--cov=$(m)) --cov-branch --cov-report=
+	@$(PYTHON) -m pytest $(TEST_PATHS) -q $(foreach m,$(COVERAGE_PACKAGES),--cov=$(m)) \
+		--cov=onepledge_bank_agent --cov-branch --cov-report=
+	@echo "test: coverage gate for onepledge_bank_agent domain and application (minimum $(COVERAGE_MIN)%)"
+	@$(PYTHON) -m coverage report --include="$(BANK_CORE)" --fail-under=$(COVERAGE_MIN) --format=total \
+		| awk '{print "test: onepledge_bank_agent domain and application coverage " $$0 "%"}'
+	@$(PYTHON) -m coverage report --include="$(BANK_CORE)" --fail-under=$(COVERAGE_MIN) > /dev/null || exit 1
 	@for m in $(COVERAGE_PACKAGES); do \
 		echo "test: coverage gate for $$m (minimum $(COVERAGE_MIN)%)"; \
 		$(PYTHON) -m coverage report --include="*/$$m/*" --fail-under=$(COVERAGE_MIN) --format=total \
