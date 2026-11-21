@@ -121,7 +121,11 @@ def test_inconsistent_urls_are_refused(owner: str, app: str, fragment: str) -> N
 
 @pytest.mark.parametrize(
     ("url", "fragment"),
-    [("not a url", "malformed"), ("mysql://u:p@h/db", "postgresql://"), ("sqlite:///x.db", "postgresql://")],
+    [
+        ("not a url", "malformed"),
+        ("mysql://u:p@h/db", "postgresql://"),
+        ("mssql://u:p@h/db", "postgresql://"),
+    ],
 )
 def test_only_postgresql_urls_are_accepted(url: str, fragment: str) -> None:
     with pytest.raises(OperatorError, match=fragment):
