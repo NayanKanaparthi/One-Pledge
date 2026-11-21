@@ -91,6 +91,7 @@ class DataSetView:
     facilities: Mapping[str, FacilityView]
     case_rows: tuple[KeyRow, ...]
     messiness: tuple[KeyMessiness, ...]
+    inherent_fixes: Mapping[str, frozenset[str]]
     tapes: Mapping[str, bytes]
     titles: tuple[TitleRecord, ...]
     payments: tuple[PaymentRecord, ...]
@@ -233,3 +234,14 @@ def parse_answer_key(document: object) -> tuple[tuple[KeyRow, ...], tuple[KeyMes
         for entry in _list(document, "messiness", "answer key")
     )
     return tuple(rows), messiness
+
+
+def parse_inherent_fixes(document: object) -> dict[str, frozenset[str]]:
+    """The answer key's `inherent_fixes`: facility code to the FIXED problems its format always causes."""
+    found = _field(document, "inherent_fixes", "answer key")
+    if not isinstance(found, dict) or not all(
+        isinstance(code, str) and isinstance(problems, list) and all(isinstance(p, str) for p in problems)
+        for code, problems in found.items()
+    ):
+        raise DataSetUnreadableError("answer key has a malformed inherent_fixes map.")
+    return {code: frozenset(problems) for code, problems in found.items()}

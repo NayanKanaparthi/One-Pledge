@@ -5,7 +5,9 @@ from __future__ import annotations
 import io
 import json
 import shutil
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -95,3 +97,72 @@ def test_verify_checks_the_example_contract_files(example_dir: Path, tmp_path: P
     expected.write_text(expected.read_text().replace("PENDING", "HELD_LOCAL", 1))
     code, _, err = run("verify", "--data-dir", str(copy))
     assert code == 1 and "differs from the oracle's results" in err
+
+
+LAKESIDE_FIX = ["BORROWER_REF_NORMALISED"]
+
+
+def test_the_key_declares_the_inherent_fixes_of_every_facility(small_dir: Path, example_dir: Path) -> None:
+    small = json.loads((small_dir / "answer_key" / "answer_key.json").read_text())
+    assert small["inherent_fixes"] == {
+        "CALDER-SUMMIT": [],
+        "HARBOR-LAKESIDE": LAKESIDE_FIX,
+        "HARBOR-SUMMIT": [],
+        "NORTHGATE-LAKESIDE": LAKESIDE_FIX,
+        "NORTHGATE-SUMMIT": [],
+    }
+    example = json.loads((example_dir / "answer_key" / "answer_key.json").read_text())
+    assert example["inherent_fixes"] == {"HARBOR-SUMMIT": []}
+
+
+def tampered_key(source: Path, target: Path, change: Callable[[dict[str, Any]], None]) -> Path:
+    shutil.copytree(source, target)
+    key_path = target / "answer_key" / "answer_key.json"
+    key = json.loads(key_path.read_text())
+    change(key)
+    key_path.write_text(json.dumps(key))
+    return target
+
+
+def test_verify_refuses_a_key_without_the_lakeside_inherent_fix(small_dir: Path, tmp_path: Path) -> None:
+    def drop(key: dict[str, Any]) -> None:
+        key["inherent_fixes"]["HARBOR-LAKESIDE"] = []
+
+    code, _, err = run("verify", "--data-dir", str(tampered_key(small_dir, tmp_path / "copy", drop)))
+    assert code == 1
+    assert (
+        "answer key inherent_fixes of HARBOR-LAKESIDE is [], its lender format causes "
+        "['BORROWER_REF_NORMALISED']" in err
+    )
+    assert "(baseline): cleaning problems ['BORROWER_REF_NORMALISED'] instead of []" in err
+
+
+def test_verify_refuses_an_inherent_fix_the_format_does_not_cause(small_dir: Path, tmp_path: Path) -> None:
+    def add(key: dict[str, Any]) -> None:
+        key["inherent_fixes"]["HARBOR-SUMMIT"] = ["WHITESPACE_TRIMMED"]
+
+    code, _, err = run("verify", "--data-dir", str(tampered_key(small_dir, tmp_path / "copy", add)))
+    assert code == 1
+    assert "inherent_fixes of HARBOR-SUMMIT is ['WHITESPACE_TRIMMED'], its lender format causes []" in err
+
+
+def test_verify_refuses_a_key_that_omits_a_facility(small_dir: Path, tmp_path: Path) -> None:
+    def omit(key: dict[str, Any]) -> None:
+        del key["inherent_fixes"]["CALDER-SUMMIT"]
+
+    code, _, err = run("verify", "--data-dir", str(tampered_key(small_dir, tmp_path / "copy", omit)))
+    assert code == 1
+    assert "reference.json has ['CALDER-SUMMIT', 'HARBOR-LAKESIDE'" in err
+
+
+@pytest.mark.parametrize(
+    "value", [None, ["BORROWER_REF_NORMALISED"], {"HARBOR-SUMMIT": "WHITESPACE_TRIMMED"}]
+)
+def test_verify_refuses_a_malformed_inherent_fixes_map(
+    small_dir: Path, tmp_path: Path, value: object
+) -> None:
+    def replace(key: dict[str, Any]) -> None:
+        key["inherent_fixes"] = value
+
+    code, _, err = run("verify", "--data-dir", str(tampered_key(small_dir, tmp_path / "copy", replace)))
+    assert (code, err) == (1, "answer key has a malformed inherent_fixes map.\n")

@@ -2,8 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from onepledge_datagen import GENERATOR_VERSION
 from onepledge_datagen.application.workspace import Expectation, TapeRow, Workspace
+from onepledge_datagen.domain import catalog
+from onepledge_datagen.domain.tape_format import format_for
+
+
+def inherent_fixes_json(facility_codes: Iterable[str]) -> dict[str, list[str]]:
+    """FIXED problems each facility's lender format always causes, by facility code (SPEC_DECISIONS 1)."""
+    return {
+        code: sorted(format_for(catalog.facility(code).lender_code).inherent_fixes)
+        for code in sorted(set(facility_codes))
+    }
 
 
 def expectation_json(expected: Expectation) -> dict[str, object]:
@@ -70,6 +82,7 @@ class AnswerKeyBuilder:
             "generator_version": GENERATOR_VERSION,
             "seed": seed,
             "profile": profile,
+            "inherent_fixes": inherent_fixes_json(s.facility_code for s in workspace.steps.values()),
             "cases": cases,
             "messiness": messiness,
             "baseline": {"expected": {"disposition": "ACCEPTED", "outcome": "LOCKED", "alert": None}},

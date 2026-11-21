@@ -101,6 +101,7 @@ class InvariantChecker:
         self._check_vins(view, records, report)
         self._check_case_wiring(view, report)
         self._check_labels(view, report)
+        self._check_inherent_fixes(view, report)
         self._check_outcomes(view, report)
         report.violations = list(dict.fromkeys(report.violations))
         report.rows_checked = sum(len(rows) for rows in records.values())
@@ -187,6 +188,23 @@ class InvariantChecker:
             if found:
                 report.violations.append(f"{name} contains the label words {found}")
 
+    @staticmethod
+    def _check_inherent_fixes(view: DataSetView, report: CheckReport) -> None:
+        """The key declares, for every facility, exactly the fixes its lender's format always causes."""
+        if set(view.inherent_fixes) != set(view.facilities):
+            report.violations.append(
+                f"answer key inherent_fixes names {sorted(view.inherent_fixes)}, "
+                f"reference.json has {sorted(view.facilities)}"
+            )
+        for code, facility in view.facilities.items():
+            declared = view.inherent_fixes.get(code)
+            wanted = format_for(facility.lender_code).inherent_fixes
+            if declared is not None and declared != wanted:
+                report.violations.append(
+                    f"answer key inherent_fixes of {code} is {sorted(declared)}, "
+                    f"its lender format causes {sorted(wanted)}"
+                )
+
     def _check_outcomes(self, view: DataSetView, report: CheckReport) -> None:
         facilities = {
             code: FacilityTerms(f.bank_code, f.lender_legal_name, f.lender_lei)
@@ -211,10 +229,7 @@ class InvariantChecker:
 
     @staticmethod
     def _expectations(view: DataSetView) -> dict[tuple[str, int], RowExpectation]:
-        fixes = {
-            s.step_id: format_for(view.facilities[s.facility_code].lender_code).inherent_fixes
-            for s in view.steps
-        }
+        fixes = {s.step_id: view.inherent_fixes.get(s.facility_code, frozenset()) for s in view.steps}
         expectations: dict[tuple[str, int], RowExpectation] = {}
         for step in view.steps:
             for number in range(1, step.data_rows + 1):

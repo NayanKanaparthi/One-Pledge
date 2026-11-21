@@ -14,7 +14,13 @@ from onepledge_datagen.application.model import (
     TITLES,
     DataSetModel,
 )
-from onepledge_datagen.application.view import DataSetView, parse_answer_key, parse_facilities, parse_steps
+from onepledge_datagen.application.view import (
+    DataSetView,
+    parse_answer_key,
+    parse_facilities,
+    parse_inherent_fixes,
+    parse_steps,
+)
 from onepledge_datagen.domain.errors import DataSetUnreadableError
 from onepledge_datagen.infrastructure.csv_files import (
     parse_contracts,
@@ -49,7 +55,8 @@ class FileCodec:
         """The typed view; a missing or malformed file raises DataSetUnreadableError."""
         manifest = self._json(files, MANIFEST)
         reference = self._json(files, REFERENCE)
-        case_rows, messiness = parse_answer_key(self._json(files, ANSWER_KEY))
+        answer_key = self._json(files, ANSWER_KEY)
+        case_rows, messiness = parse_answer_key(answer_key)
         steps = parse_steps(manifest)
         scanned = {path: files[path].decode("utf-8", errors="replace") for path in self._scanned_paths(files)}
         if not isinstance(manifest, dict) or not isinstance(manifest.get("seed"), int):
@@ -61,6 +68,7 @@ class FileCodec:
             facilities=parse_facilities(reference),
             case_rows=case_rows,
             messiness=messiness,
+            inherent_fixes=parse_inherent_fixes(answer_key),
             tapes={step.file: self._file(files, step.file) for step in steps},
             titles=tuple(parse_titles(self._file(files, TITLES))),
             payments=tuple(parse_payments(self._file(files, PAYMENTS))),

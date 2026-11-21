@@ -58,6 +58,14 @@ is an addition to the SPEC 5.10 sketch so that a reason such as
 `CONTRACT_TERMS_MISMATCH` is checked too. Data quality rows are listed under `messiness`.
 Every row not named is baseline: accepted, locked, no alert.
 
+The top-level `inherent_fixes` map lists, per facility code of the profile, the FIXED
+problems that facility's lender format causes on every row (Lakeside references such as
+`LK-123456` always give `BORROWER_REF_NORMALISED`; Summit causes none). It is filled from
+the same format definition the oracle uses, and `verify` refuses a key whose map omits a
+facility or differs from the format (SPEC_DECISIONS 1). An accepted row is as expected when
+its FIXED problems include the expected ones and add nothing outside its facility's
+inherent fixes.
+
 ## Updating the committed example
 
 ```
