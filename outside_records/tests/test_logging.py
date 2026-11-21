@@ -5,6 +5,9 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import socket
+import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -13,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import pytest
 import structlog
+from fastapi import FastAPI
 from sqlalchemy import Engine
 
 from onepledge_outside_records.domain.records import PaymentPage, PaymentQuery
@@ -24,7 +28,9 @@ from onepledge_outside_records.infrastructure.logging_setup import (
     configure_logging,
     scrub_vin_shapes,
 )
+from onepledge_outside_records.interface.cli import build_server
 from onepledge_outside_records.interface.http.app import create_app
+from onepledge_outside_records.interface.http.plumbing import AccessLogMiddleware, install_error_handlers
 
 if TYPE_CHECKING:
     from conftest import InProcessApi
@@ -49,7 +55,7 @@ def log_lines(capsys: pytest.CaptureFixture[str]) -> Iterator[Callable[[], list[
 
     def read() -> list[dict[str, Any]]:
         if not configured:
-            configure_logging("outside-records", "DEBUG")
+            configure_logging("outside_records", "DEBUG")
             configured.append(True)
         return [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
 
@@ -166,7 +172,7 @@ def test_access_records_carry_the_route_template_and_never_the_vin(
         "/v1/titles/{vin}",
     ]
     assert [r["http_status"] for r in records] == [404, 200, 404, 422, 422, 401]
-    assert all(r["method"] == "GET" and r["service"] == "outside-records" for r in records)
+    assert all(r["method"] == "GET" and r["service"] == "outside_records" for r in records)
     assert [r["client"] for r in records] == ["harbor"] * 5 + [None]
     assert not any("user_id" in r or "redacted_keys" in r for r in records)
     for record in records:
@@ -205,3 +211,43 @@ def test_library_records_are_redacted_too(log_lines: Callable[[], list[dict[str,
     assert record["event"] == "library_log"
     assert record["logger"] == "sqlalchemy.engine"
     assert CANARY_VIN not in json.dumps(record)
+
+
+def raising_app() -> FastAPI:
+    """An outside records app whose payment lookup raises with a VIN in the message."""
+    app = FastAPI()
+    install_error_handlers(app)
+    app.add_middleware(AccessLogMiddleware)
+
+    @app.get("/v1/boom")
+    def boom() -> None:
+        message = f"lookup of {CANARY_VIN} failed"
+        raise RuntimeError(message)
+
+    return app
+
+
+@pytest.mark.integration
+def test_a_served_failure_writes_exactly_one_error_record(
+    log_lines: Callable[[], list[dict[str, Any]]],
+) -> None:
+    log_lines()
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    server = build_server(raising_app(), "127.0.0.1", port)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    for _ in range(100):
+        if server.started:
+            break
+        time.sleep(0.05)
+    response = httpx.get(f"http://127.0.0.1:{port}/v1/boom", timeout=5)
+    server.should_exit = True
+    thread.join(timeout=10)
+    assert (response.status_code, response.json()["error"]["code"]) == (500, "INTERNAL_ERROR")
+    records = log_lines()
+    errors = [record for record in records if record["level"] == "error"]
+    assert [record["event"] for record in errors] == ["unhandled_exception"]
+    assert {record["service"] for record in records} == {"outside_records"}
+    assert CANARY_VIN not in json.dumps(records) and "failed" not in json.dumps(records)

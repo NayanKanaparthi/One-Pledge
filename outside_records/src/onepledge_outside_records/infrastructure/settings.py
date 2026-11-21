@@ -1,7 +1,10 @@
-"""Environment settings of outside records (SPEC 3.1, 3.3).
+"""Environment settings of outside records, scoped to the command (SPEC 3.1, 3.3, SPEC_DECISIONS 22.5).
 
-The only module of this package that reads `os.environ`. Database URLs carry
-passwords, so they are held as secrets and never shown in a repr.
+The only module of this package that reads `os.environ`. `serve` builds `ServeSettings`,
+which has no field for MIGRATION_DATABASE_URL or PG_ADMIN_URL, so an owner or superuser
+credential present in the environment never reaches the serving process's objects.
+The administrative commands build `AdminSettings` and read only the variables their
+command needs. Database URLs carry passwords: they are held as secrets and never shown.
 """
 
 from __future__ import annotations
@@ -9,6 +12,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, SecretStr
@@ -17,7 +21,18 @@ from onepledge_outside_records.domain.errors import OperatorError
 
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 _ROLE_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+_PORT = re.compile(r"[0-9]{1,5}", re.ASCII)
 MAX_PORT = 65535
+
+# The variables each administrative command reads; nothing else is parsed.
+ADMIN_VARIABLES: Mapping[str, frozenset[str]] = MappingProxyType(
+    {
+        "provision": frozenset({"PG_ADMIN_URL", "MIGRATION_DATABASE_URL", "DATABASE_URL"}),
+        "migrate": frozenset({"MIGRATION_DATABASE_URL", "DB_APP_ROLE"}),
+        "seed": frozenset({"MIGRATION_DATABASE_URL"}),
+        "clients": frozenset({"MIGRATION_DATABASE_URL"}),
+    }
+)
 
 
 def read_environment() -> Mapping[str, str]:
@@ -26,52 +41,51 @@ def read_environment() -> Mapping[str, str]:
 
 
 def _missing(name: str) -> OperatorError:
-    return OperatorError(f"Configuration error: {name} is required but not set.")
+    return OperatorError(f"Configuration error: {name} is required but not set.", "CONFIGURATION_ERROR")
 
 
-class Settings(BaseModel):
-    """Immutable settings. Each command asks only for the values it needs."""
+def _invalid(sentence: str) -> OperatorError:
+    return OperatorError(f"Configuration error: {sentence}", "CONFIGURATION_ERROR")
+
+
+def _value(environ: Mapping[str, str], name: str) -> str | None:
+    text = environ.get(name, "").strip()
+    return text or None
+
+
+def _secret(environ: Mapping[str, str], name: str) -> SecretStr | None:
+    text = _value(environ, name)
+    return SecretStr(text) if text is not None else None
+
+
+def _log_level(environ: Mapping[str, str]) -> str:
+    level = (_value(environ, "LOG_LEVEL") or "INFO").upper()
+    if level not in _LOG_LEVELS:
+        raise _invalid("LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR or CRITICAL.")
+    return level
+
+
+class ServeSettings(BaseModel):
+    """What `serve` reads: BIND_HOST, PORT, DATABASE_URL (the read-only app role) and LOG_LEVEL."""
 
     model_config = ConfigDict(frozen=True)
 
     bind_host: str
     port: int | None
     database_url: SecretStr | None
-    migration_database_url: SecretStr | None
-    admin_url: SecretStr | None
-    db_app_role: str | None
     log_level: str
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> Self:
-        """Parse the variables that are present; requirements are checked per command."""
-
-        def value(name: str) -> str | None:
-            text = environ.get(name, "").strip()
-            return text or None
-
-        port_text = value("PORT")
-        if port_text is not None and (not port_text.isdigit() or not 1 <= int(port_text) <= MAX_PORT):
-            raise OperatorError("Configuration error: PORT must be a TCP port number.")
-        level = (value("LOG_LEVEL") or "INFO").upper()
-        if level not in _LOG_LEVELS:
-            raise OperatorError(
-                "Configuration error: LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR or CRITICAL."
-            )
-        role = value("DB_APP_ROLE")
-        if role is not None and not _ROLE_NAME.fullmatch(role):
-            raise OperatorError("Configuration error: DB_APP_ROLE is not a valid role name.")
-        secrets = {name: value(name) for name in ("DATABASE_URL", "MIGRATION_DATABASE_URL", "PG_ADMIN_URL")}
+        """Parse the four serving variables; requirements are checked when serving starts."""
+        port_text = _value(environ, "PORT")
+        if port_text is not None and (not _PORT.fullmatch(port_text) or not 1 <= int(port_text) <= MAX_PORT):
+            raise _invalid("PORT must be a TCP port number.")
         return cls(
-            bind_host=value("BIND_HOST") or "127.0.0.1",
+            bind_host=_value(environ, "BIND_HOST") or "127.0.0.1",
             port=int(port_text) if port_text is not None else None,
-            database_url=SecretStr(secrets["DATABASE_URL"]) if secrets["DATABASE_URL"] else None,
-            migration_database_url=(
-                SecretStr(secrets["MIGRATION_DATABASE_URL"]) if secrets["MIGRATION_DATABASE_URL"] else None
-            ),
-            admin_url=SecretStr(secrets["PG_ADMIN_URL"]) if secrets["PG_ADMIN_URL"] else None,
-            db_app_role=role,
-            log_level=level,
+            database_url=_secret(environ, "DATABASE_URL"),
+            log_level=_log_level(environ),
         )
 
     def require_port(self) -> int:
@@ -82,6 +96,40 @@ class Settings(BaseModel):
 
     def require_database_url(self) -> str:
         """DATABASE_URL (app role)."""
+        if self.database_url is None:
+            raise _missing("DATABASE_URL")
+        return self.database_url.get_secret_value()
+
+
+class AdminSettings(BaseModel):
+    """What one administrative command reads; variables it does not need stay unset."""
+
+    model_config = ConfigDict(frozen=True)
+
+    database_url: SecretStr | None
+    migration_database_url: SecretStr | None
+    admin_url: SecretStr | None
+    db_app_role: str | None
+    log_level: str
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str], command: str) -> Self:
+        """Parse the variables of `command` (a key of ADMIN_VARIABLES) and LOG_LEVEL."""
+        needed = ADMIN_VARIABLES[command]
+        scoped = {name: environ[name] for name in needed if name in environ}
+        role = _value(scoped, "DB_APP_ROLE")
+        if role is not None and not _ROLE_NAME.fullmatch(role):
+            raise _invalid("DB_APP_ROLE is not a valid role name.")
+        return cls(
+            database_url=_secret(scoped, "DATABASE_URL"),
+            migration_database_url=_secret(scoped, "MIGRATION_DATABASE_URL"),
+            admin_url=_secret(scoped, "PG_ADMIN_URL"),
+            db_app_role=role,
+            log_level=_log_level(environ),
+        )
+
+    def require_database_url(self) -> str:
+        """DATABASE_URL (app role), read by `db provision` for the role name and password."""
         if self.database_url is None:
             raise _missing("DATABASE_URL")
         return self.database_url.get_secret_value()
@@ -105,14 +153,22 @@ class Settings(BaseModel):
         return self.db_app_role
 
 
-def load_settings() -> Settings:
-    """Settings from the process environment."""
-    return Settings.from_env(read_environment())
+def load_serve_settings() -> ServeSettings:
+    """Serving settings from the process environment."""
+    return ServeSettings.from_env(read_environment())
+
+
+def load_admin_settings(command: str) -> AdminSettings:
+    """Settings of one administrative command from the process environment."""
+    return AdminSettings.from_env(read_environment(), command)
 
 
 def read_secret_variable(name: str) -> str:
     """The value of a variable that holds a secret (for `clients add --key-env`)."""
     value = read_environment().get(name, "")
     if not value:
-        raise OperatorError(f"The environment variable {name} is not set; export the client key in it first.")
+        raise OperatorError(
+            f"The environment variable {name} is not set; export the client key in it first.",
+            "CONFIGURATION_ERROR",
+        )
     return value

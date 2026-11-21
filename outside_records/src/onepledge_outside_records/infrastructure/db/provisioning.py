@@ -22,7 +22,10 @@ _NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 def _check_names(target: DatabaseTarget) -> None:
     for name in (target.database, target.owner_role, target.app_role):
         if not _NAME.fullmatch(name):
-            raise OperatorError("Database and role names must be lower case letters, digits and underscores.")
+            raise OperatorError(
+                "Database and role names must be lower case letters, digits and underscores.",
+                "CONFIGURATION_ERROR",
+            )
 
 
 class DatabaseProvisioner:
@@ -38,7 +41,8 @@ class DatabaseProvisioner:
             return psycopg.connect(self._admin_url, autocommit=True, dbname=database)
         except psycopg.OperationalError:
             raise OperatorError(
-                "PostgreSQL is not reachable at PG_ADMIN_URL; start it or fix the URL."
+                "PostgreSQL is not reachable at PG_ADMIN_URL; start it or fix the URL.",
+                "DATABASE_UNAVAILABLE",
             ) from None
 
     def provision(self, target: DatabaseTarget) -> None:

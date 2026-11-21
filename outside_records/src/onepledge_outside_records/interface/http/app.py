@@ -6,8 +6,6 @@ needs an `X-API-Key`; `/healthz` does not.
 
 from __future__ import annotations
 
-from datetime import date
-
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -30,6 +28,7 @@ from onepledge_outside_records.domain.records import (
     VinText,
 )
 from onepledge_outside_records.interface.http.plumbing import AccessLogMiddleware, install_error_handlers
+from onepledge_outside_records.interface.http.query import MAX_OFFSET, QueryParameters
 
 
 def _title_json(record: TitleRecord) -> dict[str, object]:
@@ -63,55 +62,34 @@ def _contract_json(contract: Contract) -> dict[str, object]:
     }
 
 
-def _date(value: str | None, name: str, details: list[ErrorDetail]) -> date | None:
-    if value is None:
-        return None
-    parsed: date | None = None
-    if len(value) == len("YYYY-MM-DD"):
-        try:
-            parsed = date.fromisoformat(value)
-        except ValueError:
-            parsed = None
-    if parsed is None:
-        details.append(ErrorDetail(name, "INVALID_DATE"))
-    return parsed
-
-
-def _integer(
-    value: str | None, name: str, default: int, bounds: tuple[int, int | None], details: list[ErrorDetail]
-) -> int:
-    if value is None:
-        return default
-    if not value.isdigit():
-        details.append(ErrorDetail(name, "INVALID_INTEGER"))
-        return default
-    number = int(value)
-    low, high = bounds
-    if number < low or (high is not None and number > high):
-        details.append(ErrorDetail(name, "OUT_OF_RANGE"))
-    return number
+PAYMENT_PARAMETERS = ("vin", "from", "to", "limit", "offset")
 
 
 def payment_query(request: Request) -> PaymentQuery:
     """Validate the query string of `GET /v1/payments`; details name fields and issues only."""
-    params = request.query_params
-    details: list[ErrorDetail] = []
-    vin_text = params.get("vin")
+    query = QueryParameters(request.query_params.multi_items(), PAYMENT_PARAMETERS)
+    vin_text = query.text("vin")
     vin: VinText | None = None
     if vin_text is None:
-        details.append(ErrorDetail("vin", "MISSING"))
+        query.add("vin", "REQUIRED")
     else:
         try:
             vin = VinText.parse(vin_text)
         except ValidationFailedError as error:
-            details.extend(error.details)
-    paid_from = _date(params.get("from"), "from", details)
-    paid_to = _date(params.get("to"), "to", details)
-    limit = _integer(params.get("limit"), "limit", DEFAULT_LIMIT, (MIN_LIMIT, MAX_LIMIT), details)
-    offset = _integer(params.get("offset"), "offset", 0, (0, None), details)
-    if details or vin is None:
-        raise ValidationFailedError(tuple(details))
+            for detail in error.details:
+                query.add(detail.field, detail.issue)
+    paid_from, paid_to = query.date("from"), query.date("to")
+    limit = query.integer("limit", DEFAULT_LIMIT, MIN_LIMIT, MAX_LIMIT)
+    offset = query.integer("offset", 0, 0, MAX_OFFSET)
+    query.finish()
+    if vin is None:
+        raise ValidationFailedError((ErrorDetail("vin", "REQUIRED"),))
     return PaymentQuery(vin, paid_from, paid_to, limit, offset)
+
+
+def no_parameters(request: Request) -> None:
+    """A route that declares no query parameter refuses any."""
+    QueryParameters(request.query_params.multi_items(), ()).finish()
 
 
 def create_app(reader: RecordsReader) -> FastAPI:
@@ -129,6 +107,7 @@ def create_app(reader: RecordsReader) -> FastAPI:
     @app.get("/v1/titles/{vin}")
     def title(vin: str, request: Request) -> JSONResponse:
         client(request)
+        no_parameters(request)
         return JSONResponse(_title_json(get_title.run(VinText.parse(vin))))
 
     @app.get("/v1/payments")
@@ -146,11 +125,13 @@ def create_app(reader: RecordsReader) -> FastAPI:
     @app.get("/v1/contracts/{vin}")
     def contracts(vin: str, request: Request) -> JSONResponse:
         client(request)
+        no_parameters(request)
         found = get_contracts.run(VinText.parse(vin))
         return JSONResponse({"vin": found[0].vin, "contracts": [_contract_json(c) for c in found]})
 
     @app.get("/healthz")
-    def healthz() -> JSONResponse:
+    def healthz(request: Request) -> JSONResponse:
+        no_parameters(request)
         return JSONResponse({"status": "ok", "service": "outside_records"})
 
     return app

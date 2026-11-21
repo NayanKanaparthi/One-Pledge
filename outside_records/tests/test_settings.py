@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import SecretStr
 
 from onepledge_outside_records.domain.errors import OperatorError
 from onepledge_outside_records.infrastructure.db.engines import DatabaseTarget, sqlalchemy_url
-from onepledge_outside_records.infrastructure.settings import Settings, read_secret_variable
+from onepledge_outside_records.infrastructure.settings import (
+    AdminSettings,
+    ServeSettings,
+    read_secret_variable,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -27,34 +32,74 @@ def full() -> dict[str, str]:
     }
 
 
-def test_every_variable_is_read() -> None:
-    settings = Settings.from_env(full())
+def test_serve_reads_its_four_variables() -> None:
+    settings = ServeSettings.from_env(full())
     assert settings.require_database_url() == APP
-    assert settings.require_migration_url() == OWNER
-    assert settings.require_admin_url() == ADMIN
-    assert settings.require_app_role() == "opx_outside_app"
     assert settings.require_port() == 8200
     assert (settings.bind_host, settings.log_level) == ("192.0.2.10", "DEBUG")
 
 
+@pytest.mark.parametrize(
+    ("command", "methods"),
+    [
+        (
+            "provision",
+            {"require_admin_url": ADMIN, "require_migration_url": OWNER, "require_database_url": APP},
+        ),
+        ("migrate", {"require_migration_url": OWNER, "require_app_role": "opx_outside_app"}),
+        ("seed", {"require_migration_url": OWNER}),
+        ("clients", {"require_migration_url": OWNER}),
+    ],
+)
+def test_each_admin_command_reads_only_the_variables_it_needs(command: str, methods: dict[str, str]) -> None:
+    settings = AdminSettings.from_env(full(), command)
+    for method, value in methods.items():
+        assert getattr(settings, method)() == value
+    for method, variable in ADMIN_REQUIREMENTS.items():
+        if method not in methods:
+            with pytest.raises(OperatorError, match=variable):
+                getattr(settings, method)()
+
+
+def test_the_serving_settings_hold_no_owner_or_admin_credential() -> None:
+    settings = ServeSettings.from_env(full())
+    assert set(ServeSettings.model_fields) == {"bind_host", "port", "database_url", "log_level"}
+    reachable = [repr(value) for value in vars(settings).values()]
+    reachable += [
+        value.get_secret_value() for value in vars(settings).values() if isinstance(value, SecretStr)
+    ]
+    text = " ".join(reachable) + repr(settings) + settings.model_dump_json()
+    for secret in ("owner-secret-1", "admin-secret-3", OWNER, ADMIN):
+        assert secret not in text
+
+
 def test_defaults_apply_when_optional_values_are_absent_or_blank() -> None:
-    settings = Settings.from_env({"BIND_HOST": "  ", "LOG_LEVEL": ""})
+    settings = ServeSettings.from_env({"BIND_HOST": "  ", "LOG_LEVEL": ""})
     assert (settings.bind_host, settings.log_level) == ("127.0.0.1", "INFO")
 
 
 @pytest.mark.parametrize(
-    ("method", "variable"),
-    [
-        ("require_database_url", "DATABASE_URL"),
-        ("require_migration_url", "MIGRATION_DATABASE_URL"),
-        ("require_admin_url", "PG_ADMIN_URL"),
-        ("require_app_role", "DB_APP_ROLE"),
-        ("require_port", "PORT"),
-    ],
+    ("method", "variable"), [("require_database_url", "DATABASE_URL"), ("require_port", "PORT")]
 )
-def test_a_missing_value_is_named_in_one_sentence(method: str, variable: str) -> None:
+def test_a_missing_serving_value_is_named_in_one_sentence(method: str, variable: str) -> None:
     with pytest.raises(OperatorError) as raised:
-        getattr(Settings.from_env({}), method)()
+        getattr(ServeSettings.from_env({}), method)()
+    assert raised.value.sentence == f"Configuration error: {variable} is required but not set."
+    assert raised.value.code == "CONFIGURATION_ERROR"
+
+
+ADMIN_REQUIREMENTS = {
+    "require_database_url": "DATABASE_URL",
+    "require_migration_url": "MIGRATION_DATABASE_URL",
+    "require_admin_url": "PG_ADMIN_URL",
+    "require_app_role": "DB_APP_ROLE",
+}
+
+
+@pytest.mark.parametrize(("method", "variable"), ADMIN_REQUIREMENTS.items())
+def test_a_missing_admin_value_is_named_in_one_sentence(method: str, variable: str) -> None:
+    with pytest.raises(OperatorError) as raised:
+        getattr(AdminSettings.from_env({}, "provision"), method)()
     assert raised.value.sentence == f"Configuration error: {variable} is required but not set."
 
 
@@ -65,23 +110,29 @@ def test_a_missing_value_is_named_in_one_sentence(method: str, variable: str) ->
         ("PORT", "65536", "PORT"),
         ("PORT", "80a", "PORT"),
         ("PORT", "-1", "PORT"),
+        ("PORT", "\u0668\u0660", "PORT"),
         ("LOG_LEVEL", "LOUD", "LOG_LEVEL"),
-        ("DB_APP_ROLE", "App Role", "DB_APP_ROLE"),
-        ("DB_APP_ROLE", 'x"; DROP ROLE postgres; --', "DB_APP_ROLE"),
     ],
 )
-def test_a_malformed_value_is_named_but_never_shown(variable: str, value: str, fragment: str) -> None:
+def test_a_malformed_serving_value_is_named_but_never_shown(variable: str, value: str, fragment: str) -> None:
     with pytest.raises(OperatorError) as raised:
-        Settings.from_env({variable: value})
+        ServeSettings.from_env({variable: value})
     assert fragment in raised.value.sentence
     assert value not in raised.value.sentence
 
 
+@pytest.mark.parametrize("value", ["App Role", 'x"; DROP ROLE postgres; --'])
+def test_a_malformed_role_is_named_but_never_shown(value: str) -> None:
+    with pytest.raises(OperatorError) as raised:
+        AdminSettings.from_env({"DB_APP_ROLE": value}, "migrate")
+    assert "DB_APP_ROLE" in raised.value.sentence and value not in raised.value.sentence
+
+
 def test_secrets_never_appear_in_a_repr_or_a_dump() -> None:
-    settings = Settings.from_env(full())
-    shown = f"{settings!r} {settings!s} {settings.model_dump()} {settings.model_dump_json()}"
-    for secret in ("owner-secret-1", "app-secret-2", "admin-secret-3"):
-        assert secret not in shown
+    for settings in (ServeSettings.from_env(full()), AdminSettings.from_env(full(), "provision")):
+        shown = f"{settings!r} {settings!s} {settings.model_dump()} {settings.model_dump_json()}"
+        for secret in ("owner-secret-1", "app-secret-2", "admin-secret-3"):
+            assert secret not in shown
 
 
 def test_a_secret_variable_is_read_when_set(monkeypatch: pytest.MonkeyPatch) -> None:

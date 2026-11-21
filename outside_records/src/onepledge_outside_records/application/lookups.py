@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 
 from onepledge_outside_records.application.ports import RecordsReader
 from onepledge_outside_records.domain.errors import (
@@ -22,7 +21,13 @@ from onepledge_outside_records.domain.records import (
 
 
 class AuthenticateClient:
-    """Finds the active client of an `X-API-Key` by its SHA-256."""
+    """Finds the active client of an `X-API-Key`.
+
+    The stored value is the SHA-256 of a 256 bit random key, and the lookup is an indexed
+    equality on that hash in the database. Nothing is compared in memory, so there is no
+    comparison here to make constant time; an attacker who can time the lookup learns at
+    most about hashes of guesses, which reveals nothing usable about a 256 bit key.
+    """
 
     def __init__(self, reader: RecordsReader) -> None:
         self._reader = reader
@@ -31,11 +36,10 @@ class AuthenticateClient:
         """The client, or UnauthenticatedError for a missing, unknown or inactive key."""
         if not api_key:
             raise UnauthenticatedError
-        presented = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
-        found = self._reader.active_client(presented)
-        if found is None or not hmac.compare_digest(found[1], presented):
+        found = self._reader.active_client(hashlib.sha256(api_key.encode("utf-8")).hexdigest())
+        if found is None:
             raise UnauthenticatedError
-        return found[0]
+        return found
 
 
 class GetTitle:

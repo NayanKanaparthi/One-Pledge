@@ -35,17 +35,17 @@ def _rows(directory: Path, name: str) -> list[list[str]]:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         raise OperatorError(
-            f"{path} cannot be read; pass the directory written by onepledge-datagen."
+            f"{path} cannot be read; pass the directory written by onepledge-datagen.", "INVALID_INPUT"
         ) from None
     rows = list(csv.reader(io.StringIO(text, newline=""), strict=True))
     if not rows or tuple(rows[0]) != HEADERS[name] or any(len(row) != len(HEADERS[name]) for row in rows[1:]):
-        raise OperatorError(f"{path} does not have the outside records layout.")
+        raise OperatorError(f"{path} does not have the outside records layout.", "INVALID_INPUT")
     return rows[1:]
 
 
 def _vin(text: str, name: str) -> str:
     if not VIN_PATTERN.fullmatch(text):
-        raise OperatorError(f"{name} holds a VIN that does not match the contract pattern.")
+        raise OperatorError(f"{name} holds a VIN that does not match the contract pattern.", "INVALID_INPUT")
     return text
 
 
@@ -72,5 +72,7 @@ class CsvRecordsSource:
                 for r in _rows(data_dir, "contracts.csv")
             )
         except ValueError:
-            raise OperatorError("An outside records file holds a malformed date or amount.") from None
+            raise OperatorError(
+                "An outside records file holds a malformed date or amount.", "INVALID_INPUT"
+            ) from None
         return RecordSet(titles, payments, contracts)

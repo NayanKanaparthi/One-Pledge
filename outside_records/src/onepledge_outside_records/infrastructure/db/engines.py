@@ -16,9 +16,11 @@ def sqlalchemy_url(url: str) -> URL:
     try:
         parsed = make_url(url)
     except ArgumentError:
-        raise OperatorError("A database URL is malformed; check the postgresql:// variables.") from None
+        raise OperatorError(
+            "A database URL is malformed; check the postgresql:// variables.", "CONFIGURATION_ERROR"
+        ) from None
     if parsed.drivername not in ("postgresql", "postgresql+psycopg"):
-        raise OperatorError("A database URL must start with postgresql://.")
+        raise OperatorError("A database URL must start with postgresql://.", "CONFIGURATION_ERROR")
     return parsed.set(drivername="postgresql+psycopg")
 
 
@@ -61,15 +63,20 @@ class DatabaseTarget:
         """Owner from MIGRATION_DATABASE_URL, app role from DATABASE_URL; both must name the same database."""
         owner, app = sqlalchemy_url(migration_url), sqlalchemy_url(app_url)
         if not owner.database or owner.database != app.database:
-            raise OperatorError("DATABASE_URL and MIGRATION_DATABASE_URL must name the same database.")
+            raise OperatorError(
+                "DATABASE_URL and MIGRATION_DATABASE_URL must name the same database.", "CONFIGURATION_ERROR"
+            )
         owner_role, app_role = f"{owner.database}_owner", f"{owner.database}_app"
         if (owner.username, app.username) != (owner_role, app_role):
             raise OperatorError(
                 "The roles must be named {database}_owner (MIGRATION_DATABASE_URL) and {database}_app "
-                "(DATABASE_URL)."
+                "(DATABASE_URL).",
+                "CONFIGURATION_ERROR",
             )
         if not owner.password or not app.password:
-            raise OperatorError("DATABASE_URL and MIGRATION_DATABASE_URL must both carry a password.")
+            raise OperatorError(
+                "DATABASE_URL and MIGRATION_DATABASE_URL must both carry a password.", "CONFIGURATION_ERROR"
+            )
         return cls(owner.database, owner_role, owner.password, app_role, app.password)
 
     def __repr__(self) -> str:

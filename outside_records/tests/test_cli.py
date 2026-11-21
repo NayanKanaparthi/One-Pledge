@@ -11,12 +11,14 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
 
-from onepledge_outside_records.interface.cli import Console, main
+from onepledge_outside_records.infrastructure.db.migrations import MigrationRunner
+from onepledge_outside_records.interface.cli import main
+from onepledge_outside_records.interface.output import Console
 
 if TYPE_CHECKING:
     from conftest import Database
@@ -61,6 +63,11 @@ def free_port() -> int:
         return port
 
 
+def json_lines(text: str) -> list[dict[str, Any]]:
+    """Every line of a log stream, each of which must be one JSON object."""
+    return [json.loads(line) for line in text.splitlines()]
+
+
 def test_the_whole_command_sequence_on_a_fresh_database(
     run: Run, fresh_database: Database, example_dir: Path, example_records: Path, make_key: Callable[[], str]
 ) -> None:
@@ -68,13 +75,12 @@ def test_the_whole_command_sequence_on_a_fresh_database(
     name = fresh_database.target.database
     for _ in range(2):
         code, out, err = run(["db", "provision"], **env)
-        assert (code, err) == (0, "")
+        assert code == 0
+        assert all(line["service"] == "outside_records" for line in json_lines(err))
         assert out == f"Provisioned database {name} with roles {name}_owner and {name}_app.\n"
-    assert run(["db", "migrate"], **env) == (
-        0,
-        "Migrated the outside records database to the latest revision.\n",
-        "",
-    )
+    code, out, err = run(["db", "migrate"], **env)
+    assert (code, out) == (0, "Migrated the outside records database to revision 0002_grants.\n")
+    assert all(line["service"] == "outside_records" for line in json_lines(err))
     code, out, _ = run(["seed", "--data-dir", str(example_dir)], **env)
     titles, payments, contracts = (
         len((example_records / name).read_text().splitlines()) - 1
@@ -94,6 +100,72 @@ def test_the_whole_command_sequence_on_a_fresh_database(
     assert code == 0
     assert out.startswith("Client harbor is active (client id ")
     assert key not in out
+
+
+def test_json_results_are_one_document_and_logs_stay_on_stderr(
+    run: Run, fresh_database: Database, example_dir: Path, example_records: Path
+) -> None:
+    env = fresh_database.environment()
+    name = fresh_database.target.database
+    code, out, _ = run(["db", "provision", "--json"], **env)
+    assert (code, json.loads(out)) == (
+        0,
+        {"ok": True, "database": name, "owner_role": f"{name}_owner", "app_role": f"{name}_app"},
+    )
+    code, out, err = run(["db", "migrate", "--json"], **env)
+    assert (code, json.loads(out)) == (0, {"ok": True, "revision": "0002_grants"})
+    assert json_lines(err)
+    code, out, err = run(["db", "migrate", "--json", "--quiet"], **env)
+    assert (code, json.loads(out)["ok"], err) == (0, True, "")
+    code, out, _ = run(["seed", "--data-dir", str(example_dir), "--json"], **env)
+    titles = len((example_records / "titles.csv").read_text().splitlines()) - 1
+    assert json.loads(out)["tables"]["title_records"] == titles
+    code, out, err = run(["seed", "--data-dir", str(example_dir / "absent"), "--json"], **env)
+    document = json.loads(out)
+    assert (code, document["ok"], document["error"]["code"]) == (1, False, "INVALID_INPUT")
+    assert document["error"]["message"] == err.strip()
+    code, out, err = run(["db", "migrate", "--json"])
+    assert json.loads(out)["error"] == {
+        "code": "CONFIGURATION_ERROR",
+        "message": "Configuration error: MIGRATION_DATABASE_URL is required but not set.",
+    }
+
+
+def test_a_row_count_of_one_is_singular(
+    run: Run, database: Database, tmp_path: Path, copy_records: Callable[[Path], Path]
+) -> None:
+    directory = copy_records(tmp_path)
+    for name in ("titles.csv", "payments.csv", "contracts.csv"):
+        path = directory / "outside_records" / name
+        path.write_text("".join(path.read_text().splitlines(keepends=True)[:2]))
+    code, out, _ = run(["seed", "--data-dir", str(directory)], **database.environment())
+    assert code == 0
+    assert out.splitlines()[1:] == [
+        "  title_records           1 row",
+        "  payments                1 row",
+        "  contracts               1 row",
+    ]
+
+
+def test_an_unexpected_error_is_one_sentence_and_debug_adds_the_traceback(
+    run: Run, database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def explode(self: object) -> str:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(MigrationRunner, "head_revision", explode)
+    code, out, err = run(["db", "migrate"], **database.environment())
+    assert (code, out, err.splitlines()[-1]) == (1, "", "Unexpected error. Run with --debug for details.")
+    assert "Traceback" not in err
+    code, _, err = run(["db", "migrate", "--debug"], **database.environment())
+    assert code == 1 and "Traceback (most recent call last)" in err and "RuntimeError: boom" in err
+
+
+def test_serve_refuses_json_as_a_usage_error(run: Run, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as raised:
+        run(["serve", "--json"])
+    assert raised.value.code == 2
+    assert "unrecognized arguments: --json" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -213,6 +285,7 @@ def test_the_served_api_answers_and_logs_no_vin(
     stdout, stderr = process.communicate(timeout=10)
     lines = [json.loads(line) for line in stdout.decode().splitlines() if line.strip()]
     assert lines[0]["event"] == "service_started"
+    assert {line["service"] for line in lines} == {"outside_records"}
     access = [line for line in lines if line["event"] == "http_request"]
     assert [line["route"] for line in access] == [
         "/healthz",

@@ -54,13 +54,16 @@ def _owner_transaction(engine: Engine) -> Iterator[Connection]:
             yield connection
     except OperationalError:
         raise OperatorError(
-            "PostgreSQL refused the owner connection at MIGRATION_DATABASE_URL; run db provision first."
+            "PostgreSQL refused the owner connection at MIGRATION_DATABASE_URL; run db provision first.",
+            "DATABASE_UNAVAILABLE",
         ) from None
     except ProgrammingError:
-        raise OperatorError("The outside records tables are missing; run db migrate first.") from None
+        raise OperatorError(
+            "The outside records tables are missing; run db migrate first.", "NOT_MIGRATED"
+        ) from None
     except (DBAPIError, psycopg.Error):
         raise OperatorError(
-            "The database rejected the records (a constraint failed); nothing was changed."
+            "The database rejected the records (a constraint failed); nothing was changed.", "INVALID_INPUT"
         ) from None
 
 
@@ -77,7 +80,8 @@ class SqlRecordsReader:
                 connection.execute(select(ApiClientRow.client_id).limit(1))
         except DBAPIError:
             raise OperatorError(
-                "The database at DATABASE_URL cannot be read; run db provision and db migrate first."
+                "The database at DATABASE_URL cannot be read; run db provision and db migrate first.",
+                "NOT_MIGRATED",
             ) from None
 
     def title(self, vin: VinText) -> TitleRecord | None:
@@ -126,7 +130,7 @@ class SqlRecordsReader:
             for r in rows
         )
 
-    def active_client(self, api_key_sha256: str) -> tuple[ApiClient, str] | None:
+    def active_client(self, api_key_sha256: str) -> ApiClient | None:
         """The active client with this key hash."""
         statement = select(ApiClientRow).where(
             ApiClientRow.api_key_sha256 == api_key_sha256, ApiClientRow.active
@@ -135,7 +139,7 @@ class SqlRecordsReader:
             row = connection.execute(statement).first()
         if row is None:
             return None
-        return ApiClient(str(row.client_id), row.name), row.api_key_sha256
+        return ApiClient(str(row.client_id), row.name)
 
 
 class SqlRecordsWriter:
@@ -151,7 +155,9 @@ class SqlRecordsWriter:
                 connection.execute(delete(model))
             raw = connection.connection.driver_connection
             if not isinstance(raw, psycopg.Connection):
-                raise OperatorError("The owner connection does not use the psycopg driver.")
+                raise OperatorError(
+                    "The owner connection does not use the psycopg driver.", "CONFIGURATION_ERROR"
+                )
             with raw.cursor() as cursor:
                 with cursor.copy(COPY_TITLES) as copy:
                     for t in records.titles:

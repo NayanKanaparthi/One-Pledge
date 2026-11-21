@@ -67,9 +67,8 @@ class MemoryReader:
     def contracts(self, vin: VinText) -> tuple[Contract, ...]:
         return self.contracts_by_vin.get(vin.value, ())
 
-    def active_client(self, api_key_sha256: str) -> tuple[ApiClient, str] | None:
-        client = self.clients.get(api_key_sha256)
-        return None if client is None else (client, api_key_sha256)
+    def active_client(self, api_key_sha256: str) -> ApiClient | None:
+        return self.clients.get(api_key_sha256)
 
 
 @dataclass

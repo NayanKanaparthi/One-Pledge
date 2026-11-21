@@ -15,6 +15,7 @@ import sys
 import traceback
 from enum import StrEnum
 from types import TracebackType
+from typing import TextIO
 
 import structlog
 from structlog.typing import EventDict, Processor, WrappedLogger
@@ -32,6 +33,7 @@ _SAFE_VALUE = re.compile(r"^[A-Za-z0-9_.:{}/\- ]{0,128}$")
 _SAFE_STACK = re.compile(r"^[A-Za-z0-9_.:{}/\- \n<>]*$")
 _VIN_SHAPE = re.compile(r"\b[A-HJ-NPR-Z0-9]{17}\b", re.IGNORECASE)
 _MIN_VIN_DIGITS = 3
+UVICORN_APP_ERROR = "Exception in ASGI application"
 _QUIET_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access", "httpx", "httpcore", "asyncio")
 
 
@@ -115,8 +117,25 @@ class _ServiceName:
         return event_dict
 
 
-def configure_logging(service: str, level: str) -> None:
-    """Route structlog and the standard library through one JSON handler on stdout."""
+class DuplicateApplicationErrorFilter(logging.Filter):
+    """Drops uvicorn's own record of an exception that escaped the app.
+
+    The app's catch-all handler has already written the one `unhandled_exception` record
+    with its type and frames; Starlette then re-raises the exception and uvicorn would
+    log it a second time (SPEC_DECISIONS 22, finding 3). uvicorn's other records pass.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """False for the duplicate application error record."""
+        return not (record.exc_info is not None and record.getMessage().startswith(UVICORN_APP_ERROR))
+
+
+def configure_logging(service: str, level: str, stream: TextIO | None = None) -> None:
+    """Route structlog and the standard library through one JSON handler.
+
+    `service` is the contract's health value, `outside_records`. The stream is stdout for
+    `serve` and stderr for every other command (SPEC_DECISIONS 22.6, 27).
+    """
     shared: list[Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,
@@ -138,8 +157,9 @@ def configure_logging(service: str, level: str) -> None:
             structlog.processors.JSONRenderer(sort_keys=False),
         ],
     )
-    handler = logging.StreamHandler(sys.stdout)
+    handler = logging.StreamHandler(stream if stream is not None else sys.stdout)
     handler.setFormatter(formatter)
+    handler.addFilter(DuplicateApplicationErrorFilter())
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(level)

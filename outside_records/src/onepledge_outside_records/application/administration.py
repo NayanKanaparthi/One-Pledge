@@ -36,7 +36,11 @@ class RegisterClient:
     def run(self, name: str, api_key: str) -> ApiClient:
         """Validate the name and the key format, then store the key's SHA-256."""
         if not CLIENT_NAME_FORMAT.fullmatch(name):
-            raise OperatorError("The client name must be 1 to 64 letters, digits, hyphens or underscores.")
+            raise OperatorError(
+                "The client name must be 1 to 64 letters, digits, hyphens or underscores.", "INVALID_INPUT"
+            )
         if not API_KEY_FORMAT.fullmatch(api_key):
-            raise OperatorError("The API key must be opk_ followed by 43 url-safe characters.")
+            raise OperatorError(
+                "The API key must be opk_ followed by 43 url-safe characters.", "INVALID_INPUT"
+            )
         return self._registry.upsert(name, hashlib.sha256(api_key.encode("utf-8")).hexdigest())

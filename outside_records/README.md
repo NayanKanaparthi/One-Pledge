@@ -9,7 +9,8 @@ synthetic and comes from `onepledge-datagen`.
   `GET /v1/payments?vin=...`, `GET /v1/contracts/{vin}`. `GET /healthz` needs no key.
 - The API process connects as `{db}_app`, which has `SELECT` on the four tables and
   nothing else, so it cannot write even if the code tried.
-- Client keys are stored only as SHA-256 hashes and compared with `hmac.compare_digest`.
+- Client keys are stored only as SHA-256 hashes of 256 bit random keys. A request's key is
+  hashed and looked up by indexed equality on that hash; nothing is compared in memory.
 - A VIN that does not match `^[A-HJ-NPR-Z0-9]{17}$` gets 422 `VALIDATION_ERROR` with
   `details: [{"field": "vin", "issue": "PATTERN_MISMATCH"}]`; the value is never echoed.
   The check digit is not validated (a title office answers for whatever it is asked).
@@ -17,7 +18,15 @@ synthetic and comes from `onepledge-datagen`.
   request id and the client name under the key `client` (null when the request had no
   valid key). It never records the path, the query string or a VIN. uvicorn's own access
   log is off. The log allow-list is the SPEC 16.5 keys this service writes plus `client`
-  (SPEC_DECISIONS 5).
+  (SPEC_DECISIONS 5). The `service` value of every log line is `outside_records`, the
+  health value, and an unhandled failure writes exactly one `error` record.
+- Query strings are validated at the edge (SPEC_DECISIONS 22, 23): `limit` and `offset`
+  are 1 to 18 ASCII digits inside their bounds (`offset` at most 1,000,000), dates are
+  ASCII `YYYY-MM-DD`, a repeated parameter is `DUPLICATE` and an undeclared one is
+  reported once as `query` `UNKNOWN_PARAMETER` without its name, on every route. Issues
+  come from the one vocabulary: `REQUIRED`, `INVALID_INTEGER`, `OUT_OF_RANGE`,
+  `PATTERN_MISMATCH`, `INVALID_DATE`, `DUPLICATE`, `UNKNOWN_PARAMETER`. No input gives a
+  500.
 
 ## Layout
 
@@ -51,7 +60,22 @@ onepledge-outside serve                 serve the API on BIND_HOST:PORT as the a
 `seed` runs in one transaction as the owner role, prints the row count per table and is
 idempotent (the same input gives the same table contents). Every command exits 0 on
 success and 1 with one sentence on stderr when something is wrong (PostgreSQL not
-reachable, database not migrated, port in use, a variable missing).
+reachable, database not migrated, port in use, a variable missing), and 2 on a usage
+error. An unexpected error prints `Unexpected error. Run with --debug for details.`;
+`--debug` adds the traceback.
+
+Every command except `serve` also takes `--json` (stdout holds exactly one JSON document:
+`{"ok": true, ...}` with the facts of the text output, or `{"ok": false, "error":
+{"code": ..., "message": ...}}` with the code `CONFIGURATION_ERROR`, `DATABASE_UNAVAILABLE`,
+`NOT_MIGRATED`, `INVALID_INPUT` or `OPERATION_FAILED`) and `--quiet` (log warnings and
+errors only). These commands write their JSON log lines to stderr, so stdout holds only
+the result. `serve` writes its log lines to stdout, prints nothing else and refuses
+`--json` as a usage error.
+
+Settings are scoped to the command: `serve` parses only `BIND_HOST`, `PORT`,
+`DATABASE_URL` and `LOG_LEVEL`, so an owner or superuser URL present in its environment
+never reaches the serving process's settings; each administrative command parses only
+the variables in the table below.
 
 ## Configuration
 

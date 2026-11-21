@@ -7,6 +7,7 @@ from importlib import resources
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from alembic.util import CommandError
 from sqlalchemy.exc import OperationalError
 
@@ -35,6 +36,13 @@ class MigrationRunner:
         """Migrate up to `revision`."""
         self._guarded(lambda: command.upgrade(self._config, revision))
 
+    def head_revision(self) -> str:
+        """The newest revision of the packaged migrations."""
+        head = ScriptDirectory.from_config(self._config).get_current_head()
+        if head is None:
+            raise OperatorError("The packaged migrations have no head revision.", "OPERATION_FAILED")
+        return head
+
     def downgrade(self, revision: str = "base") -> None:
         """Migrate down to `revision`."""
         self._guarded(lambda: command.downgrade(self._config, revision))
@@ -44,6 +52,8 @@ class MigrationRunner:
         try:
             action()
         except OperationalError:
-            raise OperatorError("PostgreSQL refused the owner connection; run db provision first.") from None
+            raise OperatorError(
+                "PostgreSQL refused the owner connection; run db provision first.", "DATABASE_UNAVAILABLE"
+            ) from None
         except CommandError as error:
-            raise OperatorError(str(error)) from None
+            raise OperatorError(str(error), "CONFIGURATION_ERROR") from None

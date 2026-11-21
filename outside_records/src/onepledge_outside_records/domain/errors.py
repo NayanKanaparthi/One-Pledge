@@ -104,8 +104,14 @@ class MethodNotAllowedError(DomainError):
 
 
 class OperatorError(Exception):
-    """An operator command cannot run; carries one sentence saying what is wrong and what to do."""
+    """An operator command cannot run: one sentence saying what is wrong and what to do, and a code.
 
-    def __init__(self, sentence: str) -> None:
+    The code appears in the `--json` failure document: CONFIGURATION_ERROR,
+    DATABASE_UNAVAILABLE, NOT_MIGRATED, INVALID_INPUT, PORT_UNAVAILABLE or
+    OPERATION_FAILED.
+    """
+
+    def __init__(self, sentence: str, code: str = "OPERATION_FAILED") -> None:
         super().__init__(sentence)
         self.sentence = sentence
+        self.code = code

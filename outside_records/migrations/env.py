@@ -11,7 +11,7 @@ from sqlalchemy import create_engine
 
 from onepledge_outside_records.infrastructure.db.engines import sqlalchemy_url
 from onepledge_outside_records.infrastructure.db.models import Base
-from onepledge_outside_records.infrastructure.settings import load_settings
+from onepledge_outside_records.infrastructure.settings import load_admin_settings
 
 
 def run_migrations() -> None:
@@ -19,8 +19,9 @@ def run_migrations() -> None:
     config = context.config
     url = config.attributes.get("url")
     if url is None:
-        url = sqlalchemy_url(load_settings().require_migration_url())
-        config.attributes["app_role"] = load_settings().require_app_role()
+        settings = load_admin_settings("migrate")
+        url = sqlalchemy_url(settings.require_migration_url())
+        config.attributes["app_role"] = settings.require_app_role()
     engine = create_engine(url, hide_parameters=True)
     try:
         with engine.connect() as connection:

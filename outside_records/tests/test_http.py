@@ -214,11 +214,11 @@ def test_a_malformed_vin_gets_422_without_echo(
 @pytest.mark.parametrize(
     ("query", "details"),
     [
-        ("", [{"field": "vin", "issue": "MISSING"}]),
+        ("", [{"field": "vin", "issue": "REQUIRED"}]),
         ("&limit=0", [{"field": "limit", "issue": "OUT_OF_RANGE"}]),
         ("&limit=201", [{"field": "limit", "issue": "OUT_OF_RANGE"}]),
         ("&limit=ten", [{"field": "limit", "issue": "INVALID_INTEGER"}]),
-        ("&offset=-1", [{"field": "offset", "issue": "INVALID_INTEGER"}]),
+        ("&offset=-1", [{"field": "offset", "issue": "OUT_OF_RANGE"}]),
         ("&from=2025-02-30", [{"field": "from", "issue": "INVALID_DATE"}]),
         ("&to=20250101", [{"field": "to", "issue": "INVALID_DATE"}]),
         (
@@ -237,6 +237,74 @@ def test_bad_payment_parameters_are_named_without_echo(
     shown = response.text.replace(body["error"]["request_id"], "")
     for value in ("2025-02-30", "20250101", "yesterday", "ten", "999"):
         assert value not in shown
+
+
+# The integer inputs of WP1 review 1 and SPEC_DECISIONS 23 (a); none may give a 500.
+BAD_INTEGERS = [
+    ("9223372036854775808", "INVALID_INTEGER"),
+    ("99999999999999999999", "INVALID_INTEGER"),
+    ("-1", "OUT_OF_RANGE"),
+    ("+1", "INVALID_INTEGER"),
+    ("%201", "INVALID_INTEGER"),
+    ("1.0", "INVALID_INTEGER"),
+    ("1e3", "INVALID_INTEGER"),
+    ("%C2%B2", "INVALID_INTEGER"),
+    ("%D9%A3", "INVALID_INTEGER"),
+    ("%EF%BC%91", "INVALID_INTEGER"),
+    ("", "INVALID_INTEGER"),
+]
+CANARY = "ZQXJ7CANARY9"
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "issue"),
+    [(name, text, issue) for name in ("limit", "offset") for text, issue in BAD_INTEGERS],
+)
+def test_integer_parameters_are_ascii_digits_inside_their_bounds(
+    authorised: Call, seeded_vin: str, name: str, text: str, issue: str
+) -> None:
+    response = authorised("GET", f"/v1/payments?vin={seeded_vin}&{name}={text}")
+    assert response.status_code == 422
+    assert response.json()["error"]["details"] == [{"field": name, "issue": issue}]
+
+
+@pytest.mark.parametrize(
+    ("query", "details"),
+    [
+        ("&offset=1000001", [{"field": "offset", "issue": "OUT_OF_RANGE"}]),
+        ("&limit=1&limit=2", [{"field": "limit", "issue": "DUPLICATE"}]),
+        ("&vin=1HGCM82633A004352", [{"field": "vin", "issue": "DUPLICATE"}]),
+        (f"&{CANARY}=1", [{"field": "query", "issue": "UNKNOWN_PARAMETER"}]),
+        (
+            f"&{CANARY}=1&limit=0",
+            [{"field": "query", "issue": "UNKNOWN_PARAMETER"}, {"field": "limit", "issue": "OUT_OF_RANGE"}],
+        ),
+    ],
+)
+def test_repeated_and_unknown_parameters_are_refused_without_echo(
+    authorised: Call, contract: Contract, seeded_vin: str, query: str, details: list[dict[str, str]]
+) -> None:
+    response = authorised("GET", f"/v1/payments?vin={seeded_vin}{query}")
+    body = assert_error(response, contract, 422, "VALIDATION_ERROR")
+    assert body["error"]["details"] == details
+    assert CANARY not in response.text
+
+
+@pytest.mark.parametrize(
+    "url", ["/v1/titles/{vin}?{canary}=1", "/v1/contracts/{vin}?{canary}=1", "/healthz?{canary}=1"]
+)
+def test_routes_without_parameters_refuse_any(
+    authorised: Call, contract: Contract, seeded_vin: str, url: str
+) -> None:
+    response = authorised("GET", url.format(vin=seeded_vin, canary=CANARY))
+    body = assert_error(response, contract, 422, "VALIDATION_ERROR")
+    assert body["error"]["details"] == [{"field": "query", "issue": "UNKNOWN_PARAMETER"}]
+    assert CANARY not in response.text
+
+
+def test_the_offset_ceiling_is_accepted(authorised: Call, seeded_vin: str) -> None:
+    body = authorised("GET", f"/v1/payments?vin={seeded_vin}&offset=1000000").json()
+    assert (body["items"], body["offset"]) == ([], 1_000_000)
 
 
 def test_the_limit_boundaries_are_accepted(

@@ -17,15 +17,14 @@ from onepledge_outside_records.infrastructure.db.repositories import (
     SqlRecordsReader,
     SqlRecordsWriter,
 )
-from onepledge_outside_records.infrastructure.settings import Settings
+from onepledge_outside_records.infrastructure.settings import AdminSettings, ServeSettings
 from onepledge_outside_records.interface.http.app import create_app
 
 
 class Composition:
-    """Builds every collaborator a command needs from the settings, and disposes the engines it made."""
+    """Builds the collaborators of one command from its settings, and disposes the engines it made."""
 
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
+    def __init__(self) -> None:
         self._engines = EngineSet()
 
     def __enter__(self) -> Self:
@@ -38,28 +37,28 @@ class Composition:
         """Dispose every engine made by this composition."""
         self._engines.dispose()
 
-    def provisioner(self) -> tuple[DatabaseProvisioner, DatabaseTarget]:
+    @staticmethod
+    def provisioner(settings: AdminSettings) -> tuple[DatabaseProvisioner, DatabaseTarget]:
         """The superuser provisioner and the database it provisions."""
-        target = DatabaseTarget.from_urls(
-            self._settings.require_migration_url(), self._settings.require_database_url()
-        )
-        return DatabaseProvisioner(self._settings.require_admin_url()), target
+        target = DatabaseTarget.from_urls(settings.require_migration_url(), settings.require_database_url())
+        return DatabaseProvisioner(settings.require_admin_url()), target
 
-    def migrations(self) -> MigrationRunner:
+    @staticmethod
+    def migrations(settings: AdminSettings) -> MigrationRunner:
         """Alembic as the owner role."""
-        return MigrationRunner(self._settings.require_migration_url(), self._settings.require_app_role())
+        return MigrationRunner(settings.require_migration_url(), settings.require_app_role())
 
-    def seed_records(self) -> SeedRecords:
+    def seed_records(self, settings: AdminSettings) -> SeedRecords:
         """Seeding as the owner role."""
-        engine = self._engines.engine(self._settings.require_migration_url())
+        engine = self._engines.engine(settings.require_migration_url())
         return SeedRecords(CsvRecordsSource(), SqlRecordsWriter(engine))
 
-    def register_client(self) -> RegisterClient:
+    def register_client(self, settings: AdminSettings) -> RegisterClient:
         """Client registration as the owner role."""
-        return RegisterClient(SqlClientRegistry(self._engines.engine(self._settings.require_migration_url())))
+        return RegisterClient(SqlClientRegistry(self._engines.engine(settings.require_migration_url())))
 
-    def service(self) -> FastAPI:
+    def service(self, settings: ServeSettings) -> FastAPI:
         """The API on the read-only app role, after checking the schema is in place."""
-        reader = SqlRecordsReader(self._engines.engine(self._settings.require_database_url()))
+        reader = SqlRecordsReader(self._engines.engine(settings.require_database_url()))
         reader.ensure_readable()
         return create_app(reader)

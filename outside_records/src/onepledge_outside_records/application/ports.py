@@ -33,8 +33,8 @@ class RecordsReader(Protocol):
         """Contract records ordered by signed_on ascending then contract_id."""
         ...
 
-    def active_client(self, api_key_sha256: str) -> tuple[ApiClient, str] | None:
-        """The active client with this key hash, and the stored hash for a constant time compare."""
+    def active_client(self, api_key_sha256: str) -> ApiClient | None:
+        """The active client whose stored key hash equals this one (an indexed equality lookup)."""
         ...
 
 
