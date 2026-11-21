@@ -1,0 +1,12 @@
+# Code owners by layer (docs/BUILD_PLAN.md section 2).
+# Layer 1 (bank side and data) is owned by Nayan.
+/datagen/          @NayanKanaparthi
+/outside_records/  @NayanKanaparthi
+/bank_agent/       @NayanKanaparthi
+/evaluation/       @NayanKanaparthi
+/docs/layer1/      @NayanKanaparthi
+
+# Shared contracts need the approval of all three layer owners (contracts/README.md).
+# The layer 2 (Shreyas) and layer 3 (Vedant) GitHub handles are not recorded in this
+# repository yet; they are appended to this line when the team confirms them.
+/contracts/        @NayanKanaparthi

@@ -1,0 +1,24 @@
+# Secrets and local configuration (SPEC 3.1). Never commit these.
+.env
+.env.*
+!.env.example
+
+# Generated data, logs, pid files and reports (SPEC 2.1).
+var/
+
+# Python caches and build output.
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Tool caches.
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/

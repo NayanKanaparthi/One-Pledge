@@ -1,0 +1,31 @@
+# pre-commit hooks for layer 1 (SPEC 2.2). Install with: pre-commit install
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-lint
+        name: ruff check
+        entry: python3 -m ruff check
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff format --check
+        entry: python3 -m ruff format --check
+        language: system
+        types: [python]
+      - id: mypy
+        name: mypy (strict, all packages)
+        entry: make typecheck
+        language: system
+        pass_filenames: false
+        types: [python]
+      - id: no-em-dash
+        name: reject the em dash character (U+2014)
+        entry: "—"
+        language: pygrep
+        types: [text]
+      - id: no-env-file
+        name: reject committed .env files
+        entry: committed .env files are not allowed; keep secrets out of the repository
+        language: fail
+        files: '(^|/)\.env(\..*)?$'
+        exclude: '(^|/)\.env\.example$'

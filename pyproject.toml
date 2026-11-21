@@ -1,0 +1,56 @@
+# Repository wide tool configuration for layer 1 (SPEC 2.2).
+# This file configures ruff, mypy, pytest and coverage. It is not a package:
+# every component has its own pyproject.toml.
+
+[tool.ruff]
+target-version = "py312"
+line-length = 110
+extend-exclude = ["var"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "S", "C4", "C901", "SIM", "RET", "PTH", "RUF", "ANN", "T20", "PL"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S101", "PLR2004"]
+
+[tool.ruff.lint.pylint]
+max-branches = 12
+max-statements = 50
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.isort]
+known-first-party = [
+  "onepledge_contract_fakes",
+  "onepledge_datagen",
+  "onepledge_outside_records",
+  "onepledge_bank_agent",
+  "onepledge_evaluation",
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["oprf", "oprf.*", "oblivious", "oblivious.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --import-mode=importlib"
+testpaths = ["contracts/fakes/tests", "datagen/tests", "outside_records/tests"]
+markers = [
+  "unit: pure tests with no I/O beyond the process",
+  "integration: tests against a real PostgreSQL server",
+  "contract: tests that check behaviour against the files in contracts/",
+  "e2e: end to end tests that start the real services as processes",
+]
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+skip_empty = true
