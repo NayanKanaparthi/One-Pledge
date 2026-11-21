@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
-import jsonschema  # type: ignore[import-untyped]  # jsonschema ships no type information; dev only
+import jsonschema
 import pytest
-import yaml  # type: ignore[import-untyped]  # PyYAML ships no type information; types-PyYAML is not allowed
+import yaml
 from fastapi.routing import APIRoute
 from sqlalchemy import Engine
 

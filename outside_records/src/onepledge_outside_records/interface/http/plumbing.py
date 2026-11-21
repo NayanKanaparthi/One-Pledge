@@ -131,13 +131,13 @@ class AccessLogMiddleware:
             await self._app(scope, receive, wrapped)
         finally:
             route = scope.get("route")
-            client = scope.get("onepledge.client_id")
+            client = scope.get("onepledge.client_name")
             _log.info(
                 LogEvent.HTTP_REQUEST,
                 method=scope.get("method", ""),
                 route=getattr(route, "path", "unmatched"),
                 http_status=status["value"],
                 duration_ms=int((time.monotonic() - started) * 1000),
-                user_id=client if isinstance(client, str) else None,
+                client=client if isinstance(client, str) else None,
             )
             structlog.contextvars.unbind_contextvars("request_id")

@@ -186,7 +186,14 @@ def test_register_client_stores_only_the_hash_of_the_key() -> None:
     assert KEY not in repr(registry.stored)
 
 
-@pytest.mark.parametrize("name", ["", "-harbor", "har bor", "h" * 64, "harbor\n", "hârbor"])
+@pytest.mark.parametrize("name", ["harbor", "h", "h" * 64, "-harbor", "bank_1-B", "_"])
+def test_register_client_accepts_names_of_the_log_shape(name: str) -> None:
+    assert RegisterClient(MemoryRegistry()).run(name, KEY).name == name
+
+
+@pytest.mark.parametrize(
+    "name", ["", "har.bor", "har bor", "h" * 65, "harbor\n", "hârbor", "har/bor", "{harbor}", "h:1"]
+)
 def test_register_client_refuses_bad_names(name: str) -> None:
     with pytest.raises(OperatorError, match="client name"):
         RegisterClient(MemoryRegistry()).run(name, KEY)

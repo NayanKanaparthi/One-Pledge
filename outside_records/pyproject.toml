@@ -27,6 +27,8 @@ dev = [
   "httpx>=0.27",
   "PyYAML>=6.0",
   "jsonschema>=4.21",
+  "types-PyYAML>=6.0",
+  "types-jsonschema>=4.21",
 ]
 
 [project.scripts]

@@ -14,8 +14,10 @@ synthetic and comes from `onepledge-datagen`.
   `details: [{"field": "vin", "issue": "PATTERN_MISMATCH"}]`; the value is never echoed.
   The check digit is not validated (a title office answers for whatever it is asked).
 - The access log records method, route template (`/v1/titles/{vin}`), status, duration,
-  request id and the client id (as `user_id`). It never records the path, the query
-  string or a VIN. uvicorn's own access log is off.
+  request id and the client name under the key `client` (null when the request had no
+  valid key). It never records the path, the query string or a VIN. uvicorn's own access
+  log is off. The log allow-list is the SPEC 16.5 keys this service writes plus `client`
+  (SPEC_DECISIONS 5).
 
 ## Layout
 
@@ -42,6 +44,7 @@ onepledge-outside db migrate            alembic upgrade head as the owner role
 onepledge-outside seed --data-dir DIR   replace the three data tables from DIR/outside_records/*.csv
 onepledge-outside clients add --name NAME --key-env VAR
                                         add a client, or replace its key, from the key in variable VAR
+                                        (NAME: 1 to 64 letters, digits, hyphens or underscores)
 onepledge-outside serve                 serve the API on BIND_HOST:PORT as the app role
 ```
 

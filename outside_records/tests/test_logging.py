@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import uuid
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -64,15 +66,44 @@ class ExplodingReader(SqlRecordsReader):
         raise RuntimeError(message)
 
 
+SOURCE = Path(__file__).resolve().parents[1] / "src" / "onepledge_outside_records"
+LOG_METHODS = frozenset({"debug", "info", "warning", "error", "critical", "exception"})
+# Keys every record gets from the processors rather than from a call site.
+PROCESSOR_KEYS = frozenset({"ts", "level", "event", "service", "request_id", "logger"})
+EXCEPTION_KEYS = frozenset({"exception_type", "stack"})
+
+
+def keys_written_by_the_source() -> set[str]:
+    """Keyword names passed to log calls anywhere in the package."""
+    found: set[str] = set()
+    for path in SOURCE.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in LOG_METHODS
+            ):
+                found.update(k.arg for k in node.keywords if k.arg is not None and k.arg != "exc_info")
+    return found
+
+
 @pytest.mark.unit
-def test_the_allow_list_equals_the_spec_list_exactly() -> None:
-    assert set(ALLOWED_KEYS) == SPEC_16_5_KEYS
+def test_the_allow_list_is_the_spec_keys_this_service_writes_plus_client() -> None:
+    written = keys_written_by_the_source()
+    assert set(ALLOWED_KEYS) == PROCESSOR_KEYS | EXCEPTION_KEYS | written
+    assert set(ALLOWED_KEYS) - {"client"} <= SPEC_16_5_KEYS
+    assert "client" in ALLOWED_KEYS
+    assert "user_id" not in ALLOWED_KEYS
 
 
 @pytest.mark.unit
 def test_disallowed_keys_are_dropped_and_named() -> None:
-    record = RedactionProcessor()(None, "info", {"event": "x", "vin": CANARY_VIN, "path": "/v1/titles/x"})
-    assert record == {"event": "x", "redacted_keys": ["path", "vin"]}
+    record = RedactionProcessor()(
+        None,
+        "info",
+        {"event": "x", "vin": CANARY_VIN, "path": "/v1/titles/x", "user_id": "u", "client": "harbor"},
+    )
+    assert record == {"event": "x", "client": "harbor", "redacted_keys": ["path", "user_id", "vin"]}
 
 
 @pytest.mark.unit
@@ -88,9 +119,25 @@ def test_vin_shapes_are_scrubbed_in_any_case(vin: str) -> None:
 @pytest.mark.unit
 def test_unsafe_values_are_redacted() -> None:
     record = RedactionProcessor()(
-        None, "info", {"event": "x", "route": "a?b=c", "count": 3.5, "status": "x" * 129, "result": None}
+        None,
+        "info",
+        {
+            "event": "x",
+            "route": "a?b=c",
+            "http_status": 3.5,
+            "method": "x" * 129,
+            "client": None,
+            "logger": "a,b",
+        },
     )
-    assert record == {"event": "x", "route": REDACTED, "count": REDACTED, "status": REDACTED, "result": None}
+    assert record == {
+        "event": "x",
+        "route": REDACTED,
+        "http_status": REDACTED,
+        "method": REDACTED,
+        "client": None,
+        "logger": REDACTED,
+    }
 
 
 @pytest.mark.integration
@@ -120,13 +167,11 @@ def test_access_records_carry_the_route_template_and_never_the_vin(
     ]
     assert [r["http_status"] for r in records] == [404, 200, 404, 422, 422, 401]
     assert all(r["method"] == "GET" and r["service"] == "outside-records" for r in records)
-    assert all(isinstance(r["user_id"], str) for r in records[:5])
-    assert records[5]["user_id"] is None
+    assert [r["client"] for r in records] == ["harbor"] * 5 + [None]
+    assert not any("user_id" in r or "redacted_keys" in r for r in records)
     for record in records:
         assert uuid.UUID(record.pop("request_id")).version == 4
         record.pop("ts")
-        if record["user_id"] is not None:
-            uuid.UUID(record.pop("user_id"))
     text = json.dumps(records)
     for forbidden in (CANARY_VIN, CANARY_VIN.lower(), "2025-01-01", "2025-12-31", "?", "999", api_key):
         assert forbidden not in text

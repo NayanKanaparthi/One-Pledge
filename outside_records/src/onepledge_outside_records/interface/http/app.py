@@ -124,7 +124,7 @@ def create_app(reader: RecordsReader) -> FastAPI:
 
     def client(request: Request) -> None:
         found = authenticate.run(request.headers.get("x-api-key"))
-        request.scope["onepledge.client_id"] = found.client_id
+        request.scope["onepledge.client_name"] = found.name
 
     @app.get("/v1/titles/{vin}")
     def title(vin: str, request: Request) -> JSONResponse:

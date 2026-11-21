@@ -77,7 +77,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Store the SHA-256 of the key read from an environment variable; "
         "the key itself is never stored.",
     )
-    add.add_argument("--name", required=True, metavar="NAME", help="client name, for example harbor")
+    add.add_argument(
+        "--name",
+        required=True,
+        metavar="NAME",
+        help="client name: 1 to 64 letters, digits, hyphens or underscores, for example harbor",
+    )
     add.add_argument(
         "--key-env", required=True, metavar="VAR", help="name of the environment variable that holds the key"
     )

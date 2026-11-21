@@ -222,6 +222,7 @@ def test_the_served_api_answers_and_logs_no_vin(
         "/v1/titles/{vin}",
         "/v1/payments",
     ]
+    assert [line["client"] for line in access] == [None, None, "harbor", "harbor", None, "harbor"]
     text = stdout.decode() + stderr.decode()
     for forbidden in (seeded, UNSEEDED_VIN, seeded.lower(), api_key, "?vin="):
         assert forbidden not in text

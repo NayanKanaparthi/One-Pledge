@@ -11,7 +11,8 @@ from onepledge_outside_records.domain.errors import OperatorError
 from onepledge_outside_records.domain.records import ApiClient, RecordCounts
 
 API_KEY_FORMAT = re.compile(r"^opk_[A-Za-z0-9_-]{43}$")
-CLIENT_NAME_FORMAT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
+# The access log records the name as `client`, so it must pass the log value shape rule.
+CLIENT_NAME_FORMAT = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 class SeedRecords:
@@ -35,9 +36,7 @@ class RegisterClient:
     def run(self, name: str, api_key: str) -> ApiClient:
         """Validate the name and the key format, then store the key's SHA-256."""
         if not CLIENT_NAME_FORMAT.fullmatch(name):
-            raise OperatorError(
-                "The client name must be letters, digits, dots, hyphens or underscores (at most 63)."
-            )
+            raise OperatorError("The client name must be 1 to 64 letters, digits, hyphens or underscores.")
         if not API_KEY_FORMAT.fullmatch(api_key):
             raise OperatorError("The API key must be opk_ followed by 43 url-safe characters.")
         return self._registry.upsert(name, hashlib.sha256(api_key.encode("utf-8")).hexdigest())

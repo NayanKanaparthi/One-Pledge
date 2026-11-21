@@ -1,10 +1,10 @@
 """Structured JSON logging with redaction for outside records (SPEC 6.2, 16.5 rules).
 
-Same rules as the bank agent (SPEC 16.5): one JSON object per line on stdout with
-fixed keys, an allow-list of keys, a value shape rule and a VIN shaped scrub, and
-standard library records (uvicorn) routed through the same processors. Exception
-messages and local variables are never rendered; only the exception type and the
-frame locations.
+The rules of SPEC 16.5 with the outside records allow-list (SPEC_DECISIONS 5): one
+JSON object per line on stdout with fixed keys, an allow-list of keys, a value shape
+rule and a VIN shaped scrub, and standard library records (uvicorn) routed through
+the same processors. Exception messages and local variables are never rendered;
+only the exception type and the frame locations.
 """
 
 from __future__ import annotations
@@ -19,13 +19,12 @@ from types import TracebackType
 import structlog
 from structlog.typing import EventDict, Processor, WrappedLogger
 
+# SPEC 16.5 is the bank agent's allow-list. Outside records keeps the keys of that list it
+# writes, plus `client` (the API client's name), as SPEC_DECISIONS 5 sets out.
 ALLOWED_KEYS: frozenset[str] = frozenset(
     {
-        "ts", "level", "event", "service", "bank_code", "request_id", "logger", "submission_id",
-        "loan_id", "alert_id", "registry_request_id", "certificate_id", "checkpoint_seq", "user_id",
-        "role", "stage", "status", "kind", "count", "rows", "attempts", "duration_ms", "http_status",
-        "method", "route", "error_code", "failure_code", "check_type", "result", "reason_code",
-        "batch_index", "item_count", "exception_type", "stack", "dependency",
+        "ts", "level", "event", "service", "request_id", "logger", "method", "route",
+        "http_status", "duration_ms", "exception_type", "stack", "client",
     }
 )  # fmt: skip
 REDACTED = "[REDACTED]"
