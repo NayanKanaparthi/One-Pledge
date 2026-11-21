@@ -33,8 +33,8 @@ class Output:
         self.as_json = as_json
 
     def line(self, text: str) -> None:
-        """One line of text."""
-        self._out.write(text + "\n")
+        """One line of text, without trailing spaces."""
+        self._out.write(text.rstrip() + "\n")
 
     def error(self, sentence: str) -> None:
         """One sentence on stderr."""
