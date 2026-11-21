@@ -11,6 +11,7 @@ import json
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping
+from http import HTTPStatus
 from types import MappingProxyType
 from typing import Any
 
@@ -19,7 +20,6 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ValidationError
-from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from onepledge_contract_fakes.errors import (
     DomainError,
@@ -38,6 +38,12 @@ MAX_BODY_BYTES = 1_048_576
 _HTTP_NOT_FOUND = 404
 _HTTP_METHOD_NOT_ALLOWED = 405
 _HTTP_SERVER_ERROR = 500
+# Routing and framework errors (404, 405, 413 and the like) are handled by status code, so the
+# envelope is used without importing the web framework's internals. 500 stays with the
+# catch-all handler, which logs the exception.
+_HTTP_ERROR_STATUSES = tuple(
+    int(status) for status in HTTPStatus if status >= HTTPStatus.BAD_REQUEST and status != _HTTP_SERVER_ERROR
+)
 
 type Scope = MutableMapping[str, Any]
 type Message = MutableMapping[str, Any]
@@ -162,7 +168,8 @@ def install_error_handlers(app: FastAPI) -> None:
         )
 
     async def http_error(request: Request, exc: Exception) -> Response:
-        status = exc.status_code if isinstance(exc, StarletteHTTPException) else _HTTP_SERVER_ERROR
+        code = getattr(exc, "status_code", _HTTP_SERVER_ERROR)
+        status = code if isinstance(code, int) else _HTTP_SERVER_ERROR
         if status == _HTTP_METHOD_NOT_ALLOWED:
             return error_response(MethodNotAllowedError(), request_id_of(request))
         if status == _HTTP_NOT_FOUND:
@@ -175,7 +182,8 @@ def install_error_handlers(app: FastAPI) -> None:
 
     app.add_exception_handler(DomainError, domain_error)
     app.add_exception_handler(RequestValidationError, validation_error)
-    app.add_exception_handler(StarletteHTTPException, http_error)
+    for status in _HTTP_ERROR_STATUSES:
+        app.add_exception_handler(status, http_error)
     app.add_exception_handler(Exception, unexpected_error)
 
 

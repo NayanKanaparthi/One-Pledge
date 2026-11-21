@@ -18,7 +18,7 @@ from typing import Self
 
 import httpx
 import oprf
-from starlette.types import ASGIApp
+from fastapi import FastAPI
 
 from onepledge_contract_fakes.key_holder.config import KeyHolderConfig
 from onepledge_contract_fakes.members import api_key_sha256
@@ -118,7 +118,7 @@ def registry_config(
 class AsgiTestClient:
     """A synchronous HTTP client that calls an ASGI app in-process through httpx."""
 
-    def __init__(self, app: ASGIApp, base_url: str = "http://testserver") -> None:
+    def __init__(self, app: FastAPI, base_url: str = "http://testserver") -> None:
         self._runner = asyncio.Runner()
         transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
         self._client = httpx.AsyncClient(transport=transport, base_url=base_url)

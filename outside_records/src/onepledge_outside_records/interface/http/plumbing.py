@@ -9,13 +9,13 @@ from __future__ import annotations
 import time
 import uuid
 from collections.abc import Awaitable, Callable, MutableMapping
+from http import HTTPStatus
 from typing import Any
 
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
-from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from onepledge_outside_records.domain.errors import (
     DomainError,
@@ -28,6 +28,12 @@ from onepledge_outside_records.infrastructure.logging_setup import LogEvent, get
 
 REQUEST_ID_HEADER = "X-Request-ID"
 _HTTP_NOT_FOUND, _HTTP_METHOD_NOT_ALLOWED, _HTTP_SERVER_ERROR = 404, 405, 500
+# Routing and framework errors (404, 405, 413 and the like) are handled by status code, so the
+# envelope is used without importing the web framework's internals. 500 stays with the
+# catch-all handler, which logs the exception.
+_HTTP_ERROR_STATUSES = tuple(
+    int(status) for status in HTTPStatus if status >= HTTPStatus.BAD_REQUEST and status != _HTTP_SERVER_ERROR
+)
 
 type Scope = MutableMapping[str, Any]
 type Message = MutableMapping[str, Any]
@@ -67,7 +73,8 @@ def install_error_handlers(app: FastAPI) -> None:
         return error_response(ValidationFailedError(), request_id_of(request))
 
     async def http_error(request: Request, exc: Exception) -> Response:
-        status = exc.status_code if isinstance(exc, StarletteHTTPException) else _HTTP_SERVER_ERROR
+        code = getattr(exc, "status_code", _HTTP_SERVER_ERROR)
+        status = code if isinstance(code, int) else _HTTP_SERVER_ERROR
         if status == _HTTP_METHOD_NOT_ALLOWED:
             return error_response(MethodNotAllowedError(), request_id_of(request))
         if status == _HTTP_NOT_FOUND:
@@ -80,7 +87,8 @@ def install_error_handlers(app: FastAPI) -> None:
 
     app.add_exception_handler(DomainError, domain_error)
     app.add_exception_handler(RequestValidationError, validation_error)
-    app.add_exception_handler(StarletteHTTPException, http_error)
+    for status in _HTTP_ERROR_STATUSES:
+        app.add_exception_handler(status, http_error)
     app.add_exception_handler(Exception, unexpected_error)
 
 
