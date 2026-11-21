@@ -28,7 +28,7 @@ from onepledge_bank_agent.domain.vin import Vin
 
 
 class Clock(Protocol):
-    """The time. No use case calls `datetime.now` itself."""
+    """The time. Use cases read the current time only through this port."""
 
     def now(self) -> datetime:
         """Timezone aware UTC now."""
@@ -311,7 +311,7 @@ class ReferenceData:
 
 
 class ReferenceSource(Protocol):
-    """Reads reference data (datagen's `reference.json`)."""
+    """Reads one bank's reference data from the file datagen writes for seeding."""
 
     def load(self, data_dir: Path, bank_code: str) -> ReferenceData:
         """The lenders and facilities of one bank; raises `ReferenceDataError` when the file is unusable."""

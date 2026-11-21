@@ -14,7 +14,7 @@ from onepledge_bank_agent.infrastructure.clock import SystemClock
 from onepledge_bank_agent.infrastructure.db.engines import make_engine
 from onepledge_bank_agent.infrastructure.db.session import SqlUnitOfWorkFactory
 from onepledge_bank_agent.infrastructure.ids import RandomIds
-from onepledge_bank_agent.infrastructure.reference_file import ReferenceFileSource
+from onepledge_bank_agent.infrastructure.seed_reference_file import ReferenceFileSource
 
 REPOSITORY = Path(__file__).resolve().parents[3]
 CONTRACTS = REPOSITORY / "contracts"

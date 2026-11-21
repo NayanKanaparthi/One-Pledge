@@ -41,7 +41,7 @@ from onepledge_bank_agent.infrastructure.http.base import (
 from onepledge_bank_agent.infrastructure.http.outside_records import OutsideRecordsClient
 from onepledge_bank_agent.infrastructure.ids import RandomIds
 from onepledge_bank_agent.infrastructure.logging import StructlogOperationalLog
-from onepledge_bank_agent.infrastructure.reference_file import ReferenceFileSource
+from onepledge_bank_agent.infrastructure.seed_reference_file import ReferenceFileSource
 from onepledge_bank_agent.infrastructure.settings import Settings
 
 OUTSIDE_RECORDS = "outside_records"

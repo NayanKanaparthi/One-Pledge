@@ -6,6 +6,7 @@ checks the other.
 
 from __future__ import annotations
 
+import string
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
@@ -15,7 +16,7 @@ from onepledge_bank_agent.domain.errors import InvalidVinError
 
 VIN_LENGTH = 17
 CHECK_DIGIT_POSITION = 8  # zero based index of position 9
-VIN_ALPHABET = frozenset("0123456789ABCDEFGHJKLMNPRSTUVWXYZ")
+VIN_ALPHABET = frozenset(string.digits + string.ascii_uppercase) - frozenset("IOQ")
 _LETTER_VALUES = MappingProxyType(
     {
         **dict(zip("ABCDEFGH", range(1, 9), strict=True)),

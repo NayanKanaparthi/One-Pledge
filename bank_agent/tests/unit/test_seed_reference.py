@@ -13,7 +13,7 @@ from bank_testkit.world import World
 from onepledge_bank_agent.application.seed_reference import SeedReferenceData
 from onepledge_bank_agent.domain.enums import FacilityStatus
 from onepledge_bank_agent.domain.errors import ReferenceDataError
-from onepledge_bank_agent.infrastructure.reference_file import ReferenceFileSource
+from onepledge_bank_agent.infrastructure.seed_reference_file import ReferenceFileSource
 
 pytestmark = pytest.mark.unit
 

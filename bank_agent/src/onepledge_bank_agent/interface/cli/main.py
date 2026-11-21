@@ -53,7 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     seed = commands.add_parser(
         "seed-reference",
         help="load this bank's lenders and facilities, idempotent",
-        description="Upsert the lenders and facilities of BANK_CODE from DIR/reference.json "
+        description="Upsert the lenders and facilities of BANK_CODE from the seed file DIR/reference.json "
         "as the owner role (MIGRATION_DATABASE_URL).",
     )
     seed.add_argument(

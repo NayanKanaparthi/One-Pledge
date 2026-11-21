@@ -146,7 +146,7 @@ def _object(table: str, column: str, *, nullable: bool = False) -> sa.CheckConst
     return sa.CheckConstraint(condition, name=f"ck_{table}_{column}")
 
 
-def _reference_tables() -> None:
+def _lenders() -> None:
     op.create_table(
         "lenders",
         _uuid("lender_id", primary_key=True),
@@ -155,6 +155,9 @@ def _reference_tables() -> None:
         _time("created_at"),
         sa.CheckConstraint("lei ~ '^[A-Z0-9]{18}[0-9]{2}$'", name="ck_lenders_lei"),
     )
+
+
+def _facilities() -> None:
     op.create_table(
         "facilities",
         _uuid("facility_id", primary_key=True),
@@ -170,6 +173,9 @@ def _reference_tables() -> None:
         sa.CheckConstraint("advance_rate_bps BETWEEN 0 AND 10000", name="ck_facilities_advance_rate_bps"),
         _in("facilities", "status", ("ACTIVE", "SUSPENDED", "CLOSED")),
     )
+
+
+def _users() -> None:
     op.create_table(
         "users",
         _uuid("user_id", primary_key=True),
@@ -185,6 +191,9 @@ def _reference_tables() -> None:
         sa.CheckConstraint("token_version >= 0", name="ck_users_token_version"),
         _in("users", "role", ("ANALYST", "CREDIT_OFFICER", "ADMIN")),
     )
+
+
+def _login_attempts() -> None:
     op.create_table(
         "login_attempts",
         sa.Column("attempt_id", sa.BigInteger(), sa.Identity(always=True), primary_key=True),
@@ -198,7 +207,7 @@ def _reference_tables() -> None:
     op.create_index("ix_login_attempts_client_addr_at", "login_attempts", ["client_addr", "at"])
 
 
-def _tape_tables() -> None:
+def _tape_submissions() -> None:
     op.create_table(
         "tape_submissions",
         _uuid("submission_id", primary_key=True),
@@ -248,6 +257,9 @@ def _tape_tables() -> None:
     op.create_index(
         "ix_tape_submissions_facility_uploaded_at", "tape_submissions", ["facility_id", "uploaded_at"]
     )
+
+
+def _loans_raw() -> None:
     op.create_table(
         "loans_raw",
         _uuid("raw_id", primary_key=True),
@@ -261,6 +273,9 @@ def _tape_tables() -> None:
         _hex("loans_raw", "row_sha256"),
         _object("loans_raw", "raw_payload"),
     )
+
+
+def _cleaning_issues() -> None:
     op.create_table(
         "cleaning_issues",
         _uuid("issue_id", primary_key=True),
@@ -275,7 +290,7 @@ def _tape_tables() -> None:
     )
 
 
-def _loan_tables() -> None:
+def _loans() -> None:
     op.create_table(
         "loans",
         _uuid("loan_id", primary_key=True),
@@ -311,6 +326,9 @@ def _loan_tables() -> None:
     )
     op.create_index("ix_loans_facility_state", "loans", ["facility_id", "state"])
     op.create_index("ix_loans_vin", "loans", ["vin"])
+
+
+def _submission_items() -> None:
     op.create_table(
         "submission_items",
         _uuid("item_id", primary_key=True),
@@ -329,6 +347,9 @@ def _loan_tables() -> None:
         ),
     )
     op.create_index("ix_submission_items_loan_id", "submission_items", ["loan_id"])
+
+
+def _local_checks() -> None:
     combinations = " OR ".join(
         f"(check_type = '{c}' AND result = '{o}' AND reason_code = '{r}')" for c, o, r in CHECK_COMBINATIONS
     )
@@ -351,6 +372,9 @@ def _loan_tables() -> None:
         sa.CheckConstraint(combinations, name="ck_local_checks_combination"),
         _object("local_checks", "evidence"),
     )
+
+
+def _loan_tokens() -> None:
     op.create_table(
         "loan_tokens",
         _uuid("loan_id", _fk("loans.loan_id")),
@@ -366,7 +390,7 @@ def _loan_tables() -> None:
     op.create_index("ix_loan_tokens_kind_token", "loan_tokens", ["token_kind", "token"])
 
 
-def _registry_request_tables() -> None:
+def _registry_requests() -> None:
     op.create_table(
         "registry_requests",
         _uuid("request_id", primary_key=True),
@@ -402,6 +426,9 @@ def _registry_request_tables() -> None:
         unique=True,
         postgresql_where=sa.text("origin = 'TAPE'"),
     )
+
+
+def _registry_request_items() -> None:
     op.create_table(
         "registry_request_items",
         _uuid("request_id", _fk("registry_requests.request_id")),
@@ -435,7 +462,7 @@ def _registry_request_tables() -> None:
     op.create_index("ix_registry_request_items_loan_id", "registry_request_items", ["loan_id"])
 
 
-def _proof_tables() -> None:
+def _certificates() -> None:
     op.create_table(
         "certificates",
         _uuid("certificate_id", primary_key=True),
@@ -465,6 +492,9 @@ def _proof_tables() -> None:
         sa.CheckConstraint("verified = (failure_reason IS NULL)", name="ck_certificates_verified"),
         _object("certificates", "body"),
     )
+
+
+def _checkpoints_seen() -> None:
     op.create_table(
         "checkpoints_seen",
         _uuid("checkpoint_id", primary_key=True),
@@ -500,7 +530,7 @@ def _proof_tables() -> None:
     )
 
 
-def _alert_table() -> None:
+def _alerts() -> None:
     op.create_table(
         "alerts",
         _uuid("alert_id", primary_key=True),
@@ -537,7 +567,7 @@ def _alert_table() -> None:
     op.create_index("ix_alerts_loan_id", "alerts", ["loan_id"])
 
 
-def _evidence_tables() -> None:
+def _audit_log() -> None:
     op.create_table(
         "audit_log",
         _uuid("audit_id", primary_key=True),
@@ -566,6 +596,9 @@ def _evidence_tables() -> None:
         _hex("audit_log", "entry_hash"),
         _object("audit_log", "detail"),
     )
+
+
+def _integrity_runs() -> None:
     op.create_table(
         "integrity_runs",
         _uuid("run_id", primary_key=True),
@@ -579,14 +612,25 @@ def _evidence_tables() -> None:
 
 
 def upgrade() -> None:
-    """Create every table of SPEC 12.1."""
-    _reference_tables()
-    _tape_tables()
-    _loan_tables()
-    _registry_request_tables()
-    _proof_tables()
-    _alert_table()
-    _evidence_tables()
+    """Create every table of SPEC 12.1, each after the tables it references."""
+    _lenders()
+    _facilities()
+    _users()
+    _login_attempts()
+    _tape_submissions()
+    _loans_raw()
+    _cleaning_issues()
+    _loans()
+    _submission_items()
+    _local_checks()
+    _loan_tokens()
+    _registry_requests()
+    _registry_request_items()
+    _certificates()
+    _checkpoints_seen()
+    _alerts()
+    _audit_log()
+    _integrity_runs()
 
 
 def downgrade() -> None:
