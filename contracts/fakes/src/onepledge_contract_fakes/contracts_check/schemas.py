@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from datetime import date, datetime
 from typing import Any
 
-import jsonschema  # type: ignore[import-untyped]  # jsonschema ships no type information
+import jsonschema
 
 _DATE_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -56,7 +56,7 @@ def _is_uuid(value: object) -> bool:
     return True
 
 
-def format_checker() -> object:
+def format_checker() -> jsonschema.FormatChecker:
     """A format checker for the three formats the contracts use."""
     checker = jsonschema.FormatChecker(formats=())
     checker.checks("date")(_is_date)

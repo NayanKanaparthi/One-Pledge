@@ -8,7 +8,12 @@ from fastapi.responses import JSONResponse
 from onepledge_contract_fakes.controls import ControlState, parse_failure_spec
 from onepledge_contract_fakes.registry.double import RegistryDouble
 from onepledge_contract_fakes.registry.inspection import parse_tamper_request
-from onepledge_contract_fakes.web import TEST_CONTROL_HEADER, check_test_control_key, parse_json
+from onepledge_contract_fakes.web import (
+    TEST_CONTROL_HEADER,
+    check_test_control_key,
+    contract_routes,
+    parse_json,
+)
 
 
 def mount_test_controls(app: FastAPI, double: RegistryDouble, controls: ControlState, key: str) -> None:
@@ -31,9 +36,12 @@ def mount_test_controls(app: FastAPI, double: RegistryDouble, controls: ControlS
     @app.post("/_test/fail-next")
     async def fail_next(request: Request) -> JSONResponse:
         guard(request)
-        spec = parse_failure_spec(parse_json(await request.body()), allow_after_commit=True)
+        document = parse_json(await request.body())
+        spec = parse_failure_spec(document, contract_routes(app), allow_after_commit=True)
         controls.arm(spec)
-        return JSONResponse({"armed": spec.count, "status": spec.status, "when": spec.when.value})
+        return JSONResponse(
+            {"armed": spec.count, "status": spec.status, "when": spec.when.value, "path": spec.path}
+        )
 
     @app.get("/_test/dump")
     async def dump(request: Request) -> JSONResponse:

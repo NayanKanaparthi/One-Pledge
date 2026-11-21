@@ -15,6 +15,9 @@ from onepledge_contract_fakes.errors import ErrorDetail, ValidationFailedError
 
 INJECTABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 MAX_INJECTED_FAILURES = 1000
+SUBMISSIONS_ROUTE = "/v1/submissions"
+_REQUIRED_FIELDS = frozenset({"count", "status", "when"})
+_OPTIONAL_FIELDS = frozenset({"path"})
 
 
 class FailureWhen(StrEnum):
@@ -35,16 +38,38 @@ class ReceivedRequest:
 
 @dataclass(frozen=True)
 class FailureSpec:
-    """A request to fail the next `count` contract calls with `status`."""
+    """A request to fail the next `count` contract calls with `status`.
+
+    With `path` (a contract route template such as `/v1/outbox`), only calls to that
+    route consume the failures; other calls are served normally (SPEC_DECISIONS 6).
+    """
 
     count: int
     status: int
     when: FailureWhen
+    path: str | None = None
 
 
-def parse_failure_spec(document: object, allow_after_commit: bool) -> FailureSpec:
-    """Validate a `/_test/fail-next` body."""
-    if not isinstance(document, dict) or set(document) != {"count", "status", "when"}:
+def _route_filter(document: dict[str, object], contract_routes: frozenset[str], when: str) -> str | None:
+    path = document.get("path")
+    if path is None:
+        return None
+    if not isinstance(path, str) or path not in contract_routes:
+        raise ValidationFailedError(details=(ErrorDetail("path", "UNKNOWN_ROUTE"),))
+    if when == FailureWhen.AFTER_COMMIT and path != SUBMISSIONS_ROUTE:
+        raise ValidationFailedError(details=(ErrorDetail("path", "AFTER_COMMIT_ONLY_ON_SUBMISSIONS"),))
+    return path
+
+
+def parse_failure_spec(
+    document: object, contract_routes: frozenset[str], allow_after_commit: bool
+) -> FailureSpec:
+    """Validate a `/_test/fail-next` body against the double's contract route templates."""
+    if (
+        not isinstance(document, dict)
+        or not set(document) >= _REQUIRED_FIELDS
+        or not set(document) <= _REQUIRED_FIELDS | _OPTIONAL_FIELDS
+    ):
         raise ValidationFailedError(details=(ErrorDetail("body", "MUST_HAVE_COUNT_STATUS_WHEN"),))
     count, status, when = document["count"], document["status"], document["when"]
     if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= MAX_INJECTED_FAILURES:
@@ -55,7 +80,8 @@ def parse_failure_spec(document: object, allow_after_commit: bool) -> FailureSpe
         raise ValidationFailedError(details=(ErrorDetail("when", "INVALID_VALUE"),))
     if when == FailureWhen.AFTER_COMMIT and not allow_after_commit:
         raise ValidationFailedError(details=(ErrorDetail("when", "AFTER_COMMIT_NOT_SUPPORTED"),))
-    return FailureSpec(count=count, status=status, when=FailureWhen(when))
+    path = _route_filter(document, contract_routes, when)
+    return FailureSpec(count=count, status=status, when=FailureWhen(when), path=path)
 
 
 class ControlState:
@@ -84,18 +110,21 @@ class ControlState:
             self._pending = spec
             self._remaining = spec.count
 
-    def take(self, when: FailureWhen, is_submission: bool) -> int | None:
+    def take(self, when: FailureWhen, route: str) -> int | None:
         """Consume one pending failure that applies to this call and return its status.
 
-        BEFORE_PROCESSING applies to every contract call. AFTER_COMMIT applies only
-        to registry submissions, which are processed and stored before the failure
-        is returned.
+        `route` is the contract route template of the call. BEFORE_PROCESSING applies
+        to every contract call, or only to `path` when the failure names one.
+        AFTER_COMMIT applies only to registry submissions, which are processed and
+        stored before the failure is returned.
         """
         with self._lock:
             spec = self._pending
             if spec is None or spec.when != when:
                 return None
-            if when == FailureWhen.AFTER_COMMIT and not is_submission:
+            if when == FailureWhen.AFTER_COMMIT and route != SUBMISSIONS_ROUTE:
+                return None
+            if spec.path is not None and spec.path != route:
                 return None
             self._remaining -= 1
             if self._remaining <= 0:

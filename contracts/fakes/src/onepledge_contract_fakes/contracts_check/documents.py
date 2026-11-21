@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import yaml  # type: ignore[import-untyped]  # PyYAML ships no type information; only safe_load is used
+import yaml
 
 
 class DocumentError(Exception):

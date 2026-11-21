@@ -18,9 +18,11 @@ from onepledge_contract_fakes.web import (
     TEST_CONTROL_HEADER,
     RequestContextMiddleware,
     check_test_control_key,
+    contract_routes,
     install_error_handlers,
     parse_json,
     parse_model_json,
+    route_template,
 )
 
 ELEMENT_PATTERN = r"^[A-Za-z0-9+/]{43}=$"
@@ -56,7 +58,7 @@ def create_key_holder_app(config: KeyHolderConfig, clock: Clock | None = None) -
         api_key = request.headers.get("x-api-key")
         if controls is not None:
             controls.record(request.url.path, double.identify(api_key), body)
-            status = controls.take(FailureWhen.BEFORE_PROCESSING, is_submission=False)
+            status = controls.take(FailureWhen.BEFORE_PROCESSING, route_template(request))
             if status is not None:
                 raise InjectedFailureError(status)
         member_id = double.authenticate(api_key)
@@ -104,6 +106,9 @@ def _mount_controls(app: FastAPI, double: KeyHolderDouble, controls: ControlStat
     @app.post("/_test/fail-next")
     async def fail_next(request: Request) -> JSONResponse:
         check_test_control_key(request.headers.get(TEST_CONTROL_HEADER), key)
-        spec = parse_failure_spec(parse_json(await request.body()), allow_after_commit=False)
+        document = parse_json(await request.body())
+        spec = parse_failure_spec(document, contract_routes(app), allow_after_commit=False)
         controls.arm(spec)
-        return JSONResponse({"armed": spec.count, "status": spec.status, "when": spec.when.value})
+        return JSONResponse(
+            {"armed": spec.count, "status": spec.status, "when": spec.when.value, "path": spec.path}
+        )

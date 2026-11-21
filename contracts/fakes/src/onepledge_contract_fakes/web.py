@@ -19,6 +19,7 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, ValidationError
 
 from onepledge_contract_fakes.errors import (
@@ -268,3 +269,18 @@ class RequestContextMiddleware:
             await send(message)
 
         return wrapped
+
+
+def route_template(request: Request) -> str:
+    """The route template a request matched (for example `/v1/certificates/{certificate_id}`)."""
+    route = request.scope.get("route")
+    return route.path if isinstance(route, APIRoute) else request.url.path
+
+
+def contract_routes(app: FastAPI) -> frozenset[str]:
+    """The route templates of the contract endpoints of an app (no `/healthz`, no `/_test/`)."""
+    return frozenset(
+        route.path
+        for route in app.routes
+        if isinstance(route, APIRoute) and route.path != "/healthz" and not route.path.startswith("/_test/")
+    )

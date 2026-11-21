@@ -11,14 +11,19 @@ from fastapi.responses import JSONResponse, Response
 
 from onepledge_contract_fakes.canonical_json import canonical_sha256
 from onepledge_contract_fakes.clock import Clock, IdSource, RandomIds, SystemClock
-from onepledge_contract_fakes.controls import ControlState, FailureWhen
+from onepledge_contract_fakes.controls import SUBMISSIONS_ROUTE, ControlState, FailureWhen
 from onepledge_contract_fakes.errors import ErrorDetail, InjectedFailureError, ValidationFailedError
 from onepledge_contract_fakes.registry.config import RegistryConfig
 from onepledge_contract_fakes.registry.control_routes import mount_test_controls
 from onepledge_contract_fakes.registry.double import RegistryDouble
 from onepledge_contract_fakes.registry.model import CaseStatus
 from onepledge_contract_fakes.registry.wire import CasePositionRequestModel, SubmissionRequestModel
-from onepledge_contract_fakes.web import RequestContextMiddleware, install_error_handlers, parse_model_json
+from onepledge_contract_fakes.web import (
+    RequestContextMiddleware,
+    install_error_handlers,
+    parse_model_json,
+    route_template,
+)
 
 _IDEMPOTENCY_KEY = re.compile(r"^[0-9a-f]{64}$")
 _JSON = "application/json"
@@ -38,7 +43,7 @@ class _Guard:
         if self._controls is not None:
             if request.method == "POST":
                 self._controls.record(request.url.path, self._double.identify(api_key), body)
-            status = self._controls.take(FailureWhen.BEFORE_PROCESSING, is_submission=False)
+            status = self._controls.take(FailureWhen.BEFORE_PROCESSING, route_template(request))
             if status is not None:
                 raise InjectedFailureError(status)
         return self._double.authenticate(api_key), body
@@ -46,7 +51,7 @@ class _Guard:
     async def enter_reader(self, request: Request) -> str:
         """Like `enter` for the ledger reads, which also accept the auditor key."""
         if self._controls is not None:
-            status = self._controls.take(FailureWhen.BEFORE_PROCESSING, is_submission=False)
+            status = self._controls.take(FailureWhen.BEFORE_PROCESSING, route_template(request))
             if status is not None:
                 raise InjectedFailureError(status)
         return self._double.reader_role(request.headers.get("x-api-key"))
@@ -54,7 +59,7 @@ class _Guard:
     def after_commit(self) -> None:
         """Fail a submission after it was stored, to simulate a lost response."""
         if self._controls is not None:
-            status = self._controls.take(FailureWhen.AFTER_COMMIT, is_submission=True)
+            status = self._controls.take(FailureWhen.AFTER_COMMIT, SUBMISSIONS_ROUTE)
             if status is not None:
                 raise InjectedFailureError(status)
 
