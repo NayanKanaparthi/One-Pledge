@@ -58,7 +58,7 @@ def test_same_key_and_body_replays_the_stored_bytes() -> None:
     again = registry.submit(ids[0], code("key"), submission, code("body"))
     assert first.status == 201 and not first.replay
     assert again.status == 200 and again.replay and again.body == first.body
-    stats = registry.stats()["total"]
+    stats = registry.test_controls.stats()["total"]
     assert isinstance(stats, dict) and stats["submissions"] == 1 and stats["active_locks"] == 2
 
 
@@ -139,5 +139,5 @@ def test_race_concurrent_pledges_of_one_asset_lock_exactly_once_every_time() -> 
     for round_number in range(RACE_ROUNDS):
         outcomes, registry = race_once(round_number)
         assert outcomes == ["CONFLICT", "LOCKED"], f"round {round_number}"
-        stats = registry.stats()["total"]
+        stats = registry.test_controls.stats()["total"]
         assert isinstance(stats, dict) and stats["active_locks"] == 1 and stats["open_cases"] == 1

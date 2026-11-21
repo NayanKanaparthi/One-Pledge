@@ -44,8 +44,50 @@ class SubmitOutcome:
     replay: bool
 
 
+class RegistryTestControls:
+    """The TEST CONTROLS of the registry double (`/_test/`): statistics, dump, tamper, checkpoint now.
+
+    Every call takes the double's lock, so a control never sees half a submission.
+    """
+
+    def __init__(
+        self,
+        lock: threading.RLock,
+        inspector: RegistryInspector,
+        submissions: dict[str, SubmissionRecord],
+        publisher: Publisher,
+    ) -> None:
+        self._lock = lock
+        self._inspector = inspector
+        self._submissions = submissions
+        self._publisher = publisher
+
+    def stats(self) -> dict[str, JsonValue]:
+        """Totals and per member counts for `/_test/stats`."""
+        with self._lock:
+            return self._inspector.stats(tuple(self._submissions.values()))
+
+    def dump(self) -> dict[str, JsonValue]:
+        """Full state for `/_test/dump`: codes and registry identifiers only."""
+        with self._lock:
+            return self._inspector.dump()
+
+    def tamper(self, request: TamperRequest) -> dict[str, JsonValue]:
+        """Apply one tamper mode for the integrity tests."""
+        with self._lock:
+            return self._inspector.tamper(request)
+
+    def checkpoint_now(self) -> dict[str, JsonValue]:
+        """Sign and distribute a checkpoint now."""
+        with self._lock:
+            return self._publisher.checkpoint().to_json()
+
+
 class RegistryDouble:
-    """The registry double: locks, rules, cases, certificates, ledger, checkpoints, outbox."""
+    """The registry double: locks, rules, cases, certificates, ledger, checkpoints, outbox.
+
+    Its test controls are reached through `test_controls`.
+    """
 
     def __init__(self, config: RegistryConfig, clock: Clock, ids: IdSource) -> None:
         self._config = config
@@ -63,7 +105,8 @@ class RegistryDouble:
         self._publisher = Publisher(stores, self._members.member_ids, clock, ids)
         self._processor = SubmissionProcessor(stores, self._publisher, ids)
         self._submissions: dict[str, SubmissionRecord] = {}
-        self._inspector = RegistryInspector(self._members.member_ids, stores, self._publisher)
+        inspector = RegistryInspector(self._members.member_ids, stores, self._publisher)
+        self.test_controls = RegistryTestControls(self._lock, inspector, self._submissions, self._publisher)
         for member_id in self._members.member_ids:
             self._publisher.event(EventType.MEMBER_JOINED, {"member_id": member_id})
         self._publisher.checkpoint()
@@ -177,23 +220,3 @@ class RegistryDouble:
         """The newest signed checkpoint."""
         with self._lock:
             return self._checkpoints.latest().to_json()
-
-    def stats(self) -> dict[str, JsonValue]:
-        """Totals and per member counts for `/_test/stats`."""
-        with self._lock:
-            return self._inspector.stats(tuple(self._submissions.values()))
-
-    def dump(self) -> dict[str, JsonValue]:
-        """Full state for `/_test/dump`: codes and registry identifiers only."""
-        with self._lock:
-            return self._inspector.dump()
-
-    def tamper(self, request: TamperRequest) -> dict[str, JsonValue]:
-        """Apply one tamper mode for the integrity tests."""
-        with self._lock:
-            return self._inspector.tamper(request)
-
-    def checkpoint_now(self) -> dict[str, JsonValue]:
-        """Sign and distribute a checkpoint now."""
-        with self._lock:
-            return self._publisher.checkpoint().to_json()

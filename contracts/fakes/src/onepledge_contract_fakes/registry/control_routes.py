@@ -20,7 +20,7 @@ def mount_test_controls(app: FastAPI, double: RegistryDouble, controls: ControlS
     @app.get("/_test/stats")
     async def stats(request: Request) -> JSONResponse:
         guard(request)
-        return JSONResponse(double.stats())
+        return JSONResponse(double.test_controls.stats())
 
     @app.get("/_test/received")
     async def received(request: Request) -> JSONResponse:
@@ -38,14 +38,16 @@ def mount_test_controls(app: FastAPI, double: RegistryDouble, controls: ControlS
     @app.get("/_test/dump")
     async def dump(request: Request) -> JSONResponse:
         guard(request)
-        return JSONResponse(double.dump())
+        return JSONResponse(double.test_controls.dump())
 
     @app.post("/_test/tamper")
     async def tamper(request: Request) -> JSONResponse:
         guard(request)
-        return JSONResponse(double.tamper(parse_tamper_request(parse_json(await request.body()))))
+        return JSONResponse(
+            double.test_controls.tamper(parse_tamper_request(parse_json(await request.body())))
+        )
 
     @app.post("/_test/checkpoint")
     async def checkpoint(request: Request) -> JSONResponse:
         guard(request)
-        return JSONResponse(double.checkpoint_now())
+        return JSONResponse(double.test_controls.checkpoint_now())

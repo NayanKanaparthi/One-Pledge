@@ -146,7 +146,7 @@ def test_rewrite_history_recomputes_the_chain_and_signs_a_new_head(
     double, _ = registry
     before = events(double)
     old_checkpoint = plain(double.latest_checkpoint())["body"]
-    double.tamper(TamperRequest(TamperMode.REWRITE_HISTORY, seq=3))
+    double.test_controls.tamper(TamperRequest(TamperMode.REWRITE_HISTORY, seq=3))
     after = events(double)
     assert first_chain_break(after) is None
     assert after[2]["payload"] != before[2]["payload"]
@@ -158,13 +158,13 @@ def test_rewrite_history_recomputes_the_chain_and_signs_a_new_head(
 
 def test_edit_in_place_breaks_the_chain_at_that_seq(registry: tuple[RegistryDouble, list[str]]) -> None:
     double, _ = registry
-    double.tamper(TamperRequest(TamperMode.EDIT_IN_PLACE, seq=3))
+    double.test_controls.tamper(TamperRequest(TamperMode.EDIT_IN_PLACE, seq=3))
     assert first_chain_break(events(double)) == 3
 
 
 def test_bad_checkpoint_signature_is_distributed(registry: tuple[RegistryDouble, list[str]]) -> None:
     double, ids = registry
-    double.tamper(TamperRequest(TamperMode.BAD_CHECKPOINT_SIGNATURE))
+    double.test_controls.tamper(TamperRequest(TamperMode.BAD_CHECKPOINT_SIGNATURE))
     latest = plain(double.latest_checkpoint())
     assert not verifies(double.public_key_b64, latest["body"], latest["signature"])
     messages = plain(double.outbox(ids[0], 200))["messages"]
@@ -181,18 +181,20 @@ def test_certificate_body_tamper_keeps_the_old_hash_and_signature(
     certificate_id = json.loads(double.submit(ids[0], code("t"), submission, code("t")).body)[
         "certificate_id"
     ]
-    double.tamper(TamperRequest(TamperMode.CERTIFICATE_BODY, certificate_id=certificate_id))
+    double.test_controls.tamper(TamperRequest(TamperMode.CERTIFICATE_BODY, certificate_id=certificate_id))
     certificate = plain(double.certificate(ids[0], certificate_id))
     assert certificate["body"]["summary"]["locked"] == 2
     assert certificate["body_hash"] != hashlib.sha256(canonical(certificate["body"])).hexdigest()
     with pytest.raises(CertificateNotFoundError):
-        double.tamper(TamperRequest(TamperMode.CERTIFICATE_BODY, certificate_id=str(uuid.uuid4())))
+        double.test_controls.tamper(
+            TamperRequest(TamperMode.CERTIFICATE_BODY, certificate_id=str(uuid.uuid4()))
+        )
 
 
 def test_checkpoint_now_appends_and_distributes(registry: tuple[RegistryDouble, list[str]]) -> None:
     double, ids = registry
     before = len(plain(double.outbox(ids[1], 200))["messages"])
-    signed = plain(double.checkpoint_now())
+    signed = plain(double.test_controls.checkpoint_now())
     assert signed["body"]["last_event_seq"] == events(double)[-2]["seq"]
     assert len(plain(double.outbox(ids[1], 200))["messages"]) == before + 1
 
@@ -217,12 +219,12 @@ def test_malformed_tamper_requests_are_refused(document: object) -> None:
 def test_tamper_seq_beyond_the_head_is_refused(registry: tuple[RegistryDouble, list[str]]) -> None:
     double, _ = registry
     with pytest.raises(ValidationFailedError):
-        double.tamper(TamperRequest(TamperMode.EDIT_IN_PLACE, seq=10_000))
+        double.test_controls.tamper(TamperRequest(TamperMode.EDIT_IN_PLACE, seq=10_000))
 
 
 def test_dump_holds_codes_and_identifiers(registry: tuple[RegistryDouble, list[str]]) -> None:
     double, ids = registry
-    dump = plain(double.dump())
+    dump = plain(double.test_controls.dump())
     assert dump["members"] == ids
     assert len(dump["locks"]) == 3 and all(lock["active"] for lock in dump["locks"])
     assert len(dump["events"]) == len(events(double)) and len(dump["certificates"]) == 3

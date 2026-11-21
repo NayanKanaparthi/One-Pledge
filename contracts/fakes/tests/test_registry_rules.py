@@ -127,7 +127,7 @@ def test_a_free_asset_is_locked_and_rule_a_reports_already_held(world: World) ->
     assert (
         again["result"] == "LOCKED" and again["already_held"] is True and again["lock_id"] == first["lock_id"]
     )
-    assert plain(world.registry.stats())["total"]["active_locks"] == 1
+    assert plain(world.registry.test_controls.stats())["total"]["active_locks"] == 1
 
 
 def test_rule_b_exact_copy(world: World) -> None:
