@@ -14,6 +14,7 @@ from onepledge_contract_fakes.controls import ControlState, FailureWhen, parse_f
 from onepledge_contract_fakes.errors import InjectedFailureError
 from onepledge_contract_fakes.key_holder.config import KeyHolderConfig
 from onepledge_contract_fakes.key_holder.double import EvaluationRequest, KeyHolderDouble
+from onepledge_contract_fakes.validation import QueryParameters
 from onepledge_contract_fakes.web import (
     TEST_CONTROL_HEADER,
     RequestContextMiddleware,
@@ -62,6 +63,7 @@ def create_key_holder_app(config: KeyHolderConfig, clock: Clock | None = None) -
             if status is not None:
                 raise InjectedFailureError(status)
         member_id = double.authenticate(api_key)
+        QueryParameters(request.query_params.multi_items(), ()).finish()
         model = parse_model_json(EvaluateRequestModel, body)
         command = EvaluationRequest(str(model.request_id), model.key_version, tuple(model.elements))
         result = double.evaluate(member_id, command)

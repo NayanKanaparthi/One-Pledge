@@ -1,7 +1,8 @@
 """Member authentication by API key hash (TEST DOUBLES, SPEC 4).
 
-A double stores only the SHA-256 of each key and compares with
-`hmac.compare_digest`, the same rule the real services follow.
+A double stores only the SHA-256 of each key. It compares a presented key's hash with
+every configured hash using `hmac.compare_digest` and does not stop at the first match,
+so the time taken does not depend on which member, if any, holds the key (SPEC 4).
 """
 
 from __future__ import annotations

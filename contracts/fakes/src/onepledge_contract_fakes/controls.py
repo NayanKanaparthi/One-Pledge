@@ -11,13 +11,12 @@ import threading
 from dataclasses import dataclass
 from enum import StrEnum
 
-from onepledge_contract_fakes.errors import ErrorDetail, ValidationFailedError
+from onepledge_contract_fakes.errors import InvariantViolationError
+from onepledge_contract_fakes.validation import Issue, JsonFields
 
 INJECTABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 MAX_INJECTED_FAILURES = 1000
 SUBMISSIONS_ROUTE = "/v1/submissions"
-_REQUIRED_FIELDS = frozenset({"count", "status", "when"})
-_OPTIONAL_FIELDS = frozenset({"path"})
 
 
 class FailureWhen(StrEnum):
@@ -50,37 +49,29 @@ class FailureSpec:
     path: str | None = None
 
 
-def _route_filter(document: dict[str, object], contract_routes: frozenset[str], when: str) -> str | None:
-    path = document.get("path")
-    if path is None:
-        return None
-    if not isinstance(path, str) or path not in contract_routes:
-        raise ValidationFailedError(details=(ErrorDetail("path", "UNKNOWN_ROUTE"),))
-    if when == FailureWhen.AFTER_COMMIT and path != SUBMISSIONS_ROUTE:
-        raise ValidationFailedError(details=(ErrorDetail("path", "AFTER_COMMIT_ONLY_ON_SUBMISSIONS"),))
-    return path
-
-
 def parse_failure_spec(
     document: object, contract_routes: frozenset[str], allow_after_commit: bool
 ) -> FailureSpec:
-    """Validate a `/_test/fail-next` body against the double's contract route templates."""
-    if (
-        not isinstance(document, dict)
-        or not set(document) >= _REQUIRED_FIELDS
-        or not set(document) <= _REQUIRED_FIELDS | _OPTIONAL_FIELDS
-    ):
-        raise ValidationFailedError(details=(ErrorDetail("body", "MUST_HAVE_COUNT_STATUS_WHEN"),))
-    count, status, when = document["count"], document["status"], document["when"]
-    if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= MAX_INJECTED_FAILURES:
-        raise ValidationFailedError(details=(ErrorDetail("count", "OUT_OF_RANGE"),))
-    if not isinstance(status, int) or status not in INJECTABLE_STATUSES:
-        raise ValidationFailedError(details=(ErrorDetail("status", "NOT_AN_INJECTABLE_STATUS"),))
-    if when not in {w.value for w in FailureWhen}:
-        raise ValidationFailedError(details=(ErrorDetail("when", "INVALID_VALUE"),))
+    """Validate a `/_test/fail-next` body against the double's contract route templates.
+
+    `path`, when given, must be one of the double's route templates; with AFTER_COMMIT it
+    may only be `/v1/submissions`. Every problem is INVALID_VALUE, INVALID_TYPE,
+    OUT_OF_RANGE, REQUIRED or UNKNOWN_FIELD, like any other request of a layer 1 service.
+    """
+    fields = JsonFields(document, required=("count", "status", "when"), optional=("path",))
+    count = fields.integer("count", 1, MAX_INJECTED_FAILURES)
+    status = fields.integer("status", 100, 599)
+    if status is not None and status not in INJECTABLE_STATUSES:
+        fields.reject("status", Issue.INVALID_VALUE)
+    when = fields.choice("when", [w.value for w in FailureWhen])
     if when == FailureWhen.AFTER_COMMIT and not allow_after_commit:
-        raise ValidationFailedError(details=(ErrorDetail("when", "AFTER_COMMIT_NOT_SUPPORTED"),))
-    path = _route_filter(document, contract_routes, when)
+        fields.reject("when", Issue.INVALID_VALUE)
+    path = fields.choice("path", contract_routes)
+    if path is not None and when == FailureWhen.AFTER_COMMIT and path != SUBMISSIONS_ROUTE:
+        fields.reject("path", Issue.INVALID_VALUE)
+    fields.finish()
+    if count is None or status is None or when is None:
+        raise InvariantViolationError
     return FailureSpec(count=count, status=status, when=FailureWhen(when), path=path)
 
 

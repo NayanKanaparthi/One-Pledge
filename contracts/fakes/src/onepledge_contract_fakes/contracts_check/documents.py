@@ -26,8 +26,12 @@ def load_yaml_mapping(path: Path) -> Mapping[str, Any]:
     """Parse a YAML file whose top level is a mapping."""
     try:
         document = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as error:
-        raise DocumentError(path, f"cannot be parsed as YAML ({type(error).__name__})") from None
+    except OSError:
+        raise DocumentError(path, "cannot be read") from None
+    except UnicodeDecodeError:
+        raise DocumentError(path, "is not UTF-8 text") from None
+    except yaml.YAMLError:
+        raise DocumentError(path, "is not valid YAML") from None
     if not isinstance(document, dict):
         raise DocumentError(path, "does not hold a YAML mapping")
     return document
@@ -37,5 +41,9 @@ def load_json(path: Path) -> object:
     """Parse a JSON file."""
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as error:
-        raise DocumentError(path, f"cannot be parsed as JSON ({type(error).__name__})") from None
+    except OSError:
+        raise DocumentError(path, "cannot be read") from None
+    except UnicodeDecodeError:
+        raise DocumentError(path, "is not UTF-8 text") from None
+    except json.JSONDecodeError as error:
+        raise DocumentError(path, f"is not valid JSON (line {error.lineno}, column {error.colno})") from None

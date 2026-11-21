@@ -96,10 +96,24 @@ def check_tokenization(vector: Mapping[str, Any]) -> list[str]:
     return problems
 
 
+KEY_HOLDER_EXAMPLES = ("key_holder/evaluate.request.json", "key_holder/evaluate.response.json")
+
+
+def vector_dependencies(name: str, vector: Mapping[str, Any]) -> list[str]:
+    """The example files (relative to `examples/`) a vector file is checked against."""
+    if name == "tokenization.json":
+        return list(KEY_HOLDER_EXAMPLES)
+    files = []
+    for entry_name in ("certificate", "checkpoint", "ledger_event"):
+        entry = vector.get(entry_name)
+        if isinstance(entry, Mapping) and isinstance(entry.get("file"), str):
+            files.append(str(entry["file"]))
+    return files
+
+
 def check_key_holder_examples(vector: Mapping[str, Any], examples_dir: Path) -> list[str]:
     """The key holder examples must carry the vector's blinded and holder 1 values."""
-    request = load_json(examples_dir / "key_holder" / "evaluate.request.json")
-    response = load_json(examples_dir / "key_holder" / "evaluate.response.json")
+    request, response = (load_json(examples_dir / name) for name in KEY_HOLDER_EXAMPLES)
     blinded = [entry["blinded"] for entry in vector["tokens"]]
     after_1 = [entry["after_holder_1"] for entry in vector["tokens"]]
     problems = []

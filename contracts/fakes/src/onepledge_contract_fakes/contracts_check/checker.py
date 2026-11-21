@@ -12,12 +12,14 @@ from typing import Any
 
 from openapi_spec_validator import OpenAPIV31SpecValidator
 
+from onepledge_contract_fakes.cli_output import plural
 from onepledge_contract_fakes.contracts_check.documents import DocumentError, load_json, load_yaml_mapping
 from onepledge_contract_fakes.contracts_check.schemas import ContractSchemas
 from onepledge_contract_fakes.contracts_check.vectors import (
     check_key_holder_examples,
     check_signatures,
     check_tokenization,
+    vector_dependencies,
 )
 
 CONTRACT_FILES: tuple[str, ...] = (
@@ -37,10 +39,11 @@ class CheckOutcome:
     name: str
     summary: str
     problems: list[str] = field(default_factory=list)
+    skipped_because: str | None = None
 
     @property
     def ok(self) -> bool:
-        """Whether the check found nothing wrong."""
+        """Whether the check found nothing wrong (a skipped check is not counted as a problem)."""
         return not self.problems
 
 
@@ -81,9 +84,10 @@ class ContractsChecker:
         """Run the checks in order and collect their outcomes."""
         specs, outcomes = self._load_and_validate_specs()
         index = self._load_index(outcomes)
-        outcomes.append(self._check_examples(specs, index))
+        examples, invalid = self._check_examples(specs, index)
+        outcomes.append(examples)
         outcomes.append(self._check_references(specs, index))
-        outcomes.extend(self._check_vectors())
+        outcomes.extend(self._check_vectors(invalid))
         return CheckReport(tuple(outcomes), len(CONTRACT_FILES), len(index))
 
     def _load_and_validate_specs(self) -> tuple[dict[str, Mapping[str, Any]], list[CheckOutcome]]:
@@ -124,31 +128,36 @@ class ContractsChecker:
 
     def _check_examples(
         self, specs: Mapping[str, Mapping[str, Any]], index: list[Mapping[str, Any]]
-    ) -> CheckOutcome:
-        outcome = CheckOutcome("examples", f"{len(index)} examples validate against their schemas")
+    ) -> tuple[CheckOutcome, set[str]]:
+        """The examples outcome and the example files found invalid (vectors that read them are skipped)."""
+        outcome = CheckOutcome("examples", f"{plural(len(index), 'example')} validate against their schemas")
+        invalid: set[str] = set()
         validators = {name: ContractSchemas(spec, name) for name, spec in specs.items()}
         for entry in index:
             file_name, contract, schema = entry.get("file"), entry.get("contract"), entry.get("schema")
             validator = validators.get(str(contract))
             if validator is None or not isinstance(schema, str) or not validator.has_component(schema):
                 outcome.problems.append(f"examples/{file_name}: unknown contract or schema in the index")
+                invalid.add(str(file_name))
                 continue
             try:
                 instance = load_json(self._examples / str(file_name))
             except DocumentError as error:
                 outcome.problems.append(f"examples/{file_name} {error.problem}")
+                invalid.add(str(file_name))
                 continue
-            outcome.problems.extend(
-                f"examples/{file_name}: {problem}" for problem in validator.component_errors(schema, instance)
-            )
-        return outcome
+            problems = validator.component_errors(schema, instance)
+            if problems:
+                invalid.add(str(file_name))
+            outcome.problems.extend(f"examples/{file_name}: {problem}" for problem in problems)
+        return outcome, invalid
 
     def _check_references(
         self, specs: Mapping[str, Mapping[str, Any]], index: list[Mapping[str, Any]]
     ) -> CheckOutcome:
         references = [(name, ref) for name, spec in specs.items() for ref in _external_values(spec)]
         outcome = CheckOutcome(
-            "references", f"{len(references)} externalValue links resolve, every example is indexed"
+            "references", f"{plural(len(references), 'externalValue link')} resolve, every example is indexed"
         )
         for name, reference in references:
             if not (self._dir / reference).is_file():
@@ -166,24 +175,38 @@ class ContractsChecker:
                 )
         return outcome
 
-    def _check_vectors(self) -> list[CheckOutcome]:
-        tokenization = CheckOutcome("vectors tokenization.json", "every OPRF value and token recomputes")
-        signatures = CheckOutcome("vectors signatures.json", "every hash and signature recomputes")
-        try:
-            vector = load_json(self._examples / "vectors" / "tokenization.json")
-            if not isinstance(vector, dict):
-                raise DocumentError(self._examples / "vectors" / "tokenization.json", "is not a JSON object")
-            tokenization.problems.extend(check_tokenization(vector))
-            tokenization.problems.extend(check_key_holder_examples(vector, self._examples))
-        except (DocumentError, KeyError, TypeError, ValueError) as error:
-            tokenization.problems.append(
-                f"vectors/tokenization.json cannot be checked ({type(error).__name__})"
-            )
-        try:
-            vector = load_json(self._examples / "vectors" / "signatures.json")
-            if not isinstance(vector, dict):
-                raise DocumentError(self._examples / "vectors" / "signatures.json", "is not a JSON object")
-            signatures.problems.extend(check_signatures(vector, self._examples))
-        except (DocumentError, KeyError, TypeError, ValueError) as error:
-            signatures.problems.append(f"vectors/signatures.json cannot be checked ({type(error).__name__})")
+    def _check_vectors(self, invalid_examples: set[str]) -> list[CheckOutcome]:
+        tokenization = self._check_vector(
+            "tokenization.json", "every OPRF value and token recomputes", invalid_examples
+        )
+        signatures = self._check_vector(
+            "signatures.json", "every hash and signature recomputes", invalid_examples
+        )
         return [tokenization, signatures]
+
+    def _check_vector(self, name: str, summary: str, invalid_examples: set[str]) -> CheckOutcome:
+        """One vector file; skipped with one line when an example it reads was already reported invalid."""
+        outcome = CheckOutcome(f"vectors {name}", summary)
+        path = self._examples / "vectors" / name
+        try:
+            vector = load_json(path)
+            if not isinstance(vector, dict):
+                raise DocumentError(path, "is not a JSON object")
+            broken = sorted(set(vector_dependencies(name, vector)) & invalid_examples)
+            if broken:
+                outcome.skipped_because = (
+                    f"vectors/{name}: not checked, depends on {broken[0]} which is invalid"
+                )
+                return outcome
+            if name == "tokenization.json":
+                outcome.problems.extend(check_tokenization(vector))
+                outcome.problems.extend(check_key_holder_examples(vector, self._examples))
+            else:
+                outcome.problems.extend(check_signatures(vector, self._examples))
+        except DocumentError as error:
+            outcome.problems.append(f"vectors/{name} {error.problem}")
+        except KeyError:
+            outcome.problems.append(f"vectors/{name} lacks a field the check needs")
+        except (TypeError, ValueError):
+            outcome.problems.append(f"vectors/{name} holds a value of the wrong type or form")
+        return outcome

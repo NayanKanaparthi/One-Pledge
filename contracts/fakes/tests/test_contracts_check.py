@@ -98,3 +98,79 @@ def test_a_missing_directory_is_one_sentence(tmp_path: Path) -> None:
     err = io.StringIO()
     code = main(["check", "--contracts-dir", str(tmp_path / "absent")], CliOutput(io.StringIO(), err))
     assert code == 1 and err.getvalue().count("\n") == 1
+
+
+def run_json(contracts_dir: Path) -> tuple[int, dict[str, object], str]:
+    out, err = io.StringIO(), io.StringIO()
+    code = main(["check", "--json", "--contracts-dir", str(contracts_dir)], CliOutput(out, err))
+    document: dict[str, object] = json.loads(out.getvalue())
+    return code, document, err.getvalue()
+
+
+def test_a_broken_example_is_one_problem_and_its_vector_is_skipped(
+    contracts_dir: Path, tmp_path: Path
+) -> None:
+    broken = copy_contracts(contracts_dir, tmp_path)
+    example = broken / "examples" / "registry" / "certificate.response.json"
+    document = json.loads(example.read_text())
+    del document["body"]
+    example.write_text(json.dumps(document))
+    code, text = run(broken)
+    assert code == 1
+    assert (
+        "contracts-check: SKIP vectors/signatures.json: not checked, depends on "
+        "registry/certificate.response.json which is invalid"
+    ) in text.splitlines()
+    assert text.splitlines()[-1] == "contracts-check: FAILED (1 problem)"
+    assert "Error" not in text and "(KeyError)" not in text
+
+
+def test_no_output_names_a_python_class(contracts_dir: Path, tmp_path: Path) -> None:
+    broken = copy_contracts(contracts_dir, tmp_path)
+    (broken / "examples" / "registry" / "outbox.response.json").write_text("{broken")
+    (broken / "examples" / "vectors" / "tokenization.json").write_text("[1]")
+    code, text = run(broken)
+    assert code == 1
+    assert "examples/registry/outbox.response.json is not valid JSON (line 1, column 2)" in text
+    assert "vectors/tokenization.json is not a JSON object" in text
+    second = copy_contracts(contracts_dir, tmp_path / "second")
+    (second / "registry.yaml").write_bytes(b"\xff\xfe")
+    (second / "key_holder.yaml").write_text("a: [unclosed")
+    code, more = run(second)
+    assert code == 1
+    assert "registry.yaml is not UTF-8 text" in more and "key_holder.yaml is not valid YAML" in more
+    for name in ("Error", "Exception", "KeyError", "TypeError", "ValueError"):
+        assert name not in text + more
+
+
+def test_json_output_is_one_document_on_success_and_on_failure(contracts_dir: Path, tmp_path: Path) -> None:
+    code, document, err = run_json(contracts_dir)
+    assert (code, document["ok"], document["files"], document["problems"], err) == (0, True, 4, 0, "")
+    checks = document["checks"]
+    assert isinstance(checks, list) and {c["status"] for c in checks} == {"OK"}
+    broken = copy_contracts(contracts_dir, tmp_path)
+    (broken / "examples" / "registry" / "outbox.response.json").write_text("{}")
+    code, document, err = run_json(broken)
+    assert (code, document["ok"]) == (1, False)
+    assert document["error"] == {"code": "CONTRACTS_INVALID", "message": err.strip()}
+    code, document, err = run_json(tmp_path / "absent")
+    error = document["error"]
+    assert isinstance(error, dict)
+    assert (code, document["ok"], error["code"]) == (1, False, "CONTRACTS_DIR_NOT_FOUND")
+
+
+def test_an_unexpected_failure_is_one_sentence_and_the_traceback_needs_debug(
+    contracts_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def explode(self: ContractsChecker) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(ContractsChecker, "run", explode)
+    out, err = io.StringIO(), io.StringIO()
+    assert main(["check", "--contracts-dir", str(contracts_dir)], CliOutput(out, err)) == 1
+    assert (out.getvalue(), err.getvalue()) == ("", "Unexpected error. Run with --debug for details.\n")
+    err = io.StringIO()
+    assert (
+        main(["check", "--debug", "--contracts-dir", str(contracts_dir)], CliOutput(io.StringIO(), err)) == 1
+    )
+    assert "Traceback (most recent call last)" in err.getvalue() and "RuntimeError: boom" in err.getvalue()

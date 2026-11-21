@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from onepledge_contract_fakes.registry.model import (
     FIELD_KINDS,
@@ -18,6 +18,7 @@ from onepledge_contract_fakes.registry.model import (
 CODE_PATTERN = r"^[0-9a-f]{64}$"
 KEY_VERSION_PATTERN = r"^[1-9][0-9]*\.[1-9][0-9]*$"
 MAX_ITEMS = 500
+SCHEMA_VERSION = 1
 
 type Token = Annotated[str, Field(pattern=CODE_PATTERN)]
 
@@ -51,10 +52,18 @@ class SubmissionRequestModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    schema_version: Literal[1]
+    schema_version: int
     kind: Literal["BACK_BOOK", "PLEDGE", "RELEASE"]
     key_version: Annotated[str, Field(pattern=KEY_VERSION_PATTERN)]
     items: Annotated[list[SubmissionItemModel], Field(min_length=1, max_length=MAX_ITEMS)]
+
+    @field_validator("schema_version")
+    @classmethod
+    def _schema_version_is_one(cls, value: int) -> int:
+        """`const: 1` in registry.yaml. The strict model already refused 1.0, true and "1"."""
+        if value != SCHEMA_VERSION:
+            raise ValueError("schema_version")
+        return value
 
     def to_submission(self) -> Submission:
         """The domain value of the request."""

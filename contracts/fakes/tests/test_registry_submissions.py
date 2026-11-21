@@ -87,8 +87,8 @@ def test_a_stale_key_version_is_refused_and_not_stored() -> None:
     ("submission", "issue"),
     [
         (pledge(item("a"), item("a")), "DUPLICATE_ASSET_TOKEN"),
-        (pledge(item("a", with_fields=False)), "MISSING"),
-        (pledge(item("a"), kind=SubmissionKind.RELEASE), "NOT_ALLOWED_FOR_RELEASE"),
+        (pledge(item("a", with_fields=False)), "REQUIRED"),
+        (pledge(item("a"), kind=SubmissionKind.RELEASE), "INVALID_VALUE"),
     ],
 )
 def test_semantic_validation(submission: Submission, issue: str) -> None:
@@ -104,7 +104,7 @@ def test_duplicate_item_refs_are_refused() -> None:
     duplicate = SubmissionItem(first.item_ref, code("other"), first.field_tokens)
     with pytest.raises(ValidationFailedError) as raised:
         registry.submit(ids[0], code("key"), pledge(first, duplicate), code("body"))
-    assert {d.issue for d in raised.value.details} == {"DUPLICATE_ITEM_REF"}
+    assert {d.issue for d in raised.value.details} == {"DUPLICATE"}
 
 
 def test_daily_item_cap() -> None:

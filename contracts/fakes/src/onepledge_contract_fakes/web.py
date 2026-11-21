@@ -32,6 +32,7 @@ from onepledge_contract_fakes.errors import (
     ValidationFailedError,
 )
 from onepledge_contract_fakes.logging_setup import LogEvent, get_logger
+from onepledge_contract_fakes.validation import Issue
 
 REQUEST_ID_HEADER = "X-Request-ID"
 TEST_CONTROL_HEADER = "X-Test-Control-Key"
@@ -52,37 +53,35 @@ type Receive = Callable[[], Awaitable[Message]]
 type Send = Callable[[Message], Awaitable[None]]
 type AsgiApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 
-_ISSUES: Mapping[str, str] = MappingProxyType(
+# pydantic error types mapped to the issue vocabulary of SPEC_DECISIONS 22 (finding 7).
+_ISSUES: Mapping[str, Issue] = MappingProxyType(
     {
-        "missing": "MISSING",
-        "extra_forbidden": "UNKNOWN_FIELD",
-        "string_pattern_mismatch": "PATTERN_MISMATCH",
-        "string_too_short": "TOO_SHORT",
-        "string_too_long": "TOO_LONG",
-        "too_short": "TOO_SHORT",
-        "too_long": "TOO_LONG",
-        "uuid_parsing": "INVALID_UUID",
-        "uuid_type": "INVALID_UUID",
-        "int_parsing": "INVALID_INTEGER",
-        "int_type": "INVALID_INTEGER",
-        "int_from_float": "INVALID_INTEGER",
-        "greater_than_equal": "OUT_OF_RANGE",
-        "less_than_equal": "OUT_OF_RANGE",
-        "greater_than": "OUT_OF_RANGE",
-        "less_than": "OUT_OF_RANGE",
-        "literal_error": "INVALID_VALUE",
-        "enum": "INVALID_VALUE",
-        "string_type": "INVALID_TYPE",
-        "list_type": "INVALID_TYPE",
-        "dict_type": "INVALID_TYPE",
-        "model_type": "INVALID_TYPE",
-        "date_from_datetime_parsing": "INVALID_DATE",
-        "date_parsing": "INVALID_DATE",
-        "value_error": "INVALID_VALUE",
-        "json_invalid": "INVALID_JSON",
-        "json_type": "INVALID_JSON",
+        "missing": Issue.REQUIRED,
+        "extra_forbidden": Issue.UNKNOWN_FIELD,
+        "string_pattern_mismatch": Issue.PATTERN_MISMATCH,
+        "string_too_short": Issue.TOO_SHORT,
+        "string_too_long": Issue.TOO_LONG,
+        "too_short": Issue.TOO_FEW_ITEMS,
+        "too_long": Issue.TOO_MANY_ITEMS,
+        "uuid_parsing": Issue.PATTERN_MISMATCH,
+        "greater_than_equal": Issue.OUT_OF_RANGE,
+        "less_than_equal": Issue.OUT_OF_RANGE,
+        "greater_than": Issue.OUT_OF_RANGE,
+        "less_than": Issue.OUT_OF_RANGE,
+        "literal_error": Issue.INVALID_VALUE,
+        "enum": Issue.INVALID_VALUE,
+        "value_error": Issue.INVALID_VALUE,
+        "date_from_datetime_parsing": Issue.INVALID_DATE,
+        "date_parsing": Issue.INVALID_DATE,
+        "json_invalid": Issue.INVALID_VALUE,
+        "int_from_float": Issue.INVALID_TYPE,
     }
 )
+# Every "wrong JSON type" error of pydantic ends in `_type` (int_type, string_type, bool_type,
+# model_type, uuid_type, json_type and so on).
+_TYPE_SUFFIX = "_type"
+_ENUM_ERRORS = frozenset({"literal_error", "enum"})
+_LOCATION_ROOTS = frozenset({"body", "query", "path", "header"})
 
 _log = get_logger(__name__)
 
@@ -109,19 +108,35 @@ def _field_name(location: tuple[int | str, ...]) -> str:
     for part in location:
         if isinstance(part, int):
             parts.append(f"[{part}]")
-        elif part not in ("body", "query", "path", "header"):
+        elif part not in _LOCATION_ROOTS:
             parts.append(("." if parts else "") + part)
     return "".join(parts) or "body"
 
 
+def _issue(error: Mapping[str, Any]) -> Issue:
+    kind = str(error.get("type", ""))
+    if kind in _ENUM_ERRORS and not isinstance(error.get("input"), str):
+        return Issue.INVALID_TYPE
+    if kind in _ISSUES:
+        return _ISSUES[kind]
+    if kind.endswith(_TYPE_SUFFIX) or kind.endswith("_parsing"):
+        return Issue.INVALID_TYPE
+    return Issue.INVALID_VALUE
+
+
 def details_from_pydantic(errors: list[Any]) -> tuple[ErrorDetail, ...]:
-    """Field and issue code per pydantic error, with no input or context."""
-    details = []
+    """Field and issue code per pydantic error, with no input or context.
+
+    The field is always a name the request model declares. An unknown key is never named:
+    every unknown key, at any depth, is reported once as `body` UNKNOWN_FIELD.
+    """
+    details: list[ErrorDetail] = []
     for error in errors:
-        location = tuple(error.get("loc", ()))
-        details.append(
-            ErrorDetail(field=_field_name(location), issue=_ISSUES.get(error.get("type"), "INVALID"))
-        )
+        issue = _issue(error)
+        field = "body" if issue == Issue.UNKNOWN_FIELD else _field_name(tuple(error.get("loc", ())))
+        detail = ErrorDetail(field=field, issue=issue)
+        if detail not in details:
+            details.append(detail)
     return tuple(details)
 
 
@@ -146,7 +161,7 @@ def parse_json(body: bytes) -> object:
     try:
         return json.loads(body)
     except (json.JSONDecodeError, UnicodeDecodeError):
-        raise ValidationFailedError(details=(ErrorDetail("body", "INVALID_JSON"),)) from None
+        raise ValidationFailedError(details=(ErrorDetail("body", Issue.INVALID_VALUE),)) from None
 
 
 def check_test_control_key(presented: str | None, expected: str) -> None:

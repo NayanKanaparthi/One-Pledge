@@ -110,16 +110,22 @@ def test_without_a_path_every_contract_call_consumes_the_failure() -> None:
 @pytest.mark.parametrize(
     ("document", "field", "issue"),
     [
-        ({"path": "/v1/nowhere"}, "path", "UNKNOWN_ROUTE"),
-        ({"path": "/healthz"}, "path", "UNKNOWN_ROUTE"),
-        ({"path": "/_test/stats"}, "path", "UNKNOWN_ROUTE"),
-        ({"path": "/v1/certificates/3f2a"}, "path", "UNKNOWN_ROUTE"),
-        ({"path": 7}, "path", "UNKNOWN_ROUTE"),
-        ({"path": "/v1/outbox", "when": "AFTER_COMMIT"}, "path", "AFTER_COMMIT_ONLY_ON_SUBMISSIONS"),
-        ({"extra": True}, "body", "MUST_HAVE_COUNT_STATUS_WHEN"),
+        ({"path": "/v1/nowhere"}, "path", "INVALID_VALUE"),
+        ({"path": "/healthz"}, "path", "INVALID_VALUE"),
+        ({"path": "/_test/stats"}, "path", "INVALID_VALUE"),
+        ({"path": "/v1/certificates/3f2a"}, "path", "INVALID_VALUE"),
+        ({"path": 7}, "path", "INVALID_TYPE"),
+        ({"path": "/v1/outbox", "when": "AFTER_COMMIT"}, "path", "INVALID_VALUE"),
+        ({"ZQXJ7CANARY9": True}, "body", "UNKNOWN_FIELD"),
+        ({"count": 1.0}, "count", "INVALID_TYPE"),
+        ({"count": True}, "count", "INVALID_TYPE"),
+        ({"count": 0}, "count", "OUT_OF_RANGE"),
+        ({"status": 404}, "status", "INVALID_VALUE"),
+        ({"status": "503"}, "status", "INVALID_TYPE"),
+        ({"when": "LATER"}, "when", "INVALID_VALUE"),
     ],
 )
-def test_malformed_route_filters_are_refused(document: dict[str, object], field: str, issue: str) -> None:
+def test_malformed_failure_requests_are_refused(document: dict[str, object], field: str, issue: str) -> None:
     full = {"count": 1, "status": 503, "when": "BEFORE_PROCESSING", **document}
     with pytest.raises(ValidationFailedError) as raised:
         parse_failure_spec(full, REGISTRY_ROUTES, allow_after_commit=True)
@@ -181,7 +187,7 @@ def test_after_commit_may_name_the_submissions_route_only(registry: tuple[AsgiTe
     status, body = arm(client, count=1, status=503, when="AFTER_COMMIT", path="/v1/outbox")
     assert (status, body["error"]["details"]) == (
         422,
-        [{"field": "path", "issue": "AFTER_COMMIT_ONLY_ON_SUBMISSIONS"}],
+        [{"field": "path", "issue": "INVALID_VALUE"}],
     )
     assert arm(client, count=1, status=503, when="AFTER_COMMIT", path="/v1/submissions")[0] == 200
     assert client.get("/v1/outbox", headers={"X-API-Key": key}).status_code == 200
@@ -195,7 +201,7 @@ def test_after_commit_may_name_the_submissions_route_only(registry: tuple[AsgiTe
 def test_the_key_holder_accepts_only_its_own_route(key_holder: tuple[AsgiTestClient, str]) -> None:
     client, key = key_holder
     status, body = arm(client, count=1, status=503, when="BEFORE_PROCESSING", path="/v1/submissions")
-    assert (status, body["error"]["details"]) == (422, [{"field": "path", "issue": "UNKNOWN_ROUTE"}])
+    assert (status, body["error"]["details"]) == (422, [{"field": "path", "issue": "INVALID_VALUE"}])
     assert arm(client, count=1, status=503, when="BEFORE_PROCESSING", path="/v1/evaluate")[0] == 200
     element = base64.b64encode(bytes(oprf.data.hash(b"p"))).decode()
     request = {"request_id": str(uuid.uuid4()), "elements": [element]}

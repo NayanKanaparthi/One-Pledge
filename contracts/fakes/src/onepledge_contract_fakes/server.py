@@ -35,12 +35,9 @@ def ensure_port_free(host: str, port: int) -> None:
             raise
 
 
-def run_server(app: FastAPI, service: str, host: str, port: int, log_level: str) -> None:
-    """Serve the app until interrupted."""
-    ensure_port_free(host, port)
-    configure_logging(service, log_level)
-    get_logger(__name__).info(LogEvent.SERVICE_STARTED)
-    uvicorn.run(
+def build_server(app: FastAPI, host: str, port: int) -> uvicorn.Server:
+    """A uvicorn server for the app: one worker, uvicorn's access log off, logging left to us."""
+    config = uvicorn.Config(
         app,
         host=host,
         port=port,
@@ -51,3 +48,12 @@ def run_server(app: FastAPI, service: str, host: str, port: int, log_level: str)
         server_header=False,
         date_header=False,
     )
+    return uvicorn.Server(config)
+
+
+def run_server(app: FastAPI, service: str, host: str, port: int, log_level: str) -> None:
+    """Serve the app until interrupted; log lines go to stdout."""
+    ensure_port_free(host, port)
+    configure_logging(service, log_level)
+    get_logger(__name__).info(LogEvent.SERVICE_STARTED)
+    build_server(app, host, port).run()

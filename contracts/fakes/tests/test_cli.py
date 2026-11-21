@@ -113,4 +113,4 @@ def test_the_registry_serves_health_as_a_process() -> None:
         process.terminate()
         stdout, _ = process.communicate(timeout=10)
     lines = [json.loads(line) for line in stdout.decode().splitlines() if line.strip()]
-    assert lines and lines[0]["event"] == "service_started" and lines[0]["service"] == "registry-fake"
+    assert lines and lines[0]["event"] == "service_started" and lines[0]["service"] == "registry"

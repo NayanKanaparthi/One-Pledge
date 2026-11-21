@@ -42,10 +42,15 @@ builders and an in-process HTTP client for other layers' tests.
 ## Commands
 
 ```
-onepledge-fake-keyholder serve        serve one key holder double on BIND_HOST:PORT
-onepledge-fake-registry serve         serve the registry double on BIND_HOST:PORT
-onepledge-contracts check [--contracts-dir contracts]
+onepledge-fake-keyholder serve [--debug]   serve one key holder double on BIND_HOST:PORT
+onepledge-fake-registry serve [--debug]    serve the registry double on BIND_HOST:PORT
+onepledge-contracts check [--contracts-dir contracts] [--json] [--quiet] [--debug]
 ```
+
+Every command prints one sentence on stderr and exits 1 when something is wrong, and
+exits 2 on a usage error. An unexpected error prints `Unexpected error. Run with --debug
+for details.`; `--debug` adds the traceback. `serve` prints no result, so it refuses
+`--json` as a usage error.
 
 `onepledge-contracts check` (run from the repository root, or `make contracts-check`)
 validates the four OpenAPI 3.1 files with `openapi-spec-validator`, validates every entry
@@ -53,7 +58,13 @@ of `contracts/examples/index.json` against its component schema (JSON Schema 202
 `date`, `date-time` and `uuid` format checks), checks that every `externalValue` resolves
 and every example file is indexed, and recomputes `examples/vectors/tokenization.json` and
 `examples/vectors/signatures.json` from their stated inputs. It prints one line per check
-and `contracts-check: OK (4 files, N examples)`, or the problems and exit code 1.
+and `contracts-check: OK (4 files, N examples)`, or the problems and exit code 1. A vector
+that reads an example already reported invalid is not checked a second time: it prints
+one `SKIP` line naming the example and adds no problem. No line names a Python class.
+With `--json`, stdout holds exactly one JSON document: `ok`, the file, example and
+problem counts, and one entry per check with its status, summary and problems; on
+failure also `error` with a `code` (`CONTRACTS_INVALID`, `CONTRACTS_DIR_NOT_FOUND`) and
+the sentence that went to stderr.
 
 ## Configuration
 
@@ -113,7 +124,22 @@ curl -s http://127.0.0.1:18301/healthz      # {"status":"ok","service":"key_hold
 curl -s http://127.0.0.1:18400/healthz      # {"status":"ok","service":"registry","test_double":true}
 ```
 
-Logs are JSON lines on stdout. Stop the doubles with `kill %1 %2`.
+Logs are JSON lines on stdout; their `service` is the health value (`key_holder`,
+`registry`). An unhandled failure writes exactly one `error` record. Stop the doubles
+with `kill %1 %2`.
+
+## Input validation
+
+Request bodies are checked by strict models: an integer field refuses `1.0`, `true` and
+`"1"`, a string field refuses numbers, and no float reaches hashing. Query integers are 1
+to 18 ASCII digits inside their bounds (`offset` at most 1,000,000). A 422 names a
+contract field or `body` / `query` and one issue of the vocabulary of SPEC_DECISIONS 22:
+`REQUIRED`, `INVALID_TYPE`, `INVALID_INTEGER`, `OUT_OF_RANGE`, `PATTERN_MISMATCH`,
+`INVALID_VALUE`, `TOO_LONG`, `TOO_SHORT`, `TOO_MANY_ITEMS`, `TOO_FEW_ITEMS`, `DUPLICATE`,
+`UNKNOWN_FIELD`, `UNKNOWN_PARAMETER`, plus `NOT_A_VALID_POINT` and `DUPLICATE_ASSET_TOKEN`
+from the contracts. A name the client invented is never returned: any unknown body key is
+`body` `UNKNOWN_FIELD` once, any unknown query parameter `query` `UNKNOWN_PARAMETER`. A
+body that is not valid JSON is `body` `INVALID_VALUE`.
 
 ## Test controls (`/_test/`, not part of any contract)
 
@@ -123,7 +149,7 @@ Every call needs the header `X-Test-Control-Key`.
 |---|---|---|
 | `GET /_test/stats` | both | Totals and per member counts (requests and elements; or submissions, items, active locks, open cases, events, checkpoints). |
 | `GET /_test/received` | both | Every request body received on contract endpoints, as raw text, in order. |
-| `POST /_test/fail-next` | both | `{"count": n, "status": 503, "when": "BEFORE_PROCESSING" or "AFTER_COMMIT", "path": "/v1/submissions"}`, `path` optional. Without `path`, `BEFORE_PROCESSING` fails the next n contract calls of any kind. With `path` (a route template exactly as in the contract YAML, for example `/v1/outbox` or `/v1/certificates/{certificate_id}`), only calls to that route consume the n failures and other calls are served normally; an unknown template is 422 `UNKNOWN_ROUTE`. `AFTER_COMMIT` (registry only) applies to the next n `POST /v1/submissions`, which are processed and stored before the failure is returned, simulating a lost response; with `AFTER_COMMIT`, `path` may only be `/v1/submissions`. `/healthz` and `/_test/` calls never consume a failure. Statuses: 429, 500, 502, 503, 504. A new call replaces any pending failure. |
+| `POST /_test/fail-next` | both | `{"count": n, "status": 503, "when": "BEFORE_PROCESSING" or "AFTER_COMMIT", "path": "/v1/submissions"}`, `path` optional. Without `path`, `BEFORE_PROCESSING` fails the next n contract calls of any kind. With `path` (a route template exactly as in the contract YAML, for example `/v1/outbox` or `/v1/certificates/{certificate_id}`), only calls to that route consume the n failures and other calls are served normally; an unknown template is 422 with issue `INVALID_VALUE` on `path`. `AFTER_COMMIT` (registry only) applies to the next n `POST /v1/submissions`, which are processed and stored before the failure is returned, simulating a lost response; with `AFTER_COMMIT`, `path` may only be `/v1/submissions`. `/healthz` and `/_test/` calls never consume a failure. Statuses: 429, 500, 502, 503, 504. A new call replaces any pending failure. |
 | `GET /_test/dump` | registry | Members, locks with field codes, cases, events with payloads, certificates, checkpoints. Codes and registry identifiers only. |
 | `POST /_test/tamper` | registry | `{"mode": "REWRITE_HISTORY", "seq": n}` rewrites one payload, recomputes every hash to the head and signs and distributes a new checkpoint. `{"mode": "EDIT_IN_PLACE", "seq": n}` changes one stored `payload_hash` only. `{"mode": "BAD_CHECKPOINT_SIGNATURE"}` signs and distributes a checkpoint with one bit of its signature flipped. `{"mode": "CERTIFICATE_BODY", "certificate_id": "..."}` changes `summary.locked` of a stored certificate without re-signing. |
 | `POST /_test/checkpoint` | registry | Signs and distributes a checkpoint now. |

@@ -27,26 +27,30 @@ from onepledge_contract_fakes.registry.model import (
 )
 from onepledge_contract_fakes.registry.publisher import Publisher
 from onepledge_contract_fakes.registry.stores import RegistryStores
+from onepledge_contract_fakes.validation import Issue
 
 NOT_HOLDER = "NOT_HOLDER"
 
 
 def validate_submission(submission: Submission) -> None:
-    """Semantic rules a schema cannot express: unique codes and refs, field codes by kind."""
+    """Semantic rules a schema cannot express: unique codes and refs, field codes by kind.
+
+    field_tokens on a RELEASE item is INVALID_VALUE; missing on a lock request it is REQUIRED.
+    """
     details: list[ErrorDetail] = []
     seen_assets: set[str] = set()
     seen_refs: set[str] = set()
     for index, item in enumerate(submission.items):
         if item.asset_token in seen_assets:
-            details.append(ErrorDetail(f"items[{index}].asset_token", "DUPLICATE_ASSET_TOKEN"))
+            details.append(ErrorDetail(f"items[{index}].asset_token", Issue.DUPLICATE_ASSET_TOKEN))
         if item.item_ref in seen_refs:
-            details.append(ErrorDetail(f"items[{index}].item_ref", "DUPLICATE_ITEM_REF"))
+            details.append(ErrorDetail(f"items[{index}].item_ref", Issue.DUPLICATE))
         seen_assets.add(item.asset_token)
         seen_refs.add(item.item_ref)
         if submission.kind == SubmissionKind.RELEASE and item.field_tokens is not None:
-            details.append(ErrorDetail(f"items[{index}].field_tokens", "NOT_ALLOWED_FOR_RELEASE"))
+            details.append(ErrorDetail(f"items[{index}].field_tokens", Issue.INVALID_VALUE))
         if submission.kind != SubmissionKind.RELEASE and item.field_tokens is None:
-            details.append(ErrorDetail(f"items[{index}].field_tokens", "MISSING"))
+            details.append(ErrorDetail(f"items[{index}].field_tokens", Issue.REQUIRED))
     if details:
         raise ValidationFailedError(details=tuple(details))
 

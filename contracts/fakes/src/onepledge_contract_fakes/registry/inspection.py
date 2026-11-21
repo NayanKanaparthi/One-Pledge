@@ -12,12 +12,16 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from onepledge_contract_fakes.canonical_json import JsonValue
-from onepledge_contract_fakes.errors import ErrorDetail, ValidationFailedError
+from onepledge_contract_fakes.errors import ErrorDetail, InvariantViolationError, ValidationFailedError
 from onepledge_contract_fakes.registry.locks import Lock
 from onepledge_contract_fakes.registry.model import CaseStatus
 from onepledge_contract_fakes.registry.publisher import Publisher
 from onepledge_contract_fakes.registry.stores import RegistryStores
 from onepledge_contract_fakes.registry.submissions import SubmissionRecord
+from onepledge_contract_fakes.validation import Issue, JsonFields
+
+# Ledger sequence numbers fit the 18 digit integer rule of every layer 1 service.
+MAX_SEQ = 10**18 - 1
 
 
 class TamperMode(StrEnum):
@@ -40,31 +44,20 @@ class TamperRequest:
 
 def parse_tamper_request(document: object) -> TamperRequest:
     """Validate a tamper body: `seq` for the two ledger modes, `certificate_id` for CERTIFICATE_BODY."""
-    if not isinstance(document, dict) or not isinstance(document.get("mode"), str):
-        raise ValidationFailedError(details=(ErrorDetail("mode", "MISSING"),))
-    mode_text = document["mode"]
-    if mode_text not in {m.value for m in TamperMode}:
-        raise ValidationFailedError(details=(ErrorDetail("mode", "INVALID_VALUE"),))
-    mode = TamperMode(mode_text)
-    allowed = {"mode"}
-    if mode in (TamperMode.REWRITE_HISTORY, TamperMode.EDIT_IN_PLACE):
-        allowed.add("seq")
-        seq = document.get("seq")
-        if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
-            raise ValidationFailedError(details=(ErrorDetail("seq", "MISSING"),))
-    if mode == TamperMode.CERTIFICATE_BODY:
-        allowed.add("certificate_id")
-        if not isinstance(document.get("certificate_id"), str):
-            raise ValidationFailedError(details=(ErrorDetail("certificate_id", "MISSING"),))
-    if set(document) - allowed:
-        raise ValidationFailedError(details=(ErrorDetail("body", "UNKNOWN_FIELD"),))
-    seq_value = document.get("seq")
-    certificate_value = document.get("certificate_id")
-    return TamperRequest(
-        mode=mode,
-        seq=seq_value if isinstance(seq_value, int) else None,
-        certificate_id=certificate_value if isinstance(certificate_value, str) else None,
-    )
+    mode_text = document.get("mode") if isinstance(document, dict) else None
+    optional = {
+        TamperMode.REWRITE_HISTORY.value: ("seq",),
+        TamperMode.EDIT_IN_PLACE.value: ("seq",),
+        TamperMode.CERTIFICATE_BODY.value: ("certificate_id",),
+    }.get(mode_text if isinstance(mode_text, str) else "", ())
+    fields = JsonFields(document, required=("mode", *optional))
+    mode = fields.choice("mode", [m.value for m in TamperMode])
+    seq = fields.integer("seq", 1, MAX_SEQ) if "seq" in optional else None
+    certificate_id = fields.string("certificate_id") if "certificate_id" in optional else None
+    fields.finish()
+    if mode is None:
+        raise InvariantViolationError
+    return TamperRequest(mode=TamperMode(mode), seq=seq, certificate_id=certificate_id)
 
 
 def _lock_json(lock: Lock, active: bool) -> dict[str, JsonValue]:
@@ -160,4 +153,4 @@ class RegistryInspector:
         if request.mode == TamperMode.CERTIFICATE_BODY and request.certificate_id is not None:
             self._certificates.tamper_locked_count(request.certificate_id)
             return {"mode": request.mode.value, "certificate_id": request.certificate_id}
-        raise ValidationFailedError(details=(ErrorDetail("mode", "INVALID_VALUE"),))
+        raise ValidationFailedError(details=(ErrorDetail("mode", Issue.INVALID_VALUE),))
