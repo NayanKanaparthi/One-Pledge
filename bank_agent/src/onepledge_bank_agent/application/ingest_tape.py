@@ -11,6 +11,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import date
 
+from onepledge_bank_agent.application.events import LogEvent
 from onepledge_bank_agent.application.faults import FaultPoint
 from onepledge_bank_agent.application.ports import UnitOfWorkFactory
 from onepledge_bank_agent.application.runtime import Runtime
@@ -65,6 +66,7 @@ class IngestTape:
         self._clock = runtime.clock
         self._ids = runtime.ids
         self._faults = runtime.faults
+        self._log = runtime.log
 
     def execute(self, command: IngestCommand) -> TapeSubmission:
         """Validate and store the tape; raises the error of the first check that fails."""
@@ -75,6 +77,13 @@ class IngestTape:
         except DomainError as error:
             self._reject(command, error)
             raise
+        self._log.info(
+            LogEvent.TAPE_RECEIVED,
+            submission_id=str(tape.submission_id),
+            kind=command.kind.value,
+            rows=tape.facts.row_count,
+            user_id=str(user_id),
+        )
         self._faults.reached(FaultPoint.AFTER_INTAKE_COMMIT)
         return tape
 
@@ -98,6 +107,13 @@ class IngestTape:
                 )
             )
             unit.commit()
+        self._log.warning(
+            LogEvent.ACCESS_DENIED,
+            method=route.method,
+            route=route.template,
+            role=role.value if role is not None else None,
+            user_id=str(user_id) if user_id is not None else None,
+        )
         raise ForbiddenError
 
     def _validate(self, command: IngestCommand) -> ParsedTape:
@@ -186,3 +202,10 @@ class IngestTape:
                 )
             )
             unit.commit()
+        user_id = command.actor.user_id
+        self._log.warning(
+            LogEvent.TAPE_UPLOAD_REJECTED,
+            kind=command.kind.value,
+            error_code=error.code,
+            user_id=str(user_id) if user_id is not None else None,
+        )

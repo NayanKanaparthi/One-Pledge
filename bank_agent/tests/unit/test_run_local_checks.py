@@ -94,6 +94,11 @@ def test_every_accepted_loan_gets_four_results_and_a_failure_holds_it(world: Wor
         "loans_checked": 4,
         "loans_held_local": 1,
     }
+    committed = [fields for _, event, fields in world.log.events if event == "check_chunk_committed"]
+    assert committed == [
+        {"submission_id": str(submission), "batch_index": 0, "count": 2},
+        {"submission_id": str(submission), "batch_index": 1, "count": 2},
+    ]
 
 
 def test_an_outage_leaves_its_chunk_unwritten_and_a_rerun_skips_finished_loans(world: World) -> None:

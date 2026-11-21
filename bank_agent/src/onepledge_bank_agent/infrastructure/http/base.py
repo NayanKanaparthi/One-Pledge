@@ -78,6 +78,14 @@ class RetryingHttpCaller:
             if response is not None and response.status_code not in RETRY_STATUSES:
                 return response
             if attempt == attempts:
+                self._log.warning(
+                    LogEvent.DEPENDENCY_UNAVAILABLE,
+                    dependency=self._dependency,
+                    method="GET",
+                    route=route,
+                    attempts=attempt,
+                    http_status=response.status_code if response is not None else None,
+                )
                 return response
             self._log.info(
                 LogEvent.DEPENDENCY_RETRY,

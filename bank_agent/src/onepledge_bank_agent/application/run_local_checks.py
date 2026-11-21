@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from onepledge_bank_agent.application.audit_entries import loan_state_changed, stage_advanced
+from onepledge_bank_agent.application.events import LogEvent
 from onepledge_bank_agent.application.faults import FaultPoint
 from onepledge_bank_agent.application.ports import (
     AcceptedItem,
@@ -61,6 +62,7 @@ class RunLocalChecks:
         self._rules = rules
         self._clock = runtime.clock
         self._faults = runtime.faults
+        self._log = runtime.log
         self._chunk_size = chunk_size
 
     def run(self, submission_id: uuid.UUID) -> None:
@@ -73,11 +75,14 @@ class RunLocalChecks:
             items = [] if tape.facts.kind is TapeKind.RELEASE else unit.items.accepted(submission_id)
         if facility is None:
             raise FacilityNotFoundError
-        for start in range(0, len(items), self._chunk_size):
-            self._check_chunk(tape.facts, facility.lender.legal_name, items[start : start + self._chunk_size])
+        for index, start in enumerate(range(0, len(items), self._chunk_size)):
+            chunk = items[start : start + self._chunk_size]
+            self._check_chunk(tape.facts, facility.lender.legal_name, chunk, index)
         self._finish(submission_id, [item.loan_id for item in items])
 
-    def _check_chunk(self, facts: TapeFacts, lender: str, chunk: Sequence[AcceptedItem]) -> None:
+    def _check_chunk(
+        self, facts: TapeFacts, lender: str, chunk: Sequence[AcceptedItem], batch_index: int
+    ) -> None:
         ids = [item.loan_id for item in chunk]
         with self._units() as unit:
             done = unit.checks.checked(facts.submission_id, ids)
@@ -101,6 +106,12 @@ class RunLocalChecks:
                     failed = [r.check_type.value for r in loan_results if r.outcome is not CheckOutcome.PASS]
                     unit.record(loan_state_changed(change, facts.submission_id, LOCAL_CHECK_FAILED, failed))
             unit.commit()
+        self._log.info(
+            LogEvent.CHECK_CHUNK_COMMITTED,
+            submission_id=str(facts.submission_id),
+            batch_index=batch_index,
+            count=len(current),
+        )
         self._faults.reached(FaultPoint.AFTER_CHECK_CHUNK)
 
     def _evaluate(self, loan: Loan, lender: str, facts: TapeFacts) -> tuple[CheckResult, ...]:

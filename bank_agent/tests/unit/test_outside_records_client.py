@@ -155,6 +155,11 @@ def test_gateway_errors_are_retried_twice_then_transient(status: int) -> None:
     assert len(calls) == 3 and recorder.sleeps == [0.2, 0.4]
     routes = {fields["route"] for _, fields in recorder.events}
     assert routes == {"/v1/titles/{vin}"} and VIN.value not in repr(recorder.events)
+    assert [(event, fields["attempts"], fields["http_status"]) for event, fields in recorder.events] == [
+        ("dependency_retry", 1, status),
+        ("dependency_retry", 2, status),
+        ("dependency_unavailable", 3, status),
+    ]
 
 
 def test_a_transport_error_is_retried_and_a_later_success_is_used() -> None:

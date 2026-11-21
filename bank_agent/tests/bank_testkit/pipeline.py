@@ -10,7 +10,7 @@ from types import TracebackType
 from typing import Self
 
 from bank_testkit.database import BankDatabase, insert_user
-from bank_testkit.outside import OUTSIDE_BASE_URL, InProcessOutsideRecords
+from bank_testkit.outside import OUTSIDE_BASE_URL, OutsideService
 from onepledge_bank_agent.application.faults import FaultInjector, NoFaults
 from onepledge_bank_agent.application.ingest_tape import IngestCommand
 from onepledge_bank_agent.application.ports import Clock
@@ -32,7 +32,7 @@ class BankAgentHarness:
     def __init__(
         self,
         database: BankDatabase,
-        outside: InProcessOutsideRecords,
+        outside: OutsideService,
         *,
         faults: FaultInjector | None = None,
         clock: Clock | None = None,
@@ -74,11 +74,14 @@ class BankAgentHarness:
         assert isinstance(value, uuid.UUID)
         return value
 
-    def ingest(self, file: Path | bytes, facility_code: str, kind: TapeKind, as_of: date) -> TapeSubmission:
-        """Upload a tape as the analyst (a RELEASE as the credit officer)."""
+    def ingest(
+        self, file: Path | bytes, facility_code: str, kind: TapeKind, as_of: date, role: Role | None = None
+    ) -> TapeSubmission:
+        """Upload a tape as the analyst (a RELEASE as the credit officer), or as the given role."""
         data = file.read_bytes() if isinstance(file, Path) else file
         name = file.name if isinstance(file, Path) else "tape.csv"
-        role = Role.CREDIT_OFFICER if kind is TapeKind.RELEASE else Role.ANALYST
+        if role is None:
+            role = Role.CREDIT_OFFICER if kind is TapeKind.RELEASE else Role.ANALYST
         user = self.officer if role is Role.CREDIT_OFFICER else self.analyst
         command = IngestCommand(
             self.facility_id(facility_code), kind, as_of, name, data, Actor.user(user, role)

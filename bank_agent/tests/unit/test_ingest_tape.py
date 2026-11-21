@@ -73,6 +73,14 @@ def test_an_upload_stores_the_submission_every_raw_row_and_one_audit_entry(world
         "rows_sha256": facts.rows_sha256,
     }  # fmt: skip
     assert world.faults.passed == [FaultPoint.AFTER_INTAKE_COMMIT]
+    assert world.log.events == [
+        (
+            "info",
+            "tape_received",
+            {"submission_id": str(tape.submission_id), "kind": "PLEDGE", "rows": 2,
+             "user_id": str(ANALYST.user_id)},
+        )
+    ]  # fmt: skip
 
 
 def test_a_release_tape_needs_a_credit_officer_and_a_refusal_is_audited(world: World) -> None:
@@ -83,6 +91,13 @@ def test_a_release_tape_needs_a_credit_officer_and_a_refusal_is_audited(world: W
     assert (denied.action, denied.outcome) == (AuditAction.ACCESS_DENIED, AuditOutcome.DENIED)
     assert dict(denied.detail) == {"method": "POST", "route": "/v1/tapes", "operation": "UPLOAD_RELEASE_TAPE"}
     assert not world.store.state.tapes
+    assert world.log.events == [
+        (
+            "warning",
+            "access_denied",
+            {"method": "POST", "route": "/v1/tapes", "role": "ANALYST", "user_id": str(ANALYST.user_id)},
+        )
+    ]
     assert run(world, replace(release, actor=OFFICER)).facts.kind is TapeKind.RELEASE
 
 
@@ -124,6 +139,13 @@ def test_a_refused_upload_stores_nothing_but_one_audit_entry_with_the_code(
     )
     if error is ValidationFailedError:
         assert [(d.field, d.issue) for d in raised.value.details] == [("as_of_date", "OUT_OF_RANGE")]
+    assert world.log.events == [
+        (
+            "warning",
+            "tape_upload_rejected",
+            {"kind": "PLEDGE", "error_code": code, "user_id": str(ANALYST.user_id)},
+        )
+    ]
 
 
 def test_the_as_of_date_may_be_today(world: World) -> None:

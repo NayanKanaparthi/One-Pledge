@@ -7,6 +7,7 @@ import shutil
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
+from typing import Protocol
 
 import httpx
 from fastapi.testclient import TestClient
@@ -35,6 +36,33 @@ from onepledge_outside_records.infrastructure.db.repositories import (
 from onepledge_outside_records.interface.http.app import create_app
 
 OUTSIDE_BASE_URL = "http://outside-records.test"
+
+
+class OutsideService(Protocol):
+    """What the harness needs from an outside records stand-in: its key and in-process clients."""
+
+    api_key: str
+
+    def client_factory(self) -> Callable[[str, HttpTimeouts], httpx.Client]:
+        """Clients that reach the stand-in."""
+        ...
+
+
+class ScriptedOutsideRecords:
+    """An outside records stand-in whose every answer comes from one handler."""
+
+    api_key = "opk_scripted"
+
+    def __init__(self, handler: Callable[[httpx.Request], httpx.Response]) -> None:
+        self._handler = handler
+
+    def client_factory(self) -> Callable[[str, HttpTimeouts], httpx.Client]:
+        """Clients answered by the handler."""
+
+        def build(base_url: str, timeouts: HttpTimeouts) -> httpx.Client:
+            return httpx.Client(base_url=base_url, transport=httpx.MockTransport(self._handler))
+
+        return build
 
 
 class MemoryOutsideRecords:
