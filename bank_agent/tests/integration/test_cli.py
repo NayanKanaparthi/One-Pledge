@@ -405,7 +405,7 @@ def test_the_worker_never_needs_an_owner_credential(
 
 def role_sentence(code: str) -> str:
     """The refusal of SPEC_DECISIONS 72: the variable and the first violation code."""
-    return f"DATABASE_URL connects as a role that is not least-privilege ({code}); use the app role."
+    return f"The role of DATABASE_URL is not least-privilege ({code}); use the app role."
 
 
 def test_the_worker_refuses_to_start_as_the_owner_role(

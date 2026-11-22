@@ -20,6 +20,8 @@ from onepledge_bank_agent.application.run_pipeline_worker import WorkerReport
 from onepledge_bank_agent.domain.enums import TapeStatus
 from onepledge_bank_agent.domain.errors import MESSAGES
 from onepledge_bank_agent.infrastructure.db import failures
+from onepledge_bank_agent.infrastructure.db.role_check import RoleViolation, Violation
+from onepledge_bank_agent.infrastructure.db.role_guard import refusal_sentence
 from onepledge_bank_agent.interface.cli.commands import TASK_FAILED, worker_report
 from onepledge_bank_agent.interface.cli.main import UNEXPECTED, main
 from onepledge_bank_agent.interface.cli.output import USAGE_MESSAGE, WIDTH, Output, fit
@@ -176,3 +178,11 @@ def test_the_worker_table_fits_names_the_six_failure_facts_and_shows_full_ids_wi
     text = " ".join(narrow.getvalue().split())
     assert ", ".join(f"{key} {value}" for key, value in failure.items()) in text
     assert str(submission) in wide.getvalue() and str(submission) not in narrow.getvalue()
+
+
+def test_the_least_privilege_refusal_is_one_line_for_every_violation_code() -> None:
+    """SPEC_DECISIONS 72: "refuse with one line naming DATABASE_URL and the first violation code"."""
+    for code in Violation:
+        sentence = refusal_sentence(RoleViolation(code, "public.audit_log"))
+        assert len(sentence) <= WIDTH and fit(sentence) == sentence, code
+        assert "DATABASE_URL" in sentence and code.value in sentence and "public.audit_log" not in sentence

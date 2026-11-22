@@ -23,10 +23,9 @@ OWNER_SENTENCE = (
 
 
 def refusal_sentence(violation: RoleViolation) -> str:
-    """The one line: the variable and the first violation code, never the URL."""
-    return (
-        f"DATABASE_URL connects as a role that is not least-privilege ({violation.code}); use the app role."
-    )
+    """The one line of SPEC_DECISIONS 72: the variable and the first violation code, never the URL; at
+    most 100 columns for the longest code, so it is never wrapped (SPEC_DECISIONS 78)."""
+    return f"The role of DATABASE_URL is not least-privilege ({violation.code}); use the app role."
 
 
 class RuntimeRoleGuard:

@@ -116,7 +116,7 @@ def test_each_violation_is_refused_by_the_guard_and_shown_by_the_report(
         guard.require_least_privilege()
     assert refused.value.code == "ROLE_NOT_LEAST_PRIVILEGE"
     assert refused.value.sentence == (
-        f"DATABASE_URL connects as a role that is not least-privilege ({found[0].code}); use the app role."
+        f"The role of DATABASE_URL is not least-privilege ({found[0].code}); use the app role."
     )
     inspector = SqlDatabaseControlInspector(app_engine, head_revision())
     controls = inspector.controls()
