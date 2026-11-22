@@ -151,7 +151,9 @@ class VerifyDataSet:
         view = self._codec.parse(files)
         report = self._checker.check(view)
         violations.extend(report.violations)
-        if EXAMPLE_EXPECTED in files:
+        # The example comparison needs the oracle's observations of a consistent data set; when
+        # the invariants already failed, the regeneration below names the example files anyway.
+        if EXAMPLE_EXPECTED in files and not report.violations:
             violations.extend(self._example_violations(files, view, report.observations))
         violations.extend(regeneration_violations(files, seed, profile, self._regenerate))
         return VerificationReport(tuple(violations), len(files), report.rows_checked)

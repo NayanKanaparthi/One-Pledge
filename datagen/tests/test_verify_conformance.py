@@ -334,6 +334,11 @@ def test_help_names_dir_and_says_quiet_has_no_effect(
             edit_json(MANIFEST, lambda m: m["steps"][0].__setitem__("facility_code", "X-Y")),
             "manifest.json names facility X-Y, which reference.json does not list",
         ),
+        (
+            edit_json(MANIFEST, lambda m: m["steps"][0].__setitem__("bank_code", "ZZZ")),
+            "manifest.json step S01 names bank ZZZ, but facility HARBOR-SUMMIT belongs to HARBOR",
+        ),
+        (edit_json(MANIFEST, lambda m: m.__setitem__("steps", [])), "the answer key names step S01"),
     ],
 )
 def test_references_to_unknown_steps_and_facilities_are_problems_not_defects(
@@ -341,3 +346,55 @@ def test_references_to_unknown_steps_and_facilities_are_problems_not_defects(
 ) -> None:
     code, _, err = run("verify", "--data-dir", str(tampered(small_dir, tmp_path / "copy", change)))
     assert code == 1 and f"  {problem}" in err and "Unexpected" not in err
+
+
+def field_paths(
+    document: object, prefix: tuple[object, ...] = (), depth: int = 3
+) -> list[tuple[object, ...]]:
+    """Every key path of the first entries of a JSON document, down to `depth` levels."""
+    if depth == 0:
+        return []
+    if isinstance(document, dict):
+        items: list[tuple[object, object]] = list(document.items())
+    elif isinstance(document, list) and document:
+        items = [(0, document[0])]
+    else:
+        return []
+    paths = []
+    for key, value in items:
+        paths.append((*prefix, key))
+        paths.extend(field_paths(value, (*prefix, key), depth - 1))
+    return paths
+
+
+def set_path(path: tuple[object, ...], value: object) -> Callable[[object], None]:
+    def change(document: object) -> None:
+        node: Any = document
+        for key in path[:-1]:
+            node = node[key]
+        node[path[-1]] = value
+
+    return change
+
+
+SWEPT_VALUES: tuple[object, ...] = (None, "x", -1, [])
+
+
+def test_no_field_of_any_data_set_document_can_reach_the_last_resort(
+    example_dir: Path, tmp_path: Path
+) -> None:
+    """Every field of the manifest, reference data and answer key, set to each of four wrong values."""
+    tried = 0
+    for relative in (MANIFEST, REFERENCE, KEY):
+        document = json.loads((example_dir / relative).read_text())
+        for path in field_paths(document):
+            for value in SWEPT_VALUES:
+                target = tampered(
+                    example_dir, tmp_path / f"t{tried}", edit_json(relative, set_path(path, value))
+                )
+                code, _, err = run("verify", "--data-dir", str(target))
+                assert "Unexpected error" not in err, (relative, path, value)
+                assert code in (0, 1)
+                shutil.rmtree(target)
+                tried += 1
+    assert tried > 100

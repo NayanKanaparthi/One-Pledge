@@ -131,6 +131,13 @@ class InvariantChecker:
             f"manifest.json names facility {code}, which reference.json does not list"
             for code in sorted(unknown_facilities)
         )
+        problems.extend(
+            f"manifest.json step {step.step_id} names bank {step.bank_code}, "
+            f"but facility {step.facility_code} belongs to {view.facilities[step.facility_code].bank_code}"
+            for step in view.steps
+            if step.facility_code in view.facilities
+            and view.facilities[step.facility_code].bank_code != step.bank_code
+        )
         return problems
 
     @staticmethod
