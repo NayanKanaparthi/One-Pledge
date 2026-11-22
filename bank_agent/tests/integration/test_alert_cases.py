@@ -20,6 +20,7 @@ from bank_testkit.database import BankDatabase
 from bank_testkit.doubles import REGISTRY_URL
 from bank_testkit.outside import InProcessOutsideRecords
 from onepledge_bank_agent.application.review_alert import ReviewAction
+from onepledge_bank_agent.domain.dependency_errors import RegistryIntegrityBrokenError
 from onepledge_bank_agent.domain.enums import AlertStatus, BankPosition, CaseStatus, LoanState
 from onepledge_bank_agent.domain.errors import (
     AlertTransitionInvalidError,
@@ -109,7 +110,16 @@ def test_equal_positions_clear_both_alerts_and_the_cleared_loan_is_resubmitted_a
     assert audited == (1,), "a redelivered or repeated update changes nothing"
 
     locks = len(banks.doubles.active_locks(claimant))
-    loan = claimant_agent.resubmit(claimant_loan)
+    submissions = banks.doubles.member_stats(claimant)["submissions"]
+    banks.doubles.tamper(mode="BAD_CHECKPOINT_SIGNATURE")
+    claimant_agent.sync()
+    with pytest.raises(RegistryIntegrityBrokenError):
+        claimant_agent.resubmit(claimant_loan)
+    assert banks.doubles.member_stats(claimant)["submissions"] == submissions, "the halt rule sent nothing"
+    with banks.agent_with(claimant, environment={"HALT_ON_REGISTRY_INTEGRITY_FAILURE": "false"}) as operator:
+        loan = operator.resubmit(claimant_loan)
+        with pytest.raises(LoanNotResubmittableError):
+            operator.resubmit(claimant_loan)
     assert loan.state is LoanState.LOCKED
     assert len(banks.doubles.active_locks(claimant)) == locks + 1
     request = one(
@@ -122,8 +132,6 @@ def test_equal_positions_clear_both_alerts_and_the_cleared_loan_is_resubmitted_a
     assert request == ("RESUBMIT", "PLEDGE", 1, True)
     resubmitted = "SELECT count(*) FROM audit_log WHERE action = 'LOAN_RESUBMITTED' AND object_id = %s"
     assert one(banks.databases[claimant], resubmitted, (claimant_loan,)) == (1,)
-    with pytest.raises(LoanNotResubmittableError):
-        claimant_agent.resubmit(claimant_loan)
 
 
 def test_a_confirmed_double_pledge_escalates_both_alerts_and_keeps_the_loans(banks: ThreeBanks) -> None:

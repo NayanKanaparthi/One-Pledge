@@ -5,7 +5,8 @@ request (origin RESUBMIT, kind PLEDGE, one item) is created, or found by its ide
 key, which is derived from the cleared case ids: repeating the call replays the
 registry's first decision. The request is attached to the loan's latest submission,
 sent, applied (LOCKED: CONFLICT to LOCKED; CONFLICT again: the loan stays CONFLICT and a
-new alert is raised for the new case), and its certificate is fetched and verified.
+new alert is raised for the new case), and its certificate is fetched and verified. Like
+the submit stage, nothing is sent while the halt rule of SPEC 15.4 holds.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from onepledge_bank_agent.application.registry_sender import RegistrySender
 from onepledge_bank_agent.application.request_planning import Candidate, RequestScope, planned_request
 from onepledge_bank_agent.application.requester import Requester
 from onepledge_bank_agent.application.runtime import Runtime
+from onepledge_bank_agent.application.submit_stage import HaltRule
 from onepledge_bank_agent.application.tokenize_loans import complete_version
 from onepledge_bank_agent.application.verify_certificate import VerifyCertificate
 from onepledge_bank_agent.domain.access_policy import Operation
@@ -54,6 +56,7 @@ class ResubmitParts:
     certificates: VerifyCertificate
     authoriser: Authoriser
     member_id: uuid.UUID
+    halt: HaltRule
 
 
 class ResubmitLoan:
@@ -67,6 +70,7 @@ class ResubmitLoan:
     def execute(self, command: ResubmitCommand) -> Loan:
         """The loan after the registry's decision was applied."""
         self._parts.authoriser.require(command.requester, Operation.RESUBMIT_LOAN)
+        self._parts.halt.check()
         request_id = self._request_for(command.loan_id)
         request = self._parts.sender.send(request_id)
         certificate = self._parts.certificates.collect(request)

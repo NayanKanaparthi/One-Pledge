@@ -188,7 +188,7 @@ class RuntimeComposition(_Resources):
             TapeKind.PLEDGE: SubmitPledge(requests),
             TapeKind.RELEASE: ReleaseLoans(requests),
         }
-        halt = HaltRule(units, tunables.halt_on_registry_integrity_failure, self._runtime.log)
+        halt = self._halt_rule()
         return (
             CleanTape(units, self._runtime),
             RunLocalChecks(
@@ -239,7 +239,9 @@ class RuntimeComposition(_Resources):
     def resubmit_loan(self) -> ResubmitLoan:
         """Resubmit a cleared CONFLICT loan."""
         member_id = self._settings.registry.require_member_id()
-        parts = ResubmitParts(self._sender(), self._verify_certificate(), self._authoriser(), member_id)
+        parts = ResubmitParts(
+            self._sender(), self._verify_certificate(), self._authoriser(), member_id, self._halt_rule()
+        )
         return ResubmitLoan(self._app_units(), parts, self._runtime)
 
     def create_release(self) -> CreateReleaseInstruction:
@@ -263,6 +265,10 @@ class RuntimeComposition(_Resources):
         """The audit of a process starting with the halt rule off."""
         halt = self._settings.tunables.halt_on_registry_integrity_failure
         return RecordStartupConfiguration(self._app_units(), halt, self._runtime)
+
+    def _halt_rule(self) -> HaltRule:
+        enabled = self._settings.tunables.halt_on_registry_integrity_failure
+        return HaltRule(self._app_units(), enabled, self._runtime.log)
 
     def _app_units(self) -> SqlUnitOfWorkFactory:
         return self._units(self._settings.require_database_url())
