@@ -111,7 +111,7 @@ class EnvironmentReader:
             return str(ipaddress.ip_address(value))
         except ValueError:
             raise ConfigurationError(
-                name, "must be an IP address of this machine; set BIND_HOST to 127.0.0.1 or 0.0.0.0"
+                name, "must be an IPv4 or IPv6 address; set it to 127.0.0.1 or 0.0.0.0"
             ) from None
 
     def boolean(self, name: str, default: bool) -> bool:
@@ -127,7 +127,7 @@ class EnvironmentReader:
         """LOG_LEVEL, default INFO."""
         level = self.optional("LOG_LEVEL", "INFO").upper()
         if level not in _LOG_LEVELS:
-            raise ConfigurationError("LOG_LEVEL", "must be one of DEBUG, INFO, WARNING, ERROR, CRITICAL")
+            raise ConfigurationError("LOG_LEVEL", LOG_LEVEL_PROBLEM)
         return level
 
     def json_value(self, name: str) -> object:
@@ -184,11 +184,24 @@ def _unplain(char: str) -> bool:
 def parse_setting_integer(name: str, text: str, minimum: int, maximum: int) -> int:
     """An integer setting under the one integer rule of the package, naming the variable when it fails."""
     parsed = parse_integer_text(text, minimum, maximum)
-    if parsed is Issue.INVALID_INTEGER:
-        raise ConfigurationError(name, "must be a whole number written with the digits 0 to 9")
+    digits = text.removeprefix("-")
+    # A number in ASCII digits that is too long to parse is out of range, not malformed (decision 78).
+    too_long = bool(digits) and all("0" <= char <= "9" for char in digits)
+    if parsed is Issue.INVALID_INTEGER and not too_long:
+        raise ConfigurationError(name, INTEGER_MALFORMED)
     if isinstance(parsed, Issue):
-        raise ConfigurationError(name, f"must be between {minimum:,} and {maximum:,}")
+        raise ConfigurationError(name, out_of_range(minimum, maximum))
     return parsed
+
+
+# The sentences of the settings every service shares, word for word (SPEC_DECISIONS 78).
+INTEGER_MALFORMED = "must be a whole number written with the digits 0 to 9"
+LOG_LEVEL_PROBLEM = "must be DEBUG, INFO, WARNING, ERROR or CRITICAL"
+
+
+def out_of_range(minimum: int, maximum: int) -> str:
+    """The problem of a well formed number outside its bounds."""
+    return f"is out of range ({minimum:,} to {maximum:,})"
 
 
 def _parse_member(name: str, entry: object) -> MemberCredential:

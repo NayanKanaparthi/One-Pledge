@@ -24,8 +24,9 @@ pytestmark = pytest.mark.integration
 
 
 def run(*argv: str) -> tuple[int, str, str]:
+    """The command in process, with `--wide` so sentences naming long test paths stay one line each."""
     out, err = io.StringIO(), io.StringIO()
-    code = main(list(argv), Console(out, err))
+    code = main([*argv, "--wide"], Console(out, err))
     return code, out.getvalue(), err.getvalue()
 
 
@@ -246,7 +247,17 @@ def test_an_unexpected_error_is_one_sentence_and_debug_adds_the_traceback(
     monkeypatch.setattr(InvariantChecker, "check", explode)
     argv = ("generate", "--seed", "1", "--profile", "example", "--out", str(tmp_path / "d"))
     code, out, err = run(*argv)
-    assert (code, out, err) == (1, "", "Unexpected error. Run with --debug for details.\n")
+    record, sentence = err.splitlines()
+    assert (code, out, sentence) == (1, "", "Unexpected error. Run with --debug for details.")
+    # SPEC_DECISIONS 78: the last resort also writes one error record with the type and the frames.
+    fields = json.loads(record)
+    assert (fields["level"], fields["event"], fields["service"]) == (
+        "error",
+        "unhandled_exception",
+        "datagen",
+    )
+    assert fields["exception_type"] == "RuntimeError" and " explode" in fields["stack"]
+    assert "boom" not in record
     code, _, err = run(*argv, "--debug")
     # SPEC_DECISIONS 53.12: the type and the frames, never the message or a source line.
     assert code == 1 and err.startswith("RuntimeError, raised at:\n") and " explode\n" in err
@@ -272,7 +283,8 @@ def test_generate_and_verify_print_one_json_document(tmp_path: Path) -> None:
             "problem": "stray.txt is not part of what seed 7, profile example generates",
         },
     ]
-    assert err.splitlines()[0] == f"verify: 2 problems in {target}:"
+    assert err.splitlines()[0] == f"verify: 2 problems in {target}."
+    assert document["error"]["message"] == f"verify: 2 problems in {target}."
     code, document, _ = run_json("generate", "--seed", "7", "--profile", "example", "--out", str(target))
     assert (code, document["error"]["code"]) == (1, "OUTPUT_DIRECTORY")
 
@@ -285,12 +297,12 @@ def test_counted_messages_use_the_singular_for_one(tmp_path: Path) -> None:
     checksums.write_text(json.dumps(json.loads(checksums.read_text())))
     _, _, err = run("verify", "--data-dir", str(target))
     assert err.splitlines() == [
-        f"verify: 1 problem in {target}:",
+        f"verify: 1 problem in {target}.",
         "  checksums.json differs from what seed 7, profile example generates",
     ]
     (target / "a.txt").write_text("x")
     _, _, err = run("verify", "--data-dir", str(target))
-    assert err.splitlines()[0] == f"verify: 3 problems in {target}:"
+    assert err.splitlines()[0] == f"verify: 3 problems in {target}."
 
 
 AMOUNT_FORMS = (r"[0-9]+", r"\$[0-9]{1,3}(,[0-9]{3})*", r"[0-9]+\.[0-9]")

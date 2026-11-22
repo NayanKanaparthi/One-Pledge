@@ -223,7 +223,6 @@ def owner_problem(connection: Connection) -> OperatorError | None:
     if foreign is None and owns_database:
         return None
     return OperatorError(
-        "The role of MIGRATION_DATABASE_URL does not own the outside records tables; "
-        "use the owner role created by db provision.",
+        "The role of MIGRATION_DATABASE_URL does not own the outside records tables; use the owner role.",
         "CONFIGURATION_ERROR",
     )

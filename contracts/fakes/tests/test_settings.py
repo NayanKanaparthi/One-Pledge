@@ -205,16 +205,16 @@ BAD_INTEGER_TEXTS = [
     "1e3",
     "0x10",
     "1_000",
-    "9" * 19,
-    "9" * 5000,
 ]
+# Well formed but too long to be in range: "out of range", not "not a whole number" (decision 78).
+TOO_LONG_INTEGER_TEXTS = ["9" * 19, "9" * 5000]
 
 
 def scalar_b64(number: int) -> str:
     return base64.b64encode(number.to_bytes(32, "little")).decode()
 
 
-@pytest.mark.parametrize("version", BAD_INTEGER_TEXTS)
+@pytest.mark.parametrize("version", BAD_INTEGER_TEXTS + TOO_LONG_INTEGER_TEXTS)
 def test_a_key_version_that_is_not_ascii_digits_names_the_keys_variable(version: str) -> None:
     keys = json.dumps({version: base64.b64encode(new_scalar()).decode()})
     with pytest.raises(ConfigurationError) as raised:
@@ -229,6 +229,15 @@ def test_an_integer_setting_that_is_not_ascii_digits_is_named(variable: str, val
         KeyHolderSettings.from_env(key_holder_env(**{variable: value}))
     assert raised.value.variable == variable
     assert raised.value.problem == "must be a whole number written with the digits 0 to 9"
+
+
+@pytest.mark.parametrize("variable", ["FAKE_KH_ACTIVE_VERSION", "PORT", "FAKE_KH_DAILY_ELEMENT_CAP"])
+@pytest.mark.parametrize("value", TOO_LONG_INTEGER_TEXTS, ids=["19 digits", "5000 digits"])
+def test_a_well_formed_integer_that_is_too_large_is_out_of_range(variable: str, value: str) -> None:
+    with pytest.raises(ConfigurationError) as raised:
+        KeyHolderSettings.from_env(key_holder_env(**{variable: value}))
+    assert raised.value.variable == variable
+    assert raised.value.problem.startswith("is out of range (")
 
 
 @pytest.mark.parametrize(

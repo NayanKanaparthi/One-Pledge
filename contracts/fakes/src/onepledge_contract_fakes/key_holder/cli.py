@@ -6,7 +6,7 @@ import argparse
 from collections.abc import Sequence
 
 from onepledge_contract_fakes.binding import BindError
-from onepledge_contract_fakes.cli_output import CliOutput, common_options, run_guarded
+from onepledge_contract_fakes.cli_output import CliOutput, common_options, parse_arguments, run_guarded
 from onepledge_contract_fakes.errors import ConfigurationError
 from onepledge_contract_fakes.key_holder.app import create_key_holder_app
 from onepledge_contract_fakes.key_holder.settings import load_settings
@@ -37,8 +37,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None, output: CliOutput | None = None) -> int:
     """Entry point. Returns the process exit code: 0, 1 on a failure, 2 on a usage error."""
     out = output or CliOutput()
-    arguments = build_parser().parse_args(argv)
-    return run_guarded(lambda: _serve(out), out, debug=arguments.debug)
+    arguments = parse_arguments(build_parser(), argv, out)
+    out.wide = arguments.wide
+    out.logs_to_stdout = True
+    return run_guarded(lambda: _serve(out), out, debug=arguments.debug, service=SERVICE_NAME)
 
 
 def _serve(out: CliOutput) -> int:

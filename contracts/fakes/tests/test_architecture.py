@@ -159,7 +159,9 @@ FAILURE_EVENTS = frozenset({"UNHANDLED_EXCEPTION", "INTERNAL_ERROR", "SERVER_ERR
 
 def test_only_the_web_plumbing_builds_envelopes_and_failure_records() -> None:
     for path in modules():
-        if path.parent == SOURCE / "web":
+        # The web plumbing writes the records of a 5xx; the CLI's last resort handler writes its
+        # own one error record (SPEC_DECISIONS 78).
+        if path.parent == SOURCE / "web" or path == SOURCE / "cli_output.py":
             continue
         tree = parsed(path)
         names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}

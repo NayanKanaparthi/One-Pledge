@@ -24,9 +24,9 @@ def copy_contracts(contracts_dir: Path, target: Path) -> Path:
     return destination
 
 
-def run(contracts_dir: Path) -> tuple[int, str]:
+def run(contracts_dir: Path, *options: str) -> tuple[int, str]:
     out = io.StringIO()
-    code = main(["check", "--contracts-dir", str(contracts_dir)], CliOutput(out, io.StringIO()))
+    code = main(["check", *options, "--contracts-dir", str(contracts_dir)], CliOutput(out, io.StringIO()))
     return code, out.getvalue()
 
 
@@ -98,7 +98,9 @@ def test_an_invalid_openapi_document_fails(contracts_dir: Path, tmp_path: Path) 
 
 def test_a_missing_directory_is_one_sentence(tmp_path: Path) -> None:
     err = io.StringIO()
-    code = main(["check", "--contracts-dir", str(tmp_path / "absent")], CliOutput(io.StringIO(), err))
+    code = main(
+        ["check", "--wide", "--contracts-dir", str(tmp_path / "absent")], CliOutput(io.StringIO(), err)
+    )
     assert code == 1 and err.getvalue().count("\n") == 1
 
 
@@ -117,7 +119,7 @@ def test_a_broken_example_is_one_problem_and_its_vector_is_skipped(
     document = json.loads(example.read_text())
     del document["body"]
     example.write_text(json.dumps(document))
-    code, text = run(broken)
+    code, text = run(broken, "--wide")
     assert code == 1
     assert (
         "contracts-check: SKIP vectors/signatures.json: not checked, depends on "
@@ -170,13 +172,23 @@ def test_an_unexpected_failure_is_one_sentence_and_the_traceback_needs_debug(
     monkeypatch.setattr(ContractsChecker, "run", explode)
     out, err = io.StringIO(), io.StringIO()
     assert main(["check", "--contracts-dir", str(contracts_dir)], CliOutput(out, err)) == 1
-    assert (out.getvalue(), err.getvalue()) == ("", "Unexpected error. Run with --debug for details.\n")
+    record, sentence = err.getvalue().splitlines()
+    assert (out.getvalue(), sentence) == ("", "Unexpected error. Run with --debug for details.")
+    # SPEC_DECISIONS 78: the last resort also writes one error record with the type and the frames.
+    fields = json.loads(record)
+    assert (fields["level"], fields["event"], fields["exception_type"]) == (
+        "error",
+        "unhandled_exception",
+        "RuntimeError",
+    )
+    assert " explode" in fields["stack"] and "boom" not in record
     err = io.StringIO()
     assert (
         main(["check", "--debug", "--contracts-dir", str(contracts_dir)], CliOutput(io.StringIO(), err)) == 1
     )
     text = err.getvalue()
     # SPEC_DECISIONS 53.12: the type and the frames, never the message or a source line.
+    text = "\n".join(line for line in text.splitlines() if not line.startswith("{")) + "\n"
     assert text.startswith("RuntimeError, raised at:\n") and "boom" not in text and "Traceback" not in text
     assert "test_contracts_check.py:" in text and " explode\n" in text
     assert 'raise RuntimeError("boom")' not in text

@@ -59,17 +59,24 @@ builders and an in-process HTTP client for other layers' tests.
 ## Commands
 
 ```
-onepledge-fake-keyholder serve [--debug]   serve one key holder double on BIND_HOST:PORT
-onepledge-fake-registry serve [--debug]    serve the registry double on BIND_HOST:PORT
-onepledge-contracts check [--contracts-dir DIR] [--json] [--quiet] [--debug]
+onepledge-fake-keyholder serve [--debug] [--wide]   serve one key holder double on BIND_HOST:PORT
+onepledge-fake-registry serve [--debug] [--wide]    serve the registry double on BIND_HOST:PORT
+onepledge-contracts check [--contracts-dir DIR] [--json] [--quiet] [--debug] [--wide]
 ```
 
 Every command prints one sentence on stderr and exits 1 when something is wrong, and
 exits 2 on a usage error. An unexpected error prints `Unexpected error. Run with --debug
-for details.`; `--debug` adds the exception type and its frames (file, line, function),
-never the exception message, a source line or a local variable. `serve` prints no
-result, so it refuses `--json` as a usage error. The checker writes no log lines, so its
-`--quiet` has no effect (it is kept for one interface across commands).
+for details.`, after one `error` log record with `exception_type` and `stack` (on stdout
+for `serve`, whose log lines go there, on stderr otherwise); `--debug` adds the exception
+type and its frames (file, line, function), never the exception message, a source line or
+a local variable. `serve` prints no result, so it refuses `--json` as a usage error. The
+checker writes no other log line, so its `--quiet` has no effect (it is kept for one
+interface across commands).
+Human readable output is at most 100 columns: a longer line wraps onto continuation lines
+indented two more spaces, and `--wide` turns the limit off. A usage error with `--json`
+among the arguments also prints `{"ok": false, "error": {"code": "USAGE", "message": "The
+command line is not valid. See the usage text."}}` on stdout, the usage text on stderr,
+exit 2. No message ends in a colon (SPEC_DECISIONS 78).
 
 `onepledge-contracts check` (run from the repository root, or `make contracts-check`)
 validates the four OpenAPI 3.1 files with `openapi-spec-validator`, validates every entry

@@ -9,8 +9,8 @@ is invented. Only `onepledge_evaluation` reads the answer key.
 ## Commands
 
 ```
-onepledge-datagen generate --seed INT --profile {full,small,example} --out DIR [--force] [--json] [--quiet] [--debug]
-onepledge-datagen verify --data-dir DIR [--json] [--quiet] [--debug]
+onepledge-datagen generate --seed INT --profile {full,small,example} --out DIR [--force] [--json] [--quiet] [--debug] [--wide]
+onepledge-datagen verify --data-dir DIR [--json] [--quiet] [--debug] [--wide]
 ```
 
 With `--json`, stdout holds exactly one JSON document: `{"ok": true, ...}` with the facts
@@ -31,11 +31,18 @@ the bounded parser of SPEC_DECISIONS 74 (`manifest.json: nests too deeply.`,
 `manifest.json: not valid JSON.`); a path read from a file must stay inside the data set
 (`manifest.json names a path outside the directory.`), and a file that is a symbolic link
 out of it is refused unread. An unexpected error
-prints `Unexpected error. Run with --debug for details.`; `--debug` adds the exception
-type and its frames (file, line, function), never the exception message, a source line or
-a local variable. No output holds a Python repr: lists are comma separated, alerts are
-written `ROLE MATCH_KIND`, an empty list is `none`. The generator writes no log lines;
-`--quiet` is kept for one interface across layer 1 and its help says it has no effect.
+prints `Unexpected error. Run with --debug for details.`, after one `error` record on
+stderr with `exception_type` and `stack` (frames only; the generator reads no clock, so
+the record has no `ts`); `--debug` adds the exception type and its frames (file, line,
+function), never the exception message, a source line or a local variable. No output
+holds a Python repr: lists are comma separated, alerts are written `ROLE MATCH_KIND`, an
+empty list is `none`. The generator writes no other log line; `--quiet` is kept for one
+interface across layer 1 and its help says it has no effect.
+Human readable output is at most 100 columns: a longer line wraps onto continuation lines
+indented two more spaces, and `--wide` turns the limit off. A usage error with `--json`
+among the arguments also prints `{"ok": false, "error": {"code": "USAGE", "message": "The
+command line is not valid. See the usage text."}}` on stdout, the usage text on stderr,
+exit 2. No message ends in a colon (SPEC_DECISIONS 78).
 `--seed` is ASCII digits only, 0 to 999,999,999,999,999,999; an empty `--out` or
 `--data-dir` is a usage error (exit 2).
 

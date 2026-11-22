@@ -29,7 +29,7 @@ _ROLE_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 MAX_PORT = 65535
 _DATABASE_SCHEMES = frozenset({"postgresql", "postgresql+psycopg"})
 DEFAULT_BIND_HOST = "127.0.0.1"
-BIND_HOST_SENTENCE = "BIND_HOST must be an IP address of this machine; set BIND_HOST to 127.0.0.1 or 0.0.0.0."
+BIND_HOST_SENTENCE = "BIND_HOST must be an IPv4 or IPv6 address; set it to 127.0.0.1 or 0.0.0.0."
 # Settings are trimmed of ASCII whitespace only; any other space is part of the value and fails it.
 ASCII_WHITESPACE = " \t\r\n"
 
@@ -106,9 +106,18 @@ def _bind_host(environ: Mapping[str, str]) -> str:
     try:
         return str(ipaddress.ip_address(text))
     except ValueError:
-        raise _invalid(
-            "BIND_HOST must be an IP address of this machine; set BIND_HOST to 127.0.0.1 or 0.0.0.0."
-        ) from None
+        raise _invalid(BIND_HOST_SENTENCE) from None
+
+
+def _port(text: str) -> int:
+    """PORT with the sentences every service uses for it (SPEC_DECISIONS 78)."""
+    parsed = parse_integer_text(text, 1, MAX_PORT)
+    if isinstance(parsed, int):
+        return parsed
+    digits_only = bool(text) and all("0" <= char <= "9" for char in text.removeprefix("-"))
+    if parsed is IntegerIssue.OUT_OF_RANGE or digits_only:
+        raise _invalid(f"PORT is out of range (1 to {MAX_PORT:,}).")
+    raise _invalid("PORT must be a whole number written with the digits 0 to 9.")
 
 
 def _log_level(environ: Mapping[str, str]) -> str:
@@ -132,9 +141,7 @@ class ServeSettings(BaseModel):
     def from_env(cls, environ: Mapping[str, str]) -> Self:
         """Parse the four serving variables; requirements are checked when serving starts."""
         port_text = _value(environ, "PORT")
-        port = parse_integer_text(port_text, 1, MAX_PORT) if port_text is not None else None
-        if isinstance(port, IntegerIssue):
-            raise _invalid("PORT must be a TCP port number from 1 to 65535, in ASCII digits.")
+        port = _port(port_text) if port_text is not None else None
         return cls(
             bind_host=_bind_host(environ),
             port=port,

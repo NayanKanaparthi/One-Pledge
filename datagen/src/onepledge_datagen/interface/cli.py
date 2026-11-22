@@ -15,7 +15,7 @@ from onepledge_datagen.domain.text import plural
 from onepledge_datagen.domain.text_values import MAX_INTEGER, IntegerIssue, parse_integer_text
 from onepledge_datagen.infrastructure.codec import FileCodec
 from onepledge_datagen.infrastructure.directory import LocalDataDirectory
-from onepledge_datagen.interface.output import Console, Json, common_options, run_guarded
+from onepledge_datagen.interface.output import Console, Json, common_options, parse_arguments, run_guarded
 
 MAX_LISTED_VIOLATIONS = 50
 
@@ -158,7 +158,7 @@ def run(arguments: argparse.Namespace, console: Console) -> int:
         )
         console.result({"data_dir": str(source), "files": report.files, "rows_checked": report.rows_checked})
         return 0
-    sentence = f"verify: {plural(len(report.violations), 'problem')} in {source}:"
+    sentence = f"verify: {plural(len(report.violations), 'problem')} in {source}."
     failures: list[Json] = [{"stage": f.stage.value, "problem": f.problem} for f in report.failures]
     console.failure("VERIFICATION_FAILED", sentence, {"violations": failures})
     _list_violations(console, report.violations)
@@ -168,8 +168,9 @@ def run(arguments: argparse.Namespace, console: Console) -> int:
 def main(argv: Sequence[str] | None = None, console: Console | None = None) -> int:
     """Entry point. Exit 0 on success, 1 on failure, 2 on a usage error."""
     out = console or Console()
-    arguments = build_parser().parse_args(argv)
+    arguments = parse_arguments(build_parser(), argv, out)
     out.json_mode = arguments.json
+    out.wide = arguments.wide
     return run_guarded(lambda: _run_reporting(arguments, out), out, debug=arguments.debug)
 
 

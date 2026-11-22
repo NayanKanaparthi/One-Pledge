@@ -44,8 +44,7 @@ VARIABLES = (
 )
 UNSEEDED_VIN = "1HGCM82633A004352"
 BIND_HOST_REFUSED = (
-    "Configuration error: BIND_HOST must be an IP address of this machine; "
-    "set BIND_HOST to 127.0.0.1 or 0.0.0.0.\n"
+    "Configuration error: BIND_HOST must be an IPv4 or IPv6 address; set it to 127.0.0.1 or 0.0.0.0.\n"
 )
 
 type Run = Callable[..., tuple[int, str, str]]
@@ -85,7 +84,8 @@ def test_the_whole_command_sequence_on_a_fresh_database(
     env = fresh_database.environment()
     name = fresh_database.target.database
     for _ in range(2):
-        code, out, err = run(["db", "provision"], **env)
+        # --wide: the test database's long name would otherwise wrap the line at 100 columns.
+        code, out, err = run(["db", "provision", "--wide"], **env)
         assert code == 0
         assert all(line["service"] == "outside_records" for line in json_lines(err))
         assert out == f"Provisioned database {name} with roles {name}_owner and {name}_app.\n"
@@ -131,7 +131,7 @@ def test_json_results_are_one_document_and_logs_stay_on_stderr(
     code, out, _ = run(["seed", "--data-dir", str(example_dir), "--json"], **env)
     titles = len((example_records / "titles.csv").read_text().splitlines()) - 1
     assert json.loads(out)["tables"]["title_records"] == titles
-    code, out, err = run(["seed", "--data-dir", str(example_dir / "absent"), "--json"], **env)
+    code, out, err = run(["seed", "--data-dir", str(example_dir / "absent"), "--json", "--wide"], **env)
     document = json.loads(out)
     assert (code, document["ok"], document["error"]["code"]) == (1, False, "INVALID_INPUT")
     assert document["error"]["message"] == err.strip()
@@ -247,7 +247,7 @@ def test_adding_a_client_needs_the_key_variable_and_the_key_format(run: Run, dat
 def test_seeding_a_directory_that_is_not_a_data_set_says_so(
     run: Run, database: Database, tmp_path: Path
 ) -> None:
-    code, _, err = run(["seed", "--data-dir", str(tmp_path)], **database.environment())
+    code, _, err = run(["seed", "--data-dir", str(tmp_path), "--wide"], **database.environment())
     assert code == 1
     assert err.endswith("cannot be read; pass the directory written by onepledge-datagen.\n")
 
@@ -298,22 +298,22 @@ def test_provisioning_with_an_admin_url_that_is_not_a_superuser_says_so(run: Run
         (
             "PORT",
             "\u00b2",
-            "Configuration error: PORT must be a TCP port number from 1 to 65535, in ASCII digits.\n",
+            "Configuration error: PORT must be a whole number written with the digits 0 to 9.\n",
         ),
         (
             "PORT",
             "9" * 5000,
-            "Configuration error: PORT must be a TCP port number from 1 to 65535, in ASCII digits.\n",
+            "Configuration error: PORT is out of range (1 to 65,535).\n",
         ),
         (
             "PORT",
             "+80",
-            "Configuration error: PORT must be a TCP port number from 1 to 65535, in ASCII digits.\n",
+            "Configuration error: PORT must be a whole number written with the digits 0 to 9.\n",
         ),
         (
             "PORT",
             "65536",
-            "Configuration error: PORT must be a TCP port number from 1 to 65535, in ASCII digits.\n",
+            "Configuration error: PORT is out of range (1 to 65,535).\n",
         ),
     ],
 )

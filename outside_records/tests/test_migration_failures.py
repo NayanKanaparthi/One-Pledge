@@ -47,7 +47,8 @@ def migrate(monkeypatch: pytest.MonkeyPatch) -> Callable[..., tuple[int, str, li
         code = main(["db", "migrate", "--json"], Console(out, err))
         lines = err.getvalue().splitlines()
         records = [json.loads(line) for line in lines if line.startswith("{")]
-        sentences = [line for line in lines if not line.startswith("{")]
+        # The sentence may wrap at 100 columns onto indented continuation lines (SPEC_DECISIONS 78).
+        sentences = [line.strip() for line in lines if not line.startswith("{")]
         return code, out.getvalue(), records, " ".join(sentences)
 
     return invoke

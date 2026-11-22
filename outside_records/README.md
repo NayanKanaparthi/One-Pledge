@@ -94,12 +94,19 @@ onepledge-outside serve                 serve the API on BIND_HOST:PORT as the a
 `seed` runs in one transaction as the owner role, prints the row count per table and is
 idempotent (the same input gives the same table contents). Every command exits 0 on
 success and 1 with one sentence on stderr when something is wrong (PostgreSQL not
-reachable, a connection refused, tables missing, a privilege missing, port in use, a variable missing or malformed, a
-`PG_ADMIN_URL` that is not a superuser, a data file cell that is not in its format, named
-by file, line and column), and 2 on a usage error (an empty `--data-dir` is one). An
-unexpected error prints `Unexpected error. Run with --debug for details.`; `--debug` adds
-the exception type and its frames (file, line, function), never the exception message, a
-source line or a local variable.
+reachable, a connection refused, tables missing, a privilege missing, port in use, a
+variable missing, malformed or out of range, a `PG_ADMIN_URL` that is not a superuser, a
+data file cell that is not in its format, named by file, line and column), and 2 on a
+usage error (an empty `--data-dir` is one). An unexpected error prints `Unexpected error.
+Run with --debug for details.`, after one `error` log record with `exception_type` and
+`stack`; `--debug` adds the exception type and its frames (file, line, function), never
+the exception message, a source line or a local variable. The settings `PORT`,
+`BIND_HOST` and `LOG_LEVEL` have the doubles' sentences, word for word.
+Human readable output is at most 100 columns: a longer line wraps onto continuation lines
+indented two more spaces, and `--wide` turns the limit off. A usage error with `--json`
+among the arguments also prints `{"ok": false, "error": {"code": "USAGE", "message": "The
+command line is not valid. See the usage text."}}` on stdout, the usage text on stderr,
+exit 2. No message ends in a colon (SPEC_DECISIONS 78).
 
 Every command except `serve` also takes `--json` (stdout holds exactly one JSON document:
 `{"ok": true, ...}` with the facts of the text output, or `{"ok": false, "error":

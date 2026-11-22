@@ -10,7 +10,13 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from onepledge_contract_fakes.canonical_json import JsonValue
-from onepledge_contract_fakes.cli_output import CliOutput, common_options, plural, run_guarded
+from onepledge_contract_fakes.cli_output import (
+    CliOutput,
+    common_options,
+    parse_arguments,
+    plural,
+    run_guarded,
+)
 from onepledge_contract_fakes.contracts_check.checker import CheckOutcome, CheckReport, ContractsChecker
 
 
@@ -97,9 +103,12 @@ def report_json(report: CheckReport) -> dict[str, JsonValue]:
 def main(argv: Sequence[str] | None = None, output: CliOutput | None = None) -> int:
     """Entry point. Returns 0 when every check passes, 1 otherwise, 2 on a usage error."""
     out = output or CliOutput()
-    arguments = build_parser().parse_args(argv)
+    arguments = parse_arguments(build_parser(), argv, out)
     out.json_mode = arguments.json
-    return run_guarded(lambda: _check(arguments.contracts_dir, out), out, debug=arguments.debug)
+    out.wide = arguments.wide
+    return run_guarded(
+        lambda: _check(arguments.contracts_dir, out), out, debug=arguments.debug, service="contracts_check"
+    )
 
 
 def _check(contracts_dir: Path, out: CliOutput) -> int:

@@ -38,8 +38,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(60)]
 
 VARIABLES = ("PG_ADMIN_URL", "DATABASE_URL", "MIGRATION_DATABASE_URL", "DB_APP_ROLE", "PORT", "BIND_HOST")
 OWNER_REFUSAL = (
-    "The role of MIGRATION_DATABASE_URL does not own the outside records tables; "
-    "use the owner role created by db provision.\n"
+    "The role of MIGRATION_DATABASE_URL does not own the outside records tables; use the owner role.\n"
 )
 
 

@@ -23,7 +23,13 @@ from onepledge_outside_records.infrastructure.settings import (
     read_secret_variable,
 )
 from onepledge_outside_records.interface.composition import Composition
-from onepledge_outside_records.interface.output import Console, common_options, plural, run_guarded
+from onepledge_outside_records.interface.output import (
+    Console,
+    common_options,
+    parse_arguments,
+    plural,
+    run_guarded,
+)
 
 # The `service` value in log lines is the contract's health value (SPEC_DECISIONS 22.6).
 SERVICE_NAME = "outside_records"
@@ -208,8 +214,10 @@ def run(arguments: argparse.Namespace, console: Console) -> int:
 def main(argv: Sequence[str] | None = None, console: Console | None = None) -> int:
     """Entry point. Exit 0 on success, 1 on failure, 2 on a usage error."""
     out = console or Console()
-    arguments = build_parser().parse_args(argv)
+    arguments = parse_arguments(build_parser(), argv, out)
     out.json_mode = bool(getattr(arguments, "json", False))
+    out.wide = arguments.wide
+    out.logs_to_stdout = arguments.command == "serve"
     return run_guarded(lambda: _run_reporting(arguments, out), out, debug=arguments.debug)
 
 

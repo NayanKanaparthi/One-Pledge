@@ -30,8 +30,9 @@ ORIGIN = "seed 20261117, profile small"
 
 
 def run(*argv: str) -> tuple[int, str, str]:
+    """The command in process, with `--wide` so sentences naming long test paths stay one line each."""
     out, err = io.StringIO(), io.StringIO()
-    code = main(list(argv), Console(out, err))
+    code = main([*argv, "--wide"], Console(out, err))
     return code, out.getvalue(), err.getvalue()
 
 
@@ -162,7 +163,8 @@ def test_another_generator_version_is_one_sentence(small_dir: Path, tmp_path: Pa
     change = edit_json(MANIFEST, lambda m: m.__setitem__("generator_version", version))
     out, err = io.StringIO(), io.StringIO()
     code = main(
-        ["verify", "--data-dir", str(tampered(small_dir, tmp_path / "copy", change))], Console(out, err)
+        ["verify", "--wide", "--data-dir", str(tampered(small_dir, tmp_path / "copy", change))],
+        Console(out, err),
     )
     shown = version if version in ("0.0.1", "9.9.9") else "another"
     assert (code, out.getvalue()) == (1, "")

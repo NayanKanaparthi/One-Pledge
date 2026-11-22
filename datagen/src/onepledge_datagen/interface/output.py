@@ -1,7 +1,10 @@
 """Console output of the generator's command line (SPEC 19, SPEC_DECISIONS 20, 23 d).
 
 stdout carries only the result: aligned text, or with `--json` exactly one JSON
-document. One sentence errors go to stderr. `run_guarded` is the last resort handler.
+document. One sentence errors go to stderr. Human readable lines wrap at 100 columns onto
+indented continuation lines unless `--wide`; `parse_arguments` is the one place a usage
+error with `--json` becomes its JSON document; `run_guarded` is the last resort handler,
+which also writes one `error` record (SPEC_DECISIONS 78).
 """
 
 from __future__ import annotations
@@ -9,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import textwrap
 import traceback
 from collections.abc import Callable, Sequence
 from types import TracebackType
@@ -17,11 +21,55 @@ from typing import TextIO
 from onepledge_datagen.domain.text_values import is_ascii_digits
 
 UNEXPECTED_ERROR = "Unexpected error. Run with --debug for details."
+SERVICE_NAME = "datagen"
+WIDTH = 100
+USAGE_STATUS = 2  # argparse exits with 2 on a usage error
+USAGE_MESSAGE = "The command line is not valid. See the usage text."
+DEBUG_HELP = "print the exception type and call frames"
+WIDE_HELP = "do not wrap human readable output at 100 columns"
 
 type Json = bool | int | str | list[Json] | dict[str, Json] | None
 
 
-QUIET_WITHOUT_LOGS = "no effect: this command writes no log lines"
+QUIET_WITHOUT_LOGS = "no effect: this command writes no log lines but the record of an unexpected error"
+
+
+def fit(text: str, wide: bool = False) -> str:
+    """Lines of at most 100 columns: a longer one wraps onto lines indented two more spaces."""
+    if wide:
+        return text
+    lines: list[str] = []
+    for line in text.split("\n"):
+        if len(line) <= WIDTH:
+            lines.append(line)
+            continue
+        indent = line[: len(line) - len(line.lstrip(" "))]
+        lines.extend(
+            textwrap.wrap(
+                line,
+                WIDTH,
+                subsequent_indent=indent + "  ",
+                break_long_words=False,
+                break_on_hyphens=False,
+            )
+        )
+    return "\n".join(lines)
+
+
+def parse_arguments(
+    parser: argparse.ArgumentParser, argv: Sequence[str] | None, console: Console
+) -> argparse.Namespace:
+    """Parse the command line; a usage error with `--json` also prints the USAGE document on stdout.
+
+    argparse prints the usage text and the error on stderr and exits 2, unchanged.
+    """
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    try:
+        return parser.parse_args(arguments)
+    except SystemExit as exit_:
+        if exit_.code == USAGE_STATUS and "--json" in arguments:
+            console.usage_failure()
+        raise
 
 
 def common_options() -> argparse.ArgumentParser:
@@ -33,11 +81,8 @@ def common_options() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--json", action="store_true", help="print the result as one JSON document")
     parser.add_argument("--quiet", action="store_true", help=QUIET_WITHOUT_LOGS)
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="on an unexpected error, print the exception type and the frames (file, line, function)",
-    )
+    parser.add_argument("--debug", action="store_true", help=DEBUG_HELP)
+    parser.add_argument("--wide", action="store_true", help=WIDE_HELP)
     return parser
 
 
@@ -55,11 +100,12 @@ class Console:
         self._out = out if out is not None else sys.stdout
         self._err = err if err is not None else sys.stderr
         self.json_mode = False
+        self.wide = False
 
     def line(self, text: str = "") -> None:
         """One line of the text result (nothing in JSON mode)."""
         if not self.json_mode:
-            self._out.write(text + "\n")
+            self._out.write(fit(text, self.wide) + "\n")
 
     def result(self, document: dict[str, Json]) -> None:
         """The JSON result of a successful command (only in JSON mode)."""
@@ -103,7 +149,25 @@ class Console:
 
     def error(self, sentence: str) -> None:
         """One sentence on stderr."""
-        self._err.write(sentence + "\n")
+        self._err.write(fit(sentence, self.wide) + "\n")
+
+    def usage_failure(self) -> None:
+        """The USAGE document on stdout, whatever the mode (SPEC_DECISIONS 78)."""
+        self._write_json({"ok": False, "error": {"code": "USAGE", "message": USAGE_MESSAGE}})
+
+    def error_record(self, error: BaseException) -> None:
+        """The one `error` log record of an unexpected failure: type and frames, never a message.
+
+        The generator reads no clock (SPEC 5.1 determinism), so the record has no `ts`.
+        """
+        record = {
+            "level": "error",
+            "event": "unhandled_exception",
+            "service": SERVICE_NAME,
+            "exception_type": type(error).__name__,
+            "stack": "\n".join(frame_lines(error.__traceback__)),
+        }
+        self._err.write(json.dumps(record, sort_keys=False) + "\n")
 
 
 def run_guarded(action: Callable[[], int], console: Console, debug: bool) -> int:
@@ -113,5 +177,6 @@ def run_guarded(action: Callable[[], int], console: Console, debug: bool) -> int
     except Exception as error:  # The last resort handler of SPEC_DECISIONS 23 (d): never a bare traceback.
         if debug:
             console.traceback(error)
+        console.error_record(error)
         console.failure("UNEXPECTED_ERROR", UNEXPECTED_ERROR)
         return 1

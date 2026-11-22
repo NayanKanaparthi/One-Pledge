@@ -184,7 +184,9 @@ PLUMBING = SOURCE / "interface" / "http" / "plumbing.py"
 
 def test_only_the_http_plumbing_builds_envelopes_and_failure_records() -> None:
     for path in modules():
-        if path == PLUMBING:
+        # The HTTP plumbing writes the records of a 5xx; the CLI's last resort handler writes its
+        # own one error record (SPEC_DECISIONS 78).
+        if path in (PLUMBING, SOURCE / "interface" / "output.py"):
             continue
         nodes = parsed(path)
         names = {n.id for n in nodes if isinstance(n, ast.Name)}
