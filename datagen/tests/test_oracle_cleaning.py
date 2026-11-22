@@ -181,3 +181,19 @@ def test_property_cleaning_is_idempotent_on_its_own_output(changes: dict[int, st
     ]
     second = RowCleaner(SUMMIT_FORMAT.header, False, AS_OF).clean(canonical)
     assert second.issues == () and second.terms == first.terms
+
+
+@pytest.mark.parametrize(
+    ("cell", "expected"),
+    [
+        ("\t", {("vin", "UNSAFE_CHARACTERS", "REJECTED"), ("vin", "WHITESPACE_TRIMMED", "FIXED")}),
+        ("  ", {("vin", "MISSING_REQUIRED_FIELD", "REJECTED"), ("vin", "WHITESPACE_TRIMMED", "FIXED")}),
+        ("\x1f1HGCM82633A004352", {("vin", "UNSAFE_CHARACTERS", "REJECTED")}),
+        ("1HGCM82633A004352\x7f", {("vin", "UNSAFE_CHARACTERS", "REJECTED")}),
+        ("+1HGCM82633A004352", {("vin", "UNSAFE_CHARACTERS", "REJECTED")}),
+        ("1HGCM82633A00435\x9f", {("vin", "VIN_CHARACTER_INVALID", "REJECTED")}),
+    ],
+)
+def test_the_cell_steps_follow_decision_82(cell: str, expected: set[tuple[str, str, str]]) -> None:
+    """Control characters on the cell as sent, then trimming, empty, formula lead, field rules."""
+    assert clean(LAKESIDE_FORMAT, LAKESIDE_ROW, {1: cell}) == expected

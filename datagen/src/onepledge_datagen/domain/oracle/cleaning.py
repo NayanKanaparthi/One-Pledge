@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import csv
 import io
-import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -35,7 +34,8 @@ HEADER_ALIASES: Mapping[str, tuple[str, ...]] = MappingProxyType(
 LOAN_FIELDS: tuple[str, ...] = tuple(HEADER_ALIASES)
 RELEASE_FIELDS: tuple[str, ...] = ("vin",)
 NON_DATA_MARKERS = frozenset({"TOTAL", "TOTALS", "GRAND TOTAL", "SUBTOTAL"})
-UNSAFE_LEADING = frozenset("=+@\t\r")
+FORMULA_LEAD = frozenset("=+@")
+FIRST_PRINTABLE, DELETE = 0x20, 0x7F
 EARLIEST_DATE = date(2000, 1, 1)
 MIN_ORIGINAL_CENTS = 10_000
 MAX_ORIGINAL_CENTS = 25_000_000
@@ -135,11 +135,9 @@ def _ascii_words(text: str) -> list[str]:
     return [*words, current] if current else words
 
 
-def _unsafe(raw: str, trimmed: str) -> bool:
-    """A formula leading character (raw or trimmed) or any control character."""
-    if (raw and raw[0] in UNSAFE_LEADING) or (trimmed and trimmed[0] in UNSAFE_LEADING):
-        return True
-    return any(unicodedata.category(char) == "Cc" for char in raw)
+def _has_control(raw: str) -> bool:
+    """A character U+0000 to U+001F or U+007F anywhere in the cell as sent (SPEC_DECISIONS 82)."""
+    return any(ord(char) < FIRST_PRINTABLE or ord(char) == DELETE for char in raw)
 
 
 @dataclass(frozen=True)
@@ -341,15 +339,22 @@ class RowCleaner:
         return CleanedRow(ordered, vin=vin, terms=terms)
 
     def _clean_field(self, field: str, raw: str) -> _FieldResult:
-        """Trim, then empty, then unsafe, then the field's own rule; the first rejection ends the field."""
+        """The order of SPEC_DECISIONS 82, the first rejection ending the field.
+
+        1. a control character in the cell as sent (trimming is still recorded); 2. trimming;
+        3. empty; 4. a formula lead on the trimmed cell; 5. the field's own rules.
+        """
         trimmed = ascii_trim(raw)
         trim_issue = (Issue(field, Problem.WHITESPACE_TRIMMED, Action.FIXED),) if trimmed != raw else ()
+        unsafe = Issue(field, Problem.UNSAFE_CHARACTERS, Action.REJECTED)
+        if _has_control(raw):
+            return _FieldResult(None, (unsafe, *trim_issue))
         if not trimmed:
             return _FieldResult(
                 None, (*trim_issue, Issue(field, Problem.MISSING_REQUIRED_FIELD, Action.REJECTED))
             )
-        if _unsafe(raw, trimmed):
-            return _FieldResult(None, (*trim_issue, Issue(field, Problem.UNSAFE_CHARACTERS, Action.REJECTED)))
+        if trimmed[0] in FORMULA_LEAD:
+            return _FieldResult(None, (*trim_issue, unsafe))
         result = self._field_rule(field, trimmed)
         return _FieldResult(result.value, (*trim_issue, *result.issues))
 

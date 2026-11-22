@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "description": "Neutral cleaning cases of SPEC 10.4, written by hand from SPEC 10.4, 9.1 and 8 (LenderLoanNumber) and SPEC_DECISIONS 13 and 45 (SPEC_DECISIONS 50). Every implementation of the cleaning rules runs every case. A field case puts `input` into one required cell of that field and evaluates the field rules in the order of decision 13: trim ASCII space, tab, CR and LF (WHITESPACE_TRIMMED); empty (MISSING_REQUIRED_FIELD); a leading = + @ tab or CR, or any character of Unicode category Cc (UNSAFE_CHARACTERS); then the field's own rules, the first rejection ending the field. `original_amount` cases include its range 100.00 to 250,000.00; `current_balance` cases include ZERO_BALANCE. A `row` case gives a header and the cells of one record and evaluates the row rules first. `problems` lists every issue as field and problem; compare it as a multiset. `action` is ACCEPT with no issue, FIXED with FIXED issues only, REJECTED with at least one REJECTED issue. `canonical` is the cleaned value (amounts in integer cents; for a row an object of the canonical fields cleaned for that tape kind), or null when rejected. Digits are ASCII digits only.",
+  "description": "Neutral cleaning cases of SPEC 10.4, written by hand from SPEC 10.4, 9.1 and 8 (LenderLoanNumber) and SPEC_DECISIONS 13, 45, 82 and 83 (SPEC_DECISIONS 50, 84). Every implementation of the cleaning rules runs every case. A field case puts `input` into one required cell of that field and evaluates the cell in the order of decision 82: a control character U+0000 to U+001F or U+007F anywhere in the cell as sent (UNSAFE_CHARACTERS, with WHITESPACE_TRIMMED also recorded when trimming would change the cell, then the field ends); trim ASCII space, tab, CR and LF (WHITESPACE_TRIMMED); empty (MISSING_REQUIRED_FIELD); a trimmed cell starting with = + or @ (UNSAFE_CHARACTERS); then the field's own rules, where a normalisation that changes the cell is recorded before the validation that rejects it (decision 83). `original_amount` cases include its range 100.00 to 250,000.00; `current_balance` cases include ZERO_BALANCE. A `row` case gives a header and the cells of one record and evaluates the row rules first. `problems` lists every issue as field and problem; compare it as a multiset. `action` is ACCEPT with no issue, FIXED with FIXED issues only, REJECTED with at least one REJECTED issue. `canonical` is the cleaned value (amounts in integer cents; for a row an object of the canonical fields cleaned for that tape kind), or null when rejected. Digits are ASCII digits only. A case's input is never edited: a wrong case is corrected in its expected value, or deleted and replaced under a new id (decision 84).",
   "cases": [
     {
       "id": "vin-001",
@@ -3434,6 +3434,706 @@
         "canonical": null
       },
       "note": "release tape without a VIN"
+    },
+    {
+      "id": "borrower_ref-024",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "LK-#123456",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_NORMALISED"
+          },
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 83: the hyphen is removed and recorded, then # fails the pattern"
+    },
+    {
+      "id": "borrower_ref-025",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "lk#123456",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_NORMALISED"
+          },
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 83: upper casing is recorded, then # fails the pattern"
+    },
+    {
+      "id": "borrower_ref-026",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "LK 12٣4",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_NORMALISED"
+          },
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 83: the space is removed and recorded, then the Arabic-Indic digit three fails"
+    },
+    {
+      "id": "borrower_ref-027",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "c004821٣",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_NORMALISED"
+          },
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 83: upper casing is recorded, then the Arabic-Indic digit three fails"
+    },
+    {
+      "id": "borrower_ref-028",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "LK-12é4",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_NORMALISED"
+          },
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 83: the hyphen is removed and recorded, then the accented e fails"
+    },
+    {
+      "id": "borrower_ref-029",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "#123456",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 83: nothing to normalise, only the rejection"
+    },
+    {
+      "id": "vin-041",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1hgcm82633a00435*",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CASE_NORMALISED"
+          },
+          {
+            "field": "vin",
+            "problem": "VIN_CHARACTER_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 84: ASCII lower case is normalised and recorded, then * is outside the alphabet"
+    },
+    {
+      "id": "vin-042",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633A004352\t",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "UNSAFE_CHARACTERS"
+          },
+          {
+            "field": "vin",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: a trailing tab is a control character; trimming is still recorded"
+    },
+    {
+      "id": "vin-043",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633A004352\r",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "UNSAFE_CHARACTERS"
+          },
+          {
+            "field": "vin",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: a trailing CR is a control character; trimming is still recorded"
+    },
+    {
+      "id": "vin-044",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633A004352\n",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "UNSAFE_CHARACTERS"
+          },
+          {
+            "field": "vin",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: a trailing LF is a control character; trimming is still recorded"
+    },
+    {
+      "id": "vin-045",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633\nA004352",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "UNSAFE_CHARACTERS"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: an embedded LF is a control character; trimming changes nothing"
+    },
+    {
+      "id": "vin-046",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": " =1HGCM82633A004352",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "WHITESPACE_TRIMMED"
+          },
+          {
+            "field": "vin",
+            "problem": "UNSAFE_CHARACTERS"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: the formula lead is tested on the trimmed cell"
+    },
+    {
+      "id": "vin-047",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633A004352   ",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": "1HGCM82633A004352"
+      },
+      "note": "decision 82: trailing ASCII spaces only are trimmed into an accepted value"
+    },
+    {
+      "id": "borrower_ref-030",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "C0048213\t",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "UNSAFE_CHARACTERS"
+          },
+          {
+            "field": "borrower_ref",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: a trailing tab is a control character; trimming is still recorded"
+    },
+    {
+      "id": "borrower_ref-031",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "C0048213\r",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "UNSAFE_CHARACTERS"
+          },
+          {
+            "field": "borrower_ref",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: a trailing CR is a control character; trimming is still recorded"
+    },
+    {
+      "id": "borrower_ref-032",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "C0048213\n",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "UNSAFE_CHARACTERS"
+          },
+          {
+            "field": "borrower_ref",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: a trailing LF is a control character; trimming is still recorded"
+    },
+    {
+      "id": "borrower_ref-033",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "C004\n8213",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "UNSAFE_CHARACTERS"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: an embedded LF is a control character, never a separator"
+    },
+    {
+      "id": "borrower_ref-034",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": " =C0048213",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "WHITESPACE_TRIMMED"
+          },
+          {
+            "field": "borrower_ref",
+            "problem": "UNSAFE_CHARACTERS"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: the formula lead is tested on the trimmed cell"
+    },
+    {
+      "id": "borrower_ref-035",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "C0048213  ",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": "C0048213"
+      },
+      "note": "decision 82: trailing ASCII spaces only are trimmed into an accepted value"
+    },
+    {
+      "id": "original_amount-037",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "23450.17\t",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "UNSAFE_CHARACTERS"
+          },
+          {
+            "field": "original_amount",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: a trailing tab is a control character; trimming is still recorded"
+    },
+    {
+      "id": "original_amount-038",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "23450.17\r",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "UNSAFE_CHARACTERS"
+          },
+          {
+            "field": "original_amount",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: a trailing CR is a control character; trimming is still recorded"
+    },
+    {
+      "id": "original_amount-039",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "23450.17\n",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "UNSAFE_CHARACTERS"
+          },
+          {
+            "field": "original_amount",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: a trailing LF is a control character; trimming is still recorded"
+    },
+    {
+      "id": "original_amount-040",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "23450\n.17",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "UNSAFE_CHARACTERS"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: an embedded LF is a control character"
+    },
+    {
+      "id": "original_amount-041",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": " =23450.17",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "WHITESPACE_TRIMMED"
+          },
+          {
+            "field": "original_amount",
+            "problem": "UNSAFE_CHARACTERS"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: the formula lead is tested on the trimmed cell"
+    },
+    {
+      "id": "original_amount-042",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "23450.17  ",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": 2345017
+      },
+      "note": "decision 82: trailing ASCII spaces only are trimmed into an accepted value"
+    },
+    {
+      "id": "origination_date-031",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "2026-08-14\t",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "UNSAFE_CHARACTERS"
+          },
+          {
+            "field": "origination_date",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: a trailing tab is a control character; trimming is still recorded"
+    },
+    {
+      "id": "origination_date-032",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "2026-08-14\r",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "UNSAFE_CHARACTERS"
+          },
+          {
+            "field": "origination_date",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: a trailing CR is a control character; trimming is still recorded"
+    },
+    {
+      "id": "origination_date-033",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "2026-08-14\n",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "UNSAFE_CHARACTERS"
+          },
+          {
+            "field": "origination_date",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: a trailing LF is a control character; trimming is still recorded"
+    },
+    {
+      "id": "origination_date-034",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "2026-08\n-14",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "UNSAFE_CHARACTERS"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: an embedded LF is a control character"
+    },
+    {
+      "id": "origination_date-035",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": " =2026-08-14",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "WHITESPACE_TRIMMED"
+          },
+          {
+            "field": "origination_date",
+            "problem": "UNSAFE_CHARACTERS"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: the formula lead is tested on the trimmed cell"
+    },
+    {
+      "id": "origination_date-036",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "2026-08-14  ",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": "2026-08-14"
+      },
+      "note": "decision 82: trailing ASCII spaces only are trimmed into an accepted value"
+    },
+    {
+      "id": "lender_loan_number-016",
+      "field": "lender_loan_number",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": " SAF-1 ",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "lender_loan_number",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": "SAF-1"
+      },
+      "note": "decision 84: a leading and a trailing space are trimmed into an accepted value"
+    },
+    {
+      "id": "vin-048",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633A04352",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "UNSAFE_CHARACTERS"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: U+007F (DEL) is a control character"
+    },
+    {
+      "id": "vin-049",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633A00435",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CHARACTER_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "decision 82: U+0085 is outside U+0000 to U+001F and U+007F, so it is not a control character; it is not trimmed and is outside the VIN alphabet"
     }
   ]
 }
