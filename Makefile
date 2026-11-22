@@ -13,6 +13,8 @@ COVERAGE_PACKAGES := onepledge_contract_fakes onepledge_datagen onepledge_outsid
 # The bank agent gate covers its domain and application layers combined (SPEC 2.2).
 BANK_CORE := */onepledge_bank_agent/domain/*,*/onepledge_bank_agent/application/*
 COVERAGE_MIN := 85
+# The bank agent's unit-only gate (SPEC_DECISIONS 63) keeps its data apart from the full run's.
+BANK_UNIT_COVERAGE := COVERAGE_FILE=.coverage.bank-unit
 # mypy runs once per package so that test helpers with the same file name do not collide.
 MYPY := $(PYTHON) -m mypy --config-file pyproject.toml
 TEST_PATHS := $(foreach p,$(PACKAGES),$(p)/tests)
@@ -58,7 +60,21 @@ contracts-check: ## Validate the contracts, their examples and the test vectors
 	@echo "contracts-check: onepledge-contracts check"
 	@onepledge-contracts check --contracts-dir contracts
 
-test: ## Run every test of every package with the coverage gates
+# The unit-only gate: `-m unit` (no PostgreSQL, network or child process), at least COVERAGE_MIN% of the
+# bank agent's domain and application with branches on. $(1) is the target name used in its lines.
+define bank_unit_gate
+	@echo "$(1): unit only pytest -m unit for onepledge_bank_agent with coverage"
+	@$(BANK_UNIT_COVERAGE) $(PYTHON) -m coverage erase
+	@$(BANK_UNIT_COVERAGE) $(PYTHON) -m pytest bank_agent/tests -q -m unit \
+		--cov=onepledge_bank_agent --cov-branch --cov-report=
+	@echo "$(1): unit only coverage gate for onepledge_bank_agent domain and application (minimum $(COVERAGE_MIN)%)"
+	@$(BANK_UNIT_COVERAGE) $(PYTHON) -m coverage report --include="$(BANK_CORE)" --fail-under=$(COVERAGE_MIN) \
+		--format=total | awk '{print "$(1): onepledge_bank_agent domain and application unit only coverage " $$0 "%"}'
+	@$(BANK_UNIT_COVERAGE) $(PYTHON) -m coverage report --include="$(BANK_CORE)" --fail-under=$(COVERAGE_MIN) \
+		> /dev/null || exit 1
+endef
+
+test: ## Run every test of every package with the coverage gates, then the bank agent's unit-only gate
 	@echo "test: pytest with coverage"
 	@$(PYTHON) -m coverage erase
 	@$(PYTHON) -m pytest $(TEST_PATHS) -q $(foreach m,$(COVERAGE_PACKAGES),--cov=$(m)) \
@@ -73,10 +89,12 @@ test: ## Run every test of every package with the coverage gates
 			| awk -v m="$$m" '{print "test: " m " coverage " $$0 "%"}'; \
 		$(PYTHON) -m coverage report --include="*/$$m/*" --fail-under=$(COVERAGE_MIN) > /dev/null || exit 1; \
 	done
+	$(call bank_unit_gate,test)
 
-test-fast: ## Run only the unit and contract tests
+test-fast: ## Run only the unit and contract tests, and the bank agent's unit-only coverage gate
 	@echo "test-fast: pytest -m 'unit or contract'"
 	@$(PYTHON) -m pytest $(TEST_PATHS) -q -m "unit or contract"
+	$(call bank_unit_gate,test-fast)
 
 ci: ## Run lint, typecheck, contracts-check and test, stopping at the first failure
 	@$(MAKE) --no-print-directory lint

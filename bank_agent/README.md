@@ -116,10 +116,11 @@ bank_agent/
                        outside records, key holder and registry clients, strict answers)
     interface/         composition (the one composition root), cli/ (commands, output)
   tests/
-    unit/  integration/  contract/  bank_testkit/ (fixtures, in-process outside records,
-                                                   the registry and key holder doubles in
-                                                   process, three banks, an independent
-                                                   cleaning and check oracle)
+    unit/  integration/  contract/  ports/ (one behavioural class per repository port,
+                                            run against memory and PostgreSQL)
+    bank_testkit/ (fixtures, in-process outside records, the registry and key holder
+                   doubles in process, three banks, an independent cleaning and check
+                   oracle; memory/: the in-memory ports and scripted dependency fakes)
 ```
 
 Each layer imports only the layers below it; SQL, HTTP and logging libraries appear only
@@ -322,7 +323,22 @@ python3 -m pytest bank_agent -q
 python3 -m pytest bank_agent/tests/integration -k "crash or resume or fault" -v
 python3 -m pytest bank_agent/tests -k "vector or oprf or certificate or checkpoint" -q
 python3 -m pytest bank_agent/tests/unit bank_agent/tests/integration -q --cov=onepledge_bank_agent.domain --cov=onepledge_bank_agent.application --cov-fail-under=85
+python3 -m pytest bank_agent/tests -m unit -q --cov=onepledge_bank_agent.domain --cov=onepledge_bank_agent.application --cov-branch --cov-fail-under=85
 ```
+
+Two coverage gates hold for the domain and application layers together, branches on
+(SPEC_DECISIONS 63): the full run, and the unit-only run (`-m unit`: no PostgreSQL, no
+network, no child process). `make test` enforces both; `make test-fast` enforces the
+unit-only one. The unit tests reach every use case through `bank_testkit/memory/`: an
+in-memory unit of work with every repository (leaving a scope without commit discards
+it, and committed audit entries are chained by the domain's own rule), and scripted
+fakes of the registry, both key holders and the blinder, the outside records clients,
+the signature verifier, the clock and the identifier generator. `MemoryBank` wires
+them the way the composition root wires the real ones. Nothing under `src/` imports
+them. They are held to the real repositories by `tests/ports/`: each class there is
+the only definition of one port's behaviour and runs twice, against memory (marker
+`unit`) and against PostgreSQL (marker `integration`), so a behaviour the two disagree
+on fails the suite.
 
 Integration tests need the PostgreSQL server at `PG_ADMIN_URL` (default
 `postgresql://postgres@localhost:55432/postgres`). Each test creates a uniquely named
