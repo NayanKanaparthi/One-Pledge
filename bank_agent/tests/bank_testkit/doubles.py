@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from fastapi.testclient import TestClient
 
+from onepledge_bank_agent.domain.canonical_json import canonical_json
 from onepledge_bank_agent.infrastructure.http.base import HttpTimeouts
 from onepledge_contract_fakes.key_holder.app import create_key_holder_app
 from onepledge_contract_fakes.key_holder.config import KeyHolderConfig
@@ -102,6 +103,7 @@ class InProcessDoubles:
             url = KEY_HOLDER_URLS[holder]
             self._clients[url] = TestClient(create_key_holder_app(config), base_url=url)
         self.down: set[str] = set()
+        self._forged: dict[str, list[dict[str, Any]]] = {}
         self.public_key_b64 = base64.b64encode(
             Ed25519PrivateKey.from_private_bytes(self.signing_seed)
             .public_key()
@@ -130,10 +132,45 @@ class InProcessDoubles:
         base = f"{request.url.scheme}://{request.url.host}"
         if base in self.down:
             raise httpx.ConnectError("the service is stopped", request=request)
+        forged = self._forged.get(request.headers.get("X-API-Key", ""), [])
+        if base == REGISTRY_URL and forged and request.url.path.startswith("/v1/outbox/"):
+            message_id = request.url.path.split("/")[3]
+            if any(message["message_id"] == message_id for message in forged):
+                forged[:] = [message for message in forged if message["message_id"] != message_id]
+                return httpx.Response(204)
         answer = self._clients[base].request(
             request.method, str(request.url), headers=dict(request.headers), content=request.read()
         )
+        if base == REGISTRY_URL and forged and request.url.path == "/v1/outbox" and answer.status_code == 200:
+            page = answer.json()
+            last = max((message["position"] for message in page["messages"]), default=0)
+            extra = [{**message, "position": last + n} for n, message in enumerate(forged, start=1)]
+            return httpx.Response(200, json={**page, "messages": [*page["messages"], *extra]})
         return httpx.Response(answer.status_code, headers=answer.headers, content=answer.content)
+
+    def forge_checkpoint(self, bank_code: str, body: Mapping[str, object]) -> dict[str, Any]:
+        """A compromised registry: a CHECKPOINT message with `body`, signed with the registry's own key,
+        delivered once to one bank ahead of the real outbox. Returns the signed checkpoint."""
+        signature = Ed25519PrivateKey.from_private_bytes(self.signing_seed).sign(canonical_json(dict(body)))
+        signed = {
+            "body": dict(body),
+            "signature": base64.b64encode(signature).decode("ascii"),
+            "signing_key_id": SIGNING_KEY_ID,
+        }
+        message = {
+            "message_id": str(uuid.uuid4()),
+            "position": 0,
+            "type": "CHECKPOINT",
+            "created_at": "2026-11-20T12:00:00Z",
+            "payload": signed,
+        }
+        self._forged.setdefault(self.members[bank_code].registry_key, []).append(message)
+        return signed
+
+    def checkpoints(self) -> list[dict[str, Any]]:
+        """Every checkpoint the registry signed, oldest first."""
+        found: list[dict[str, Any]] = self.control(REGISTRY_URL, "GET", "/_test/dump")["checkpoints"]
+        return found
 
     def client(self, base_url: str) -> httpx.Client:
         """An httpx client reaching one double in-process."""
