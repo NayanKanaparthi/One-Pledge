@@ -370,3 +370,47 @@ def test_every_405_carries_allow(double: Double) -> None:
             assert response.json()["error"]["code"] == "METHOD_NOT_ALLOWED"
             allowed = {part.strip() for part in response.headers["allow"].split(",")}
             assert allowed == methods | ({"HEAD"} if "GET" in methods else set()) or allowed == methods
+
+
+# SPEC_DECISIONS 66: every record written for a 5xx response carries error_code (the code of the
+# response body), http_status, request_id and exception_type.
+FAILURE_KEYS = ("error_code", "http_status", "request_id", "exception_type")
+
+
+def assert_failure_records(records: list[dict[str, Any]], response: httpx.Response) -> list[dict[str, Any]]:
+    """The records of one 5xx response, each checked for the four keys and their values."""
+    request_id = response.headers["x-request-id"]
+    mine = [r for r in records if r.get("request_id") == request_id]
+    assert len(mine) >= 2, mine
+    for record in mine:
+        assert all(record.get(key) is not None for key in FAILURE_KEYS), record
+        assert record["error_code"] == response.json()["error"]["code"]
+        assert record["http_status"] == response.status_code
+    errors = [r for r in mine if r["level"] == "error"]
+    assert len(errors) == (1 if response.status_code == 500 else 0)
+    return mine
+
+
+@pytest.mark.parametrize("path", ["/v1/unexpected", "/v1/named"])
+def test_every_record_of_an_in_process_500_carries_the_failure_keys(path: str) -> None:
+    log = io.StringIO()
+    configure_logging("registry", "INFO", log)
+    app, _ = failing_app()
+    with AsgiTestClient(app) as client:
+        response = client.get(path)
+    mine = assert_failure_records([json.loads(line) for line in log.getvalue().splitlines()], response)
+    expected_type = "RuntimeError" if path == "/v1/unexpected" else "DomainError"
+    assert {record["exception_type"] for record in mine} == {expected_type}
+
+
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+def test_every_record_of_an_injected_5xx_carries_the_failure_keys(double: Double, status: int) -> None:
+    armed = double.client.post(
+        "/_test/fail-next", json={"count": 1, "status": status, "when": "BEFORE_PROCESSING"}, headers=CONTROL
+    )
+    assert armed.status_code == 200
+    target = "/v1/evaluate" if double.name == "key_holder" else "/v1/submissions"
+    response = double.client.post(target, json={})
+    assert response.status_code == status
+    mine = assert_failure_records(double.records(), response)
+    assert {record["exception_type"] for record in mine} == {"InjectedFailureError"}

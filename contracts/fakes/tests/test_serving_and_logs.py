@@ -79,6 +79,15 @@ def test_one_unhandled_failure_writes_exactly_one_error_record(
     assert len(errors) == 1
     assert errors[0]["event"] == "unhandled_exception" and errors[0]["exception_type"] == "RuntimeError"
     assert errors[0]["request_id"] == SERVED_REQUEST_ID
+    # SPEC_DECISIONS 66: every record of the 500 carries the four failure keys.
+    mine = [record for record in records if record.get("request_id") == SERVED_REQUEST_ID]
+    assert len(mine) == 2
+    for record in mine:
+        assert (record["error_code"], record["http_status"], record["exception_type"]) == (
+            "INTERNAL_ERROR",
+            500,
+            "RuntimeError",
+        )
     assert all(record["service"] == "registry" for record in records)
     assert "1HGCM82633A004352" not in json.dumps(records) and "exploded" not in json.dumps(records)
 

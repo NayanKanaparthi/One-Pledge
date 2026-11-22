@@ -252,6 +252,14 @@ def test_a_served_failure_writes_exactly_one_error_record(
     errors = [record for record in records if record["level"] == "error"]
     assert [record["event"] for record in errors] == ["unhandled_exception"]
     assert errors[0]["request_id"] == request_id
+    mine = [record for record in records if record.get("request_id") == request_id]
+    assert len(mine) == 2
+    for record in mine:
+        assert (record["error_code"], record["http_status"], record["exception_type"]) == (
+            "INTERNAL_ERROR",
+            500,
+            "RuntimeError",
+        )
     assert {record["service"] for record in records} == {"outside_records"}
     assert CANARY_VIN not in json.dumps(records) and "failed" not in json.dumps(records)
 

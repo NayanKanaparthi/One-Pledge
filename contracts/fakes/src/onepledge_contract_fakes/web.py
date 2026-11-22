@@ -88,9 +88,12 @@ _LOCATION_ROOTS = frozenset({"body", "query", "path", "header"})
 _log = get_logger(__name__)
 
 
+_REQUEST_ID = "onepledge.request_id"
+
+
 def request_id_of(request: Request) -> str:
     """The request id bound by the middleware."""
-    value = request.scope.get("onepledge.request_id")
+    value = request.scope.get(_REQUEST_ID)
     return value if isinstance(value, str) else str(uuid.uuid4())
 
 
@@ -190,15 +193,37 @@ def new_service_app(title: str) -> FastAPI:
     return app
 
 
+@dataclass(frozen=True)
+class _Failure:
+    """What a 5xx response is about: the code of its body, the exception type and the exception."""
+
+    error_code: str
+    exception_type: str
+    cause: BaseException | None = None
+
+
+_FAILURE = "onepledge.failure"
+
+
+def failure_response(scope: Scope, error: DomainError, cause: BaseException | None = None) -> JSONResponse:
+    """The envelope of an error; for a 5xx it also records what the failure is about on the request.
+
+    Every 5xx envelope is built here, so the middleware can write the failure facts on every
+    record of that response in one place (SPEC_DECISIONS 66).
+    """
+    request_id = scope.get(_REQUEST_ID)
+    rid = request_id if isinstance(request_id, str) else str(uuid.uuid4())
+    if error.http_status >= _HTTP_SERVER_ERROR:
+        scope[_FAILURE] = _Failure(error.code, type(cause or error).__name__, cause)
+    return error_response(error, rid)
+
+
 def install_error_handlers(app: FastAPI) -> None:
     """Map every error to the contract envelope with a fixed message."""
 
     async def domain_error(request: Request, exc: Exception) -> Response:
         error = exc if isinstance(exc, DomainError) else DomainError()
-        if error.http_status == _HTTP_SERVER_ERROR:
-            # A named 500 (an injected failure, an invariant) is still one failure: one error record.
-            _log.error(LogEvent.INTERNAL_ERROR, error_code=error.code)
-        return error_response(error, request_id_of(request))
+        return failure_response(request.scope, error)
 
     async def validation_error(request: Request, exc: Exception) -> Response:
         errors = list(exc.errors()) if isinstance(exc, RequestValidationError) else []
@@ -216,13 +241,20 @@ def install_error_handlers(app: FastAPI) -> None:
             return error_response(MethodNotAllowedError(), request_id_of(request), allow)
         if status == _HTTP_NOT_FOUND:
             return error_response(ResourceNotFoundError(), request_id_of(request))
-        return error_response(DomainError(), request_id_of(request))
+        return failure_response(request.scope, DomainError(), exc)
 
     async def unexpected_error(request: Request, exc: Exception) -> Response:
-        # Reached only by a defect of the middleware itself: the middleware handles every
-        # exception the app raises while the request id is still bound.
-        _log.error(LogEvent.UNHANDLED_EXCEPTION, exc_info=exc)
-        return error_response(DomainError(), request_id_of(request))
+        # Reached only by a defect of the middleware itself (it handles every exception the app
+        # raises): the middleware has already unbound the request, so the keys are written here.
+        error = DomainError()
+        _log.error(
+            LogEvent.UNHANDLED_EXCEPTION,
+            exc_info=exc,
+            error_code=error.code,
+            http_status=error.http_status,
+            request_id=request_id_of(request),
+        )
+        return error_response(error, request_id_of(request))
 
     app.add_exception_handler(DomainError, domain_error)
     app.add_exception_handler(RequestValidationError, validation_error)
@@ -279,7 +311,7 @@ class RequestContextMiddleware:
             await self._app(scope, receive, send)
             return
         request_id = _request_id_from(scope)
-        scope["onepledge.request_id"] = request_id
+        scope[_REQUEST_ID] = request_id
         structlog.contextvars.bind_contextvars(request_id=request_id)
         started = time.monotonic()
         exchange = _Exchange()
@@ -289,11 +321,16 @@ class RequestContextMiddleware:
                 _declared_length(scope, self._max_body_bytes)
                 await self._app(scope, self._limited(receive), sending)
             except DomainError as error:
-                await error_response(error, request_id)(scope, receive, sending)
-            except Exception as error:  # Every failure of the app ends here, logged once (SPEC_DECISIONS 34).
-                _log.error(LogEvent.UNHANDLED_EXCEPTION, exc_info=error)
-                if not exchange.started:
-                    await error_response(DomainError(), request_id)(scope, receive, sending)
+                await failure_response(scope, error)(scope, receive, sending)
+            except Exception as error:  # Every failure of the app ends here (SPEC_DECISIONS 34).
+                if exchange.started:
+                    # Too late for the envelope: the response already went out with its own status.
+                    _log.error(LogEvent.UNHANDLED_EXCEPTION, exc_info=error, http_status=exchange.status)
+                else:
+                    await failure_response(scope, DomainError(), error)(scope, receive, sending)
+            failure = self._failure_facts(scope, exchange)
+            if failure:
+                self._log_failure(scope, exchange.status, failure)
             route = scope.get("route")
             _log.info(
                 LogEvent.HTTP_REQUEST,
@@ -301,9 +338,32 @@ class RequestContextMiddleware:
                 route=getattr(route, "path", "unmatched"),
                 http_status=exchange.status,
                 duration_ms=round((time.monotonic() - started) * 1000),
+                **failure,
             )
         finally:
             structlog.contextvars.unbind_contextvars("request_id")
+
+    @staticmethod
+    def _failure_facts(scope: Scope, exchange: _Exchange) -> dict[str, str]:
+        """The error code and exception type of a 5xx response, the keys every record of it carries."""
+        if exchange.status < _HTTP_SERVER_ERROR:
+            return {}
+        failure = scope.get(_FAILURE)
+        if not isinstance(failure, _Failure):
+            failure = _Failure(DomainError.code, DomainError.__name__)
+        return {"error_code": failure.error_code, "exception_type": failure.exception_type}
+
+    @staticmethod
+    def _log_failure(scope: Scope, status: int, facts: dict[str, str]) -> None:
+        """The one failure record of a 5xx response: `error` for a 500, `warning` for any other."""
+        failure = scope.get(_FAILURE)
+        cause = failure.cause if isinstance(failure, _Failure) else None
+        if cause is not None:
+            _log.error(LogEvent.UNHANDLED_EXCEPTION, exc_info=cause, http_status=status, **facts)
+        elif status == _HTTP_SERVER_ERROR:
+            _log.error(LogEvent.INTERNAL_ERROR, http_status=status, **facts)
+        else:
+            _log.warning(LogEvent.SERVER_ERROR, http_status=status, **facts)
 
     def _limited(self, receive: Receive) -> Receive:
         received = 0

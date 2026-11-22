@@ -242,5 +242,7 @@ def _run_reporting(arguments: argparse.Namespace, console: Console) -> int:
     try:
         return run(arguments, console)
     except OperatorError as error:
+        if arguments.debug and error.cause is not None:
+            console.traceback(error.cause)
         console.failure(error.code, error.sentence)
         return 1

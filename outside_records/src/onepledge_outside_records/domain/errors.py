@@ -111,7 +111,11 @@ class OperatorError(Exception):
     OPERATION_FAILED.
     """
 
-    def __init__(self, sentence: str, code: str = "OPERATION_FAILED") -> None:
+    def __init__(
+        self, sentence: str, code: str = "OPERATION_FAILED", cause: BaseException | None = None
+    ) -> None:
         super().__init__(sentence)
         self.sentence = sentence
         self.code = code
+        # The exception behind the sentence, kept (not chained) so `--debug` can show its frames.
+        self.cause = cause

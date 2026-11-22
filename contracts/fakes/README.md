@@ -10,7 +10,10 @@ verified end to end now, and layer 2 has an executable reference of the draft co
   string (probes add cache busters) and never answers 422.
 - No response is a redirect: a path with a trailing slash is an unknown route, 404
   `NOT_FOUND` in the error envelope. A 405 names the route's methods in `Allow`.
-- Every 500 writes exactly one `error` log record carrying the response's `request_id`.
+- Every 500 writes exactly one `error` log record carrying the response's `request_id`; any
+  other 5xx writes one `warning` record. Every record of a 5xx response, the access record
+  included, carries `error_code` (the code of the response body), `http_status`,
+  `request_id` and `exception_type` (SPEC_DECISIONS 66), written in one place, the middleware.
   Log lines are JSON with the allow-listed keys of SPEC 16.5 plus `revision`; records of
   third party libraries below WARNING are dropped, and above it keep only `logger`,
   `level` and `exception_type` (event `library_log`), never the library's message.

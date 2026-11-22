@@ -22,7 +22,11 @@ synthetic and comes from `onepledge-datagen`.
   log is off. The log allow-list is the SPEC 16.5 keys this service writes plus `client`
   and `revision` (SPEC_DECISIONS 5, 43.6). The `service` value of every log line is
   `outside_records`, the health value, and every 500 writes exactly one `error` record
-  carrying the response's `request_id`. Records of libraries (uvicorn, SQLAlchemy,
+  carrying the response's `request_id` (a 503 for a database outage writes one `warning`).
+  Every record of a 5xx response, the access record included, carries `error_code`,
+  `http_status`, `request_id` and `exception_type` (SPEC_DECISIONS 66). A failed migration
+  writes `schema_migration_failed` with `exception_type` and the `revision` being applied,
+  prints one fixed sentence, and `--debug` shows the frames of the failure. Records of libraries (uvicorn, SQLAlchemy,
   Alembic) below WARNING are dropped; above it they keep only `logger`, `level` and
   `exception_type`. `db migrate` writes one `schema_migration_applied` record per applied
   revision.

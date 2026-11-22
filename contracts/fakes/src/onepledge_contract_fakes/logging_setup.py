@@ -46,6 +46,7 @@ class LogEvent(StrEnum):
     HTTP_REQUEST = "http_request"
     UNHANDLED_EXCEPTION = "unhandled_exception"
     INTERNAL_ERROR = "internal_error"
+    SERVER_ERROR = "server_error"
     LIBRARY_LOG = "library_log"
 
 

@@ -188,3 +188,54 @@ def test_a_database_permission_failure_is_one_error_record_with_the_request_id(
     assert response.status_code == 500
     errors = [record for record in records(log) if record["level"] == "error"]
     assert [record["request_id"] for record in errors] == [request_id]
+
+
+# SPEC_DECISIONS 66: every record of a 5xx response carries error_code, http_status, request_id
+# and exception_type; one `error` record for a 500, none for any other status.
+FAILURE_KEYS = ("error_code", "http_status", "request_id", "exception_type")
+
+
+def assert_failure_records(stream: io.StringIO, response: httpx.Response, exception_type: str) -> None:
+    request_id = response.headers["x-request-id"]
+    mine = [r for r in records(stream) if r.get("request_id") == request_id]
+    assert len(mine) == 2, mine
+    for record in mine:
+        assert all(record.get(key) is not None for key in FAILURE_KEYS), record
+        assert record["error_code"] == response.json()["error"]["code"]
+        assert (record["http_status"], record["exception_type"]) == (response.status_code, exception_type)
+    assert len([r for r in mine if r["level"] == "error"]) == (1 if response.status_code == 500 else 0)
+
+
+def test_every_record_of_an_unexpected_500_carries_the_failure_keys(
+    log: io.StringIO, call_app: Callable[[FastAPI], InProcessApi]
+) -> None:
+    api = call_app(create_app(FailingReader()))
+    response = api.request("GET", "/v1/titles/1HGCM82633A004352", headers={"X-API-Key": "opk_x"})
+    assert response.status_code == 500
+    assert_failure_records(log, response, "RuntimeError")
+
+
+def test_every_record_of_a_database_outage_carries_the_failure_keys(
+    log: io.StringIO, call_app: Callable[[FastAPI], InProcessApi]
+) -> None:
+    engine = make_engine("postgresql://nobody:pw@127.0.0.1:1/none")
+    api = call_app(create_app(SqlRecordsReader(engine)))
+    response = api.request("GET", "/v1/titles/1HGCM82633A004352", headers={"X-API-Key": "opk_x"})
+    engine.dispose()
+    assert response.status_code == 503
+    assert_failure_records(log, response, "ServiceUnavailableError")
+
+
+def test_every_record_of_a_permission_failure_carries_the_failure_keys(
+    database: Database,
+    api_key: str,
+    revoked_contracts: None,
+    log: io.StringIO,
+    call_app: Callable[[FastAPI], InProcessApi],
+) -> None:
+    engine = make_engine(database.app_url)
+    api = call_app(create_app(SqlRecordsReader(engine)))
+    response = api.request("GET", "/v1/contracts/1HGCM82633A004352", headers={"X-API-Key": api_key})
+    engine.dispose()
+    assert response.status_code == 500
+    assert_failure_records(log, response, "ProgrammingError")

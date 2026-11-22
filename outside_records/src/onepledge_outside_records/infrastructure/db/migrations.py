@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import traceback
 from collections.abc import Callable
 from importlib import resources
 
@@ -51,7 +52,7 @@ class MigrationRunner:
 
     def upgrade(self, revision: str = "head") -> None:
         """Migrate up to `revision`."""
-        self._guarded(lambda: command.upgrade(self._config, revision))
+        self._guarded(lambda: command.upgrade(self._config, revision), revision)
 
     def head_revision(self) -> str:
         """The newest revision of the packaged migrations."""
@@ -62,23 +63,41 @@ class MigrationRunner:
 
     def downgrade(self, revision: str = "base") -> None:
         """Migrate down to `revision`."""
-        self._guarded(lambda: command.downgrade(self._config, revision))
+        self._guarded(lambda: command.downgrade(self._config, revision), revision)
 
     @staticmethod
-    def _guarded(action: Callable[[], None]) -> None:
+    def _guarded(action: Callable[[], None], target: str) -> None:
         try:
             action()
-        except OperationalError:
-            raise OperatorError(
-                "PostgreSQL refused the owner connection; run db provision first.", "DATABASE_UNAVAILABLE"
-            ) from None
-        except CommandError as error:
-            # The migrations raise plain sentences of their own (DB_APP_ROLE); Alembic's own
-            # messages quote revision ids, so those become one fixed sentence (SPEC_DECISIONS 43.11).
-            sentence = str(error)
-            if any(mark in sentence for mark in _REPR_MARKS):
-                sentence = (
-                    "Alembic could not run the migrations: the revision recorded in the database or the "
-                    "one asked for is not one of the packaged migrations."
-                )
-            raise OperatorError(sentence, "CONFIGURATION_ERROR") from None
+        except (OperationalError, CommandError) as error:
+            # One record with the type, the frames and the revision being applied (SPEC_DECISIONS 66).
+            revision = _revision_being_applied(error) or target
+            _log.error(LogEvent.SCHEMA_MIGRATION_FAILED, exc_info=error, revision=revision)
+            raise _operator_error(error) from None
+
+
+def _revision_being_applied(error: BaseException) -> str | None:
+    """The `revision` of the innermost migration script on the stack of the failure, if any."""
+    found = None
+    for frame, _ in traceback.walk_tb(error.__traceback__):
+        names = frame.f_globals
+        if "down_revision" in names and isinstance(names.get("revision"), str):
+            found = names["revision"]
+    return found
+
+
+def _operator_error(error: BaseException) -> OperatorError:
+    """The fixed sentence for a failed migration, keeping the exception for `--debug`."""
+    if isinstance(error, OperationalError):
+        return OperatorError(
+            "PostgreSQL refused the owner connection; run db provision first.", "DATABASE_UNAVAILABLE", error
+        )
+    # The migrations raise plain sentences of their own (DB_APP_ROLE); Alembic's own
+    # messages quote revision ids, so those become one fixed sentence (SPEC_DECISIONS 43.11).
+    sentence = str(error)
+    if any(mark in sentence for mark in _REPR_MARKS):
+        sentence = (
+            "Alembic could not run the migrations: the revision recorded in the database or the "
+            "one asked for is not one of the packaged migrations."
+        )
+    return OperatorError(sentence, "CONFIGURATION_ERROR", error)

@@ -174,3 +174,20 @@ def test_no_argument_is_converted_with_int_or_float() -> None:
                 assert node.value.id not in ("int", "float"), (
                     f"{path.name} converts an argument with {node.value.id}"
                 )
+
+
+# SPEC_DECISIONS 66: one place writes the records of a 5xx response. Routes and use cases raise
+# named errors; only the HTTP plumbing builds envelopes and writes failure records.
+FAILURE_EVENTS = frozenset({"UNHANDLED_EXCEPTION", "INTERNAL_ERROR", "SERVER_ERROR", "DATABASE_UNAVAILABLE"})
+PLUMBING = SOURCE / "interface" / "http" / "plumbing.py"
+
+
+def test_only_the_http_plumbing_builds_envelopes_and_failure_records() -> None:
+    for path in modules():
+        if path == PLUMBING:
+            continue
+        nodes = parsed(path)
+        names = {n.id for n in nodes if isinstance(n, ast.Name)}
+        attributes = {n.attr for n in nodes if isinstance(n, ast.Attribute)}
+        assert not names & {"error_response", "failure_response"}, f"{path.name} builds an envelope"
+        assert not attributes & FAILURE_EVENTS, f"{path.name} writes a failure record"

@@ -25,7 +25,7 @@ from structlog.typing import EventDict, Processor, WrappedLogger
 ALLOWED_KEYS: frozenset[str] = frozenset(
     {
         "ts", "level", "event", "service", "request_id", "logger", "method", "route",
-        "http_status", "duration_ms", "exception_type", "stack", "client", "revision",
+        "http_status", "duration_ms", "exception_type", "stack", "client", "revision", "error_code",
     }
 )  # fmt: skip
 # SPEC_DECISIONS 43.6: a migration revision id, the one shape `revision` may have.
@@ -47,8 +47,10 @@ class LogEvent(StrEnum):
     HTTP_REQUEST = "http_request"
     UNHANDLED_EXCEPTION = "unhandled_exception"
     INTERNAL_ERROR = "internal_error"
+    SERVER_ERROR = "server_error"
     SCHEMA_MIGRATION_APPLIED = "schema_migration_applied"
     SCHEMA_MIGRATION_REVERTED = "schema_migration_reverted"
+    SCHEMA_MIGRATION_FAILED = "schema_migration_failed"
     DATABASE_UNAVAILABLE = "database_unavailable"
     LIBRARY_LOG = "library_log"
 

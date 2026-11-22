@@ -19,7 +19,9 @@ import pytest
 from psycopg import sql
 from sqlalchemy.engine import make_url
 
+from onepledge_outside_records.domain.errors import OperatorError
 from onepledge_outside_records.infrastructure.db.migrations import MigrationRunner
+from onepledge_outside_records.infrastructure.logging_setup import configure_logging
 from onepledge_outside_records.interface.cli import main
 from onepledge_outside_records.interface.output import Console
 
@@ -431,3 +433,33 @@ def test_the_served_api_answers_and_logs_no_vin(
     text = stdout.decode() + stderr.decode()
     for forbidden in (seeded, UNSEEDED_VIN, seeded.lower(), api_key, "?vin="):
         assert forbidden not in text
+
+
+# SPEC_DECISIONS 66: a migration failure is one fixed sentence; its log record carries
+# exception_type and the revision being applied; --debug shows the frames.
+def test_a_failed_migration_logs_its_revision_and_debug_shows_the_frames(
+    run: Run, provisioned_database: Database
+) -> None:
+    env = provisioned_database.environment(DB_APP_ROLE="optest_no_such_role", LOG_LEVEL="INFO")
+    code, out, err = run(["db", "migrate"], **env)
+    assert (code, out) == (1, "")
+    assert err.splitlines()[-1] == "The role named by DB_APP_ROLE does not exist; run db provision first."
+    failed = [line for line in json_lines("\n".join(err.splitlines()[:-1])) if line["level"] == "error"]
+    assert [(r["event"], r["revision"], r["exception_type"]) for r in failed] == [
+        ("schema_migration_failed", "0002_grants", "CommandError")
+    ]
+    code, _, err = run(["db", "migrate", "--debug"], **env)
+    assert code == 1 and "CommandError, raised at:\n" in err and "0002_grants.py:" in err
+
+
+def test_an_unknown_target_revision_is_logged_with_that_revision(
+    provisioned_database: Database, capsys: pytest.CaptureFixture[str]
+) -> None:
+
+    configure_logging("outside_records", "INFO")
+    with pytest.raises(OperatorError):
+        MigrationRunner(provisioned_database.owner_url, provisioned_database.app_role).upgrade("9999_unknown")
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+    assert [(r["event"], r["revision"]) for r in lines if r["level"] == "error"] == [
+        ("schema_migration_failed", "9999_unknown")
+    ]

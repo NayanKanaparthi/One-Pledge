@@ -47,7 +47,7 @@ _log = get_logger(__name__)
 
 def request_id_of(request: Request) -> str:
     """The request id bound by the middleware."""
-    value = request.scope.get("onepledge.request_id")
+    value = request.scope.get(_REQUEST_ID)
     return value if isinstance(value, str) else str(uuid.uuid4())
 
 
@@ -60,6 +60,64 @@ def error_response(
         body["details"] = [{"field": d.field, "issue": d.issue} for d in error.details]
     headers = {REQUEST_ID_HEADER: request_id, **(extra_headers or {})}
     return JSONResponse(status_code=error.http_status, content={"error": body}, headers=headers)
+
+
+@dataclass(frozen=True)
+class _Failure:
+    """What a 5xx response is about: its event, the code of its body, the exception type and the exception."""
+
+    event: LogEvent
+    error_code: str
+    exception_type: str
+    cause: BaseException | None = None
+
+
+_FAILURE = "onepledge.failure"
+_REQUEST_ID = "onepledge.request_id"
+
+
+def failure_response(scope: Scope, error: DomainError, cause: BaseException | None = None) -> JSONResponse:
+    """The envelope of an error; for a 5xx it also records what the failure is about on the request.
+
+    Every 5xx envelope is built here, so the middleware writes the failure facts on every
+    record of that response in one place (SPEC_DECISIONS 66).
+    """
+    if error.http_status >= _HTTP_SERVER_ERROR:
+        if cause is not None:
+            event = LogEvent.UNHANDLED_EXCEPTION
+        elif isinstance(error, ServiceUnavailableError):
+            event = LogEvent.DATABASE_UNAVAILABLE
+        else:
+            event = (
+                LogEvent.INTERNAL_ERROR if error.http_status == _HTTP_SERVER_ERROR else LogEvent.SERVER_ERROR
+            )
+        scope[_FAILURE] = _Failure(event, error.code, type(cause or error).__name__, cause)
+    request_id = scope.get(_REQUEST_ID)
+    return error_response(error, request_id if isinstance(request_id, str) else str(uuid.uuid4()))
+
+
+def failure_facts(scope: Scope, status: int) -> dict[str, str]:
+    """The error code and exception type every record of a 5xx response carries; empty below 500."""
+    if status < _HTTP_SERVER_ERROR:
+        return {}
+    failure = scope.get(_FAILURE)
+    if not isinstance(failure, _Failure):
+        return {"error_code": DomainError.code, "exception_type": DomainError.__name__}
+    return {"error_code": failure.error_code, "exception_type": failure.exception_type}
+
+
+def log_failure(scope: Scope, status: int) -> None:
+    """The one failure record of a 5xx response: `error` for a 500, `warning` for any other status."""
+    facts = failure_facts(scope, status)
+    failure = scope.get(_FAILURE)
+    event = failure.event if isinstance(failure, _Failure) else LogEvent.INTERNAL_ERROR
+    cause = failure.cause if isinstance(failure, _Failure) else None
+    if cause is not None:
+        _log.error(event, exc_info=cause, http_status=status, **facts)
+    elif status == _HTTP_SERVER_ERROR:
+        _log.error(event, http_status=status, **facts)
+    else:
+        _log.warning(event, http_status=status, **facts)
 
 
 def new_service_app(title: str) -> FastAPI:
@@ -79,12 +137,7 @@ def install_error_handlers(app: FastAPI) -> None:
 
     async def domain_error(request: Request, exc: Exception) -> Response:
         error = exc if isinstance(exc, DomainError) else DomainError()
-        if isinstance(error, ServiceUnavailableError):
-            _log.warning(LogEvent.DATABASE_UNAVAILABLE)
-        elif error.http_status == _HTTP_SERVER_ERROR:
-            # A named 500 is still one failure: one error record (SPEC_DECISIONS 34).
-            _log.error(LogEvent.INTERNAL_ERROR)
-        return error_response(error, request_id_of(request))
+        return failure_response(request.scope, error)
 
     async def validation_error(request: Request, exc: Exception) -> Response:
         return error_response(ValidationFailedError(), request_id_of(request))
@@ -99,13 +152,20 @@ def install_error_handlers(app: FastAPI) -> None:
             return error_response(MethodNotAllowedError(), request_id_of(request), allow)
         if status == _HTTP_NOT_FOUND:
             return error_response(ResourceNotFoundError(), request_id_of(request))
-        return error_response(DomainError(), request_id_of(request))
+        return failure_response(request.scope, DomainError(), exc)
 
     async def unexpected_error(request: Request, exc: Exception) -> Response:
-        # Reached only by a defect of the middleware itself: the middleware handles every
-        # exception the app raises while the request id is still bound.
-        _log.error(LogEvent.UNHANDLED_EXCEPTION, exc_info=exc)
-        return error_response(DomainError(), request_id_of(request))
+        # Reached only by a defect of the middleware itself (it handles every exception the app
+        # raises): the middleware has already unbound the request, so the keys are written here.
+        error = DomainError()
+        _log.error(
+            LogEvent.UNHANDLED_EXCEPTION,
+            exc_info=exc,
+            error_code=error.code,
+            http_status=error.http_status,
+            request_id=request_id_of(request),
+        )
+        return error_response(error, request_id_of(request))
 
     app.add_exception_handler(DomainError, domain_error)
     app.add_exception_handler(RequestValidationError, validation_error)
@@ -150,7 +210,7 @@ class AccessLogMiddleware:
             await self._app(scope, receive, send)
             return
         request_id = _request_id_from(scope)
-        scope["onepledge.request_id"] = request_id
+        scope[_REQUEST_ID] = request_id
         structlog.contextvars.bind_contextvars(request_id=request_id)
         started = time.monotonic()
         exchange = _Exchange()
@@ -168,10 +228,14 @@ class AccessLogMiddleware:
         try:
             try:
                 await self._app(scope, receive, sending)
-            except Exception as error:  # Every failure of the app ends here, logged once (SPEC_DECISIONS 34).
-                _log.error(LogEvent.UNHANDLED_EXCEPTION, exc_info=error)
-                if not exchange.started:
-                    await error_response(DomainError(), request_id)(scope, receive, sending)
+            except Exception as error:  # Every failure of the app ends here (SPEC_DECISIONS 34).
+                if exchange.started:
+                    # Too late for the envelope: the response already went out with its own status.
+                    _log.error(LogEvent.UNHANDLED_EXCEPTION, exc_info=error, http_status=exchange.status)
+                else:
+                    await failure_response(scope, DomainError(), error)(scope, receive, sending)
+            if exchange.status >= _HTTP_SERVER_ERROR:
+                log_failure(scope, exchange.status)
             route = scope.get("route")
             client = scope.get("onepledge.client_name")
             _log.info(
@@ -181,6 +245,7 @@ class AccessLogMiddleware:
                 http_status=exchange.status,
                 duration_ms=round((time.monotonic() - started) * 1000),
                 client=client if isinstance(client, str) else None,
+                **failure_facts(scope, exchange.status),
             )
         finally:
             structlog.contextvars.unbind_contextvars("request_id")
