@@ -654,14 +654,14 @@ Let `V` be the canonical VIN, `B = LEI + "|" + borrower_ref`, `C` the original a
 
 | Kind | Canonical value string |
 |---|---|
-| `ASSET` | `"AUTO|" + V` |
+| `ASSET` | `"AUTO\|" + V` |
 | `VIN` | `V` |
 | `BORROWER` | `B` |
-| `AMOUNT_EXACT` | `B + "|" + str(C)` |
-| `AMOUNT_100` | `B + "|" + str(C // 10000)` (100 dollar bucket, floor) |
-| `AMOUNT_1000` | `B + "|" + str(C // 100000)` (1,000 dollar bucket, floor) |
-| `DATE_DAY` | `B + "|" + D` |
-| `DATE_MONTH` | `B + "|" + D[:7]` |
+| `AMOUNT_EXACT` | `B + "\|" + str(C)` |
+| `AMOUNT_100` | `B + "\|" + str(C // 10000)` (100 dollar bucket, floor) |
+| `AMOUNT_1000` | `B + "\|" + str(C // 100000)` (1,000 dollar bucket, floor) |
+| `DATE_DAY` | `B + "\|" + D` |
+| `DATE_MONTH` | `B + "\|" + D[:7]` |
 
 Design notes that are requirements:
 
