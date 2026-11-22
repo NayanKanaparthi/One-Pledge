@@ -7,6 +7,8 @@ is replaced. Assertions are on stored state, audit entries and what the fakes re
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from bank_testkit.memory.bank import MemoryBank, vins
@@ -32,7 +34,8 @@ from onepledge_bank_agent.domain.enums import (
     TokenKind,
 )
 from onepledge_bank_agent.domain.errors import TapeNotRetryableError
-from onepledge_bank_agent.domain.tokenization import TOKENS_PER_LOAN
+from onepledge_bank_agent.domain.outside_records import TitleRecord
+from onepledge_bank_agent.domain.tokenization import TOKENS_PER_LOAN, token_inputs
 from onepledge_bank_agent.domain.values import KeyVersion
 
 pytestmark = pytest.mark.unit
@@ -72,6 +75,24 @@ def test_a_pledge_is_tokenised_submitted_in_batches_and_certified(bank: MemoryBa
     assert bank.registry.decisions == 3 and len(bank.registry.locks) == 5
     assert bank.holders[0].calls == [16, 16, 8] == bank.holders[1].calls, "chunks of two loans, eight each"
     assert len(bank.world.audit(AuditAction.CERTIFICATE_VERIFIED)) == 3
+
+
+def test_a_loan_held_locally_is_never_blinded_evaluated_or_tokenised(bank: MemoryBank) -> None:
+    """SPEC_DECISIONS 91 (i), RUBRIC TEST-04 mutation 12: the PENDING filter of `TokenizeLoans`."""
+    pending_vin, held_vin = vins(2)
+    submission = bank.upload([pending_vin, held_vin])
+    bank.outside.titles[held_vin] = TitleRecord("NJ", "CLEAN", "Some Other Lender Inc", None)
+    bank.run(submission, until=TapeStatus.TOKENIZED)
+    loans = bank.loans()
+    assert (loans[pending_vin].state, loans[held_vin].state) == (LoanState.PENDING, LoanState.HELD_LOCAL)
+    expected = [entry.oprf_input() for entry in token_inputs(loans[pending_vin].terms, bank.world.lender.lei)]
+    assert bank.blinder.inputs == expected, "the eight inputs of the PENDING loan, nothing else"
+    digests = [hashlib.sha256(oprf_input).hexdigest() for oprf_input in expected]
+    for holder in bank.holders:
+        assert [element.split(":")[1].split("|")[0] for element in holder.received] == digests, holder.number
+    tokens = bank.world.store.state.tokens
+    assert set(tokens) == {loans[pending_vin].loan_id}
+    assert len(tokens[loans[pending_vin].loan_id]) == TOKENS_PER_LOAN
 
 
 def test_re_running_a_finished_stage_sends_nothing_again(bank: MemoryBank) -> None:

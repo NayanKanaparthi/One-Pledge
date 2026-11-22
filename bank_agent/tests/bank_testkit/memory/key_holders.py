@@ -33,11 +33,13 @@ class FakeBlinder:
 
     def __init__(self) -> None:
         self.blinded = 0
+        self.inputs: list[bytes] = []
         self._inputs: dict[str, bytes] = {}
 
     def blind(self, oprf_input: bytes) -> FakeBlinded:
         """An element carrying the input's digest and a fresh counter (a new blind each time)."""
         self.blinded += 1
+        self.inputs.append(oprf_input)
         element = f"e{self.blinded}:{hashlib.sha256(oprf_input).hexdigest()}"
         self._inputs[element] = oprf_input
         return FakeBlinded(element, oprf_input)
@@ -64,6 +66,7 @@ class ScriptedKeyHolder:
     corrupt: bool = False
     rotate_after: int | None = None
     calls: list[int] = field(default_factory=list)
+    received: list[str] = field(default_factory=list)
 
     @property
     def dependency(self) -> str:
@@ -73,6 +76,7 @@ class ScriptedKeyHolder:
     def evaluate(self, elements: Sequence[str]) -> Evaluation:
         """The evaluated elements in request order, or the next scripted failure."""
         self.calls.append(len(elements))
+        self.received += elements
         if self.rotate_after is not None and len(self.calls) > self.rotate_after:
             self.version, self.rotate_after = self.version + 1, None
         if self.failures:

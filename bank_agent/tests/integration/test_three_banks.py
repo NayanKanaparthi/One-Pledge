@@ -19,6 +19,7 @@ import pytest
 
 from bank_testkit.banks import ThreeBanks
 from bank_testkit.database import BankDatabase
+from bank_testkit.doubles import KEY_HOLDER_URLS
 from bank_testkit.outside import InProcessOutsideRecords
 from bank_testkit.world import Faults
 from onepledge_bank_agent.application.faults import FaultPoint
@@ -49,6 +50,29 @@ def banks(
         yield world
 
 
+HELD = "SELECT loan_id FROM loans WHERE state = 'HELD_LOCAL'"
+ANSWERED_ITEMS = (
+    "SELECT count(*) FROM registry_request_items i JOIN registry_requests r ON r.request_id = i.request_id "
+    "WHERE r.response_status IN (200, 201)"
+)
+
+
+def assert_held_loans_never_reach_the_key_holders_or_the_registry(banks: ThreeBanks, code: str) -> int:
+    """RUBRIC E2E-05 (a) to (d), SPEC_DECISIONS 91: what each bank sent equals what it stored, and no
+    loan held locally has a token or a request item. Returns the number of held loans."""
+    database = banks.databases[code]
+    held = [row[0] for row in rows(database, HELD)]
+    tokens_of_held = "SELECT count(*) FROM loan_tokens WHERE loan_id = ANY(%s)"
+    items_of_held = "SELECT count(*) FROM registry_request_items WHERE loan_id = ANY(%s)"
+    assert scalar(database, tokens_of_held, (held,)) == 0, code
+    assert scalar(database, items_of_held, (held,)) == 0, code
+    stored_tokens = scalar(database, "SELECT count(*) FROM loan_tokens")
+    for holder in KEY_HOLDER_URLS.values():
+        assert banks.doubles.member_stats(code, holder)["elements"] == stored_tokens, (code, holder)
+    assert banks.doubles.member_stats(code)["items"] == scalar(database, ANSWERED_ITEMS), code
+    return len(held)
+
+
 def chain_reasons(report: IntegrityReport) -> set[tuple[CheckpointFailure, int | None]]:
     return {(f.failure_reason, f.first_bad_event_seq) for f in report.registry_chain.failures}
 
@@ -59,6 +83,7 @@ def test_the_small_replay_agrees_with_the_registry_and_every_integrity_section_i
     cases = banks.doubles.control("http://registry.test", "GET", "/_test/dump")["cases"]
     assert cases, "the small data set plants conflicts"
     member_of = {member.member_id: code for code, member in banks.doubles.members.items()}
+    held = 0
     for code, database in banks.databases.items():
         assert scalar(database, "SELECT count(*) FROM loans WHERE state = 'PENDING'") == 0, code
         assert scalar(database, "SELECT count(*) FROM tape_submissions WHERE status <> 'COMPLETED'") == 0, (
@@ -93,9 +118,11 @@ def test_the_small_replay_agrees_with_the_registry_and_every_integrity_section_i
             "SELECT count(*) FROM certificates WHERE as_of_seq IS NULL",
         ):
             assert scalar(database, evidence) == 0, (code, evidence)
+        held += assert_held_loans_never_reach_the_key_holders_or_the_registry(banks, code)
         report = banks.agents[code].verify()
         assert report.status is IntegrityRunStatus.OK, (code, report)
         assert set(report.section_statuses().values()) == {SectionStatus.OK.value}
+    assert held > 0, "the small data set holds loans locally"
     for case in cases:
         holder, claimant = member_of[case["holder_member_id"]], member_of[case["claimant_member_id"]]
         for code in (holder, claimant):
