@@ -256,11 +256,16 @@ ONE_UNIT = (
     "(SELECT count(*) FROM certificates)::text"
 )
 STOPS = [
+    (FaultPoint.CLEAN_BEFORE_COMMIT, TapeStatus.CLEANED),
     (FaultPoint.AFTER_CHECK_CHUNK, TapeStatus.CLEANED),
+    (FaultPoint.AFTER_KEY_HOLDER_RESPONSE, TapeStatus.CHECKED),
     (FaultPoint.AFTER_CODES_STORED, TapeStatus.CHECKED),
+    (FaultPoint.AFTER_REGISTRY_RESPONSE, TapeStatus.TOKENIZED),
     (FaultPoint.AFTER_RESPONSE_STORED, TapeStatus.TOKENIZED),
     (FaultPoint.AFTER_CERTIFICATE_STORED, TapeStatus.SUBMITTED),
 ]
+"""Each point a stop may arrive at (SPEC_DECISIONS 68.8): in the single clean transaction, while a key
+holder or the registry call is answered but its result not yet stored, and after each stored unit."""
 
 
 @pytest.mark.parametrize(("point", "left_at"), STOPS, ids=[point.value for point, _ in STOPS])
@@ -274,18 +279,28 @@ def test_a_stop_ends_the_stage_after_the_current_unit_and_a_second_run_completes
         stop.signal = stopping.stop
         submission = lab.upload(stopping)
         runs = stopping.run_worker().runs
-    assert [run.outcome for run in runs][-1] is StageOutcome.STOPPED
-    assert runs[-1].status is left_at and runs[-1].started_at_status is left_at
+    last = runs[-1]
+    if point is FaultPoint.CLEAN_BEFORE_COMMIT:
+        # Cleaning is one transaction: it commits whole and the worker stops before the next stage.
+        assert (last.outcome, last.started_at_status, last.status) == (
+            StageOutcome.ADVANCED, TapeStatus.RECEIVED, left_at,
+        )  # fmt: skip
+    else:
+        assert (last.outcome, last.started_at_status, last.status) == (StageOutcome.STOPPED, left_at, left_at)
+    assert len(runs) == len({run.started_at_status for run in runs}), "no stage ran after the stop"
     status = pairs(bank.database, "SELECT 'status', status FROM tape_submissions")
     assert status == {"status": left_at.value}
     checked, tokenised, answered, certificates = pairs(bank.database, ONE_UNIT)["units"].split()
     unit_counts = {
-        TapeStatus.CLEANED: (checked == chunks["CHECK_CHUNK_LOANS"], tokenised == "0"),
-        TapeStatus.CHECKED: (tokenised == "25", answered == "0"),
-        TapeStatus.TOKENIZED: (answered == "1", certificates == "0"),
-        TapeStatus.SUBMITTED: (answered == "3", certificates == "1"),
+        FaultPoint.CLEAN_BEFORE_COMMIT: (checked == "0", tokenised == "0"),
+        FaultPoint.AFTER_CHECK_CHUNK: (checked == chunks["CHECK_CHUNK_LOANS"], tokenised == "0"),
+        FaultPoint.AFTER_KEY_HOLDER_RESPONSE: (tokenised == "25", answered == "0"),
+        FaultPoint.AFTER_CODES_STORED: (tokenised == "25", answered == "0"),
+        FaultPoint.AFTER_REGISTRY_RESPONSE: (answered == "1", certificates == "0"),
+        FaultPoint.AFTER_RESPONSE_STORED: (answered == "1", certificates == "0"),
+        FaultPoint.AFTER_CERTIFICATE_STORED: (answered == "3", certificates == "1"),
     }
-    assert unit_counts[left_at] == (True, True), (checked, tokenised, answered, certificates)
+    assert unit_counts[point] == (True, True), (checked, tokenised, answered, certificates)
     with lab.harness(bank, environment=chunks) as resumed:
         assert resumed.run_worker().runs[-1].status is TapeStatus.COMPLETED
     assert lab.state(bank) == clean_run
