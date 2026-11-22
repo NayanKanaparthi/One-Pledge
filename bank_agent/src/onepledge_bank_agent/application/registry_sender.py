@@ -1,8 +1,8 @@
 """`RegistrySender`: send one planned request and apply the answer (SPEC 13.4, 13.5).
 
-1. A small transaction counts the attempt and audits `REGISTRY_REQUEST_SENT`.
-2. With no transaction open, `POST /v1/submissions` with the stored idempotency key and
-   a body built only from stored rows.
+1. With no transaction open, `POST /v1/submissions` with the stored idempotency key and
+   a body built only from stored rows. Before every attempt (the client's own retries
+   included) a small transaction counts it and audits `REGISTRY_REQUEST_SENT`.
 3. The answer is checked against what was sent; then one transaction stores the response,
    applies every item result and audits `REGISTRY_RESPONSE_RECEIVED`.
 
@@ -49,7 +49,7 @@ class RegistrySender:
         if prepared is None:
             return self._stored(request_id)
         request, body = prepared
-        answer = self._registry.submit(request.idempotency_key.value, body)
+        answer = self._registry.submit(request.idempotency_key.value, body, lambda: self._count(request))
         self._faults.reached(FaultPoint.AFTER_REGISTRY_RESPONSE)
         sent = [SentItem(item.item_ref, item.asset_token) for item in body.items]
         if not answer_matches(sent, answer.results):
@@ -59,7 +59,7 @@ class RegistrySender:
         return self._stored(request_id)
 
     def _prepare(self, request_id: uuid.UUID) -> tuple[RegistryRequest, RegistrySubmission] | None:
-        """Count the attempt and build the body; None when the request is already answered."""
+        """The request and its body; None when the request is already answered."""
         with self._units() as unit:
             request = unit.requests.get(request_id)
             if request is None:
@@ -68,19 +68,22 @@ class RegistrySender:
                 return None
             items = unit.requests.items(request_id)
             tokens = unit.tokens.for_loans(item.loan_id for item in items)
-            body = submission_body(request, items, tokens)
-            attempts = unit.requests.mark_sent(request_id, self._clock.now())
+            return request, submission_body(request, items, tokens)
+
+    def _count(self, request: RegistryRequest) -> None:
+        """One send: `attempts += 1`, `sent_at` once, `last_attempt_at`, audited, in its own transaction."""
+        with self._units() as unit:
+            attempts = unit.requests.mark_sent(request.request_id, self._clock.now())
             unit.record(request_sent(request, attempts))
             unit.commit()
         self._log.info(
             LogEvent.REGISTRY_REQUEST_SENT,
-            registry_request_id=str(request_id),
+            registry_request_id=str(request.request_id),
             submission_id=str(request.submission_id),
             batch_index=request.batch_index,
             item_count=request.item_count,
             attempts=attempts,
         )
-        return request, body
 
     def _store(self, request: RegistryRequest, answer: RegistryAnswer) -> None:
         with self._units() as unit:

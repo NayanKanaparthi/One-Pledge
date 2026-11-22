@@ -28,7 +28,8 @@ type JsonBody = Mapping[str, object]
 
 @dataclass(frozen=True)
 class OutboundRequest:
-    """One call: method, route template (the only form ever logged), path, and query or JSON body."""
+    """One call: method, route template (the only form ever logged), path, query or JSON body, and an
+    optional hook run before every attempt (the registry client counts each send with it)."""
 
     method: str
     route: str
@@ -36,6 +37,7 @@ class OutboundRequest:
     params: Mapping[str, str | int] | None = None
     body: JsonBody | None = None
     headers: Mapping[str, str] | None = None
+    before_each: Callable[[], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -98,6 +100,8 @@ class RetryingHttpCaller:
         attempts = 1 + len(RETRY_DELAYS_SECONDS)
         for attempt in range(1, attempts + 1):
             response: httpx.Response | None
+            if outbound.before_each is not None:
+                outbound.before_each()
             try:
                 response = self._client.request(
                     outbound.method,

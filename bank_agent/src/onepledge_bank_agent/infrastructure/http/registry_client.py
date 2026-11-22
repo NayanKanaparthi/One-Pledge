@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -51,7 +51,7 @@ from onepledge_bank_agent.infrastructure.http.answers import (
     parse,
     plain_json,
 )
-from onepledge_bank_agent.infrastructure.http.base import JsonBody, RetryingHttpCaller
+from onepledge_bank_agent.infrastructure.http.base import JsonBody, OutboundRequest, RetryingHttpCaller
 from onepledge_bank_agent.infrastructure.http.registry_wire import (
     AlertMessageBody,
     CaseMessageBody,
@@ -118,10 +118,16 @@ class RegistryHttpClient:
     def __init__(self, caller: RetryingHttpCaller) -> None:
         self._caller = caller
 
-    def submit(self, idempotency_key: str, submission: RegistrySubmission) -> RegistryAnswer:
-        """`POST /v1/submissions` with the idempotency key."""
+    def submit(
+        self, idempotency_key: str, submission: RegistrySubmission, before_each: Callable[[], None]
+    ) -> RegistryAnswer:
+        """`POST /v1/submissions` with the idempotency key; `before_each` runs before every attempt."""
         headers = {"Idempotency-Key": idempotency_key}
-        response = self._caller.post(SUBMISSIONS, SUBMISSIONS, submission_json(submission), headers)
+        outbound = OutboundRequest(
+            "POST", SUBMISSIONS, SUBMISSIONS, body=submission_json(submission), headers=headers,
+            before_each=before_each,
+        )  # fmt: skip
+        response = self._caller.send(outbound)
         conflict = response is not None and response.status_code == CONFLICT
         if conflict and response is not None and error_code(response) == "KEY_VERSION_MISMATCH":
             raise KeyVersionMismatchError(CONFLICT)

@@ -9,7 +9,7 @@ errors of `domain/dependency_errors.py`; none returns a raw HTTP response.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from typing import Protocol
 
@@ -74,8 +74,11 @@ class KeyHolderClient(Protocol):
 class RegistryClient(Protocol):
     """The registry endpoints the bank agent calls (`contracts/registry.yaml`)."""
 
-    def submit(self, idempotency_key: str, submission: RegistrySubmission) -> RegistryAnswer:
-        """`POST /v1/submissions`: a 201 decision or a 200 idempotent replay."""
+    def submit(
+        self, idempotency_key: str, submission: RegistrySubmission, before_each: Callable[[], None]
+    ) -> RegistryAnswer:
+        """`POST /v1/submissions`: a 201 decision or a 200 idempotent replay. `before_each` is called
+        before every attempt, including the client's own retries, so each send is counted."""
         ...
 
     def certificate(self, certificate_id: uuid.UUID) -> SignedCertificate:
