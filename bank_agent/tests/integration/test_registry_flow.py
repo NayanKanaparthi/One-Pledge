@@ -7,15 +7,17 @@ and reads the outcome back from the bank database and the double's test controls
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import date
 from pathlib import Path
 
+import oprf
 import pytest
 
 from bank_testkit.data import seed_reference
 from bank_testkit.database import BankDatabase, pairs
-from bank_testkit.doubles import InProcessDoubles
+from bank_testkit.doubles import HolderScalars, InProcessDoubles
 from bank_testkit.outside import InProcessOutsideRecords
 from bank_testkit.pipeline import BankAgentHarness, Services
 from onepledge_bank_agent.domain.enums import TapeKind, TapeStatus
@@ -97,3 +99,47 @@ def test_a_release_tape_releases_its_locked_loans_at_the_registry(
         "AND (SELECT count(*) FROM loan_tokens t WHERE t.loan_id = l.loan_id) <> 8"
     )
     assert pairs(bank_db, tokenised) == {"unmatched": "0"}, "every submitted loan has its eight codes"
+
+
+def direct_tokens(scalars: HolderScalars, terms: tuple[object, ...]) -> dict[str, str]:
+    """The eight tokens of (LEI, VIN, borrower, cents, ISO day) by direct evaluation `k2 * k1 * H(input)`,
+    written from SPEC 9.2 and 9.3 alone."""
+    lei, vin, borrower, amount, day = (str(term) for term in terms)
+    party, cents = f"{lei}|{borrower}", int(amount)
+    values = {
+        "ASSET": f"AUTO|{vin}", "VIN": vin, "BORROWER": party, "AMOUNT_EXACT": f"{party}|{cents}",
+        "AMOUNT_100": f"{party}|{cents // 10_000}", "AMOUNT_1000": f"{party}|{cents // 100_000}",
+        "DATE_DAY": f"{party}|{day}", "DATE_MONTH": f"{party}|{day[:7]}",
+    }  # fmt: skip
+    tokens = {}
+    for kind, value in values.items():
+        point = oprf.data.hash(b"onepledge:v1:" + kind.encode() + b"\x1f" + value.encode())
+        evaluated = bytes(oprf.mask(scalars.kh2).mask(oprf.mask(scalars.kh1).mask(point)))
+        material = b"onepledge:v1:token\x1f" + kind.encode() + b"\x1f" + evaluated
+        tokens[kind] = hashlib.sha256(material).hexdigest()
+    return tokens
+
+
+def test_stored_tokens_equal_an_independent_direct_evaluation_with_the_holders_scalars(
+    bank_db: BankDatabase, small_data: Path, small_outside: InProcessOutsideRecords, doubles: InProcessDoubles
+) -> None:
+    seed_reference(bank_db, small_data)
+    with BankAgentHarness(bank_db, Services(small_outside, doubles)) as bank:
+        bank.ingest(small_data / TAPE, FACILITY, KIND, AS_OF)
+        bank.run_worker()
+    with bank_db.connect("admin") as connection:
+        loans = connection.execute(
+            "SELECT l.loan_id, le.lei, l.vin, l.borrower_ref, l.original_amount_cents, "
+            "l.origination_date::text FROM loans l JOIN facilities f USING (facility_id) "
+            "JOIN lenders le USING (lender_id) "
+            "WHERE l.state = 'LOCKED' ORDER BY l.loan_id LIMIT 3"
+        ).fetchall()
+        assert len(loans) == 3
+        for loan_id, *terms in loans:
+            terms_of_loan = tuple(terms)
+            rows = connection.execute(
+                "SELECT token_kind, token FROM loan_tokens WHERE loan_id = %s AND key_version = '1.1'",
+                (loan_id,),
+            ).fetchall()
+            stored = {str(kind): str(token) for kind, token in rows}
+            assert stored == direct_tokens(doubles.scalars, terms_of_loan)

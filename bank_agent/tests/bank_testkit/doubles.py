@@ -88,6 +88,7 @@ class InProcessDoubles:
         self.control_key = secrets.token_urlsafe(32)
         self.signing_seed = secrets.token_bytes(32)
         holders = scalars or HolderScalars.fresh()
+        self.scalars = holders
         registry_config = RegistryConfig(
             members=tuple(
                 MemberCredential(m.member_id, api_key_sha256(m.registry_key)) for m in self.members.values()
