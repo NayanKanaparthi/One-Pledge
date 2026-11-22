@@ -228,3 +228,79 @@ def test_dump_holds_codes_and_identifiers(registry: tuple[RegistryDouble, list[s
     assert dump["members"] == ids
     assert len(dump["locks"]) == 3 and all(lock["active"] for lock in dump["locks"])
     assert len(dump["events"]) == len(events(double)) and len(dump["certificates"]) == 3
+
+
+# SPEC_DECISIONS 65: CERTIFICATE_RESTORE puts a certificate back to the document first signed.
+
+
+def signed_certificate(double: RegistryDouble, member: str, name: str) -> str:
+    submission = Submission(SubmissionKind.PLEDGE, "1.1", (item(name),))
+    certificate_id: str = json.loads(double.submit(member, code(name), submission, code(name)).body)[
+        "certificate_id"
+    ]
+    return certificate_id
+
+
+def test_certificate_restore_undoes_a_body_tamper(registry: tuple[RegistryDouble, list[str]]) -> None:
+    double, ids = registry
+    certificate_id = signed_certificate(double, ids[0], "r")
+    original = plain(double.certificate(ids[0], certificate_id))
+    double.test_controls.tamper(TamperRequest(TamperMode.CERTIFICATE_BODY, certificate_id=certificate_id))
+    double.test_controls.tamper(TamperRequest(TamperMode.CERTIFICATE_BODY, certificate_id=certificate_id))
+    answer = double.test_controls.tamper(
+        TamperRequest(TamperMode.CERTIFICATE_RESTORE, certificate_id=certificate_id)
+    )
+    assert answer == {"mode": "CERTIFICATE_RESTORE", "certificate_id": certificate_id, "restored": True}
+    restored = plain(double.certificate(ids[0], certificate_id))
+    assert restored == original
+    assert restored["body_hash"] == hashlib.sha256(canonical(restored["body"])).hexdigest()
+    assert canonical_sha256(restored["body"]) == original["body_hash"]
+
+
+def test_certificate_restore_is_also_a_method_of_the_controls(
+    registry: tuple[RegistryDouble, list[str]],
+) -> None:
+    double, ids = registry
+    certificate_id = signed_certificate(double, ids[0], "m")
+    original = plain(double.certificate(ids[0], certificate_id))
+    double.test_controls.tamper(TamperRequest(TamperMode.CERTIFICATE_BODY, certificate_id=certificate_id))
+    assert double.test_controls.restore_certificate(certificate_id) is True
+    assert plain(double.certificate(ids[0], certificate_id)) == original
+
+
+def test_restoring_an_untampered_certificate_is_a_no_op(registry: tuple[RegistryDouble, list[str]]) -> None:
+    double, ids = registry
+    certificate_id = signed_certificate(double, ids[0], "n")
+    original = plain(double.certificate(ids[0], certificate_id))
+    answer = double.test_controls.tamper(
+        TamperRequest(TamperMode.CERTIFICATE_RESTORE, certificate_id=certificate_id)
+    )
+    assert answer["restored"] is False
+    assert plain(double.certificate(ids[0], certificate_id)) == original
+
+
+def test_restoring_an_unknown_certificate_is_not_found(registry: tuple[RegistryDouble, list[str]]) -> None:
+    double, _ = registry
+    with pytest.raises(CertificateNotFoundError):
+        double.test_controls.tamper(
+            TamperRequest(TamperMode.CERTIFICATE_RESTORE, certificate_id=str(uuid.uuid4()))
+        )
+
+
+def test_the_original_is_kept_apart_from_what_is_served(registry: tuple[RegistryDouble, list[str]]) -> None:
+    """Editing a served copy changes nothing: the original is a private deep copy."""
+    double, ids = registry
+    certificate_id = signed_certificate(double, ids[0], "c")
+    served = plain(double.certificate(ids[0], certificate_id))
+    served["body"]["summary"]["locked"] = 99
+    double.test_controls.tamper(TamperRequest(TamperMode.CERTIFICATE_BODY, certificate_id=certificate_id))
+    double.test_controls.restore_certificate(certificate_id)
+    assert plain(double.certificate(ids[0], certificate_id))["body"]["summary"]["locked"] == 1
+
+
+@pytest.mark.parametrize(
+    "document", [{"mode": "CERTIFICATE_RESTORE"}, {"mode": "CERTIFICATE_RESTORE", "certificate_id": 5}]
+)
+def test_a_restore_needs_a_certificate_id(document: object) -> None:
+    with pytest.raises(ValidationFailedError):
+        parse_tamper_request(document)

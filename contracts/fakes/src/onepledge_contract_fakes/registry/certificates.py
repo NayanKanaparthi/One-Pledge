@@ -37,6 +37,7 @@ class StoredCertificate:
     body_hash: str
     signature: str
     signing_key_id: str
+    original_body: dict[str, JsonValue]
 
     def to_json(self) -> dict[str, JsonValue]:
         """The `SignedCertificate` wire shape."""
@@ -102,6 +103,7 @@ class CertificateIssuer:
             body_hash=canonical_sha256(body),
             signature=self._signer.sign(body),
             signing_key_id=self._signer.key_id,
+            original_body=copy.deepcopy(body),
         )
         self._certificates[facts.certificate_id] = stored
         return stored
@@ -122,6 +124,19 @@ class CertificateIssuer:
         if isinstance(summary, dict):
             locked = summary.get("locked")
             summary["locked"] = (locked if isinstance(locked, int) else 0) + 1
+
+    def restore(self, certificate_id: str) -> bool:
+        """Tamper control: put the body back to the document first signed (SPEC_DECISIONS 65).
+
+        Returns whether anything changed; restoring an untouched certificate is a no-op.
+        """
+        stored = self._certificates.get(certificate_id)
+        if stored is None:
+            raise CertificateNotFoundError
+        if stored.body == stored.original_body:
+            return False
+        stored.body = copy.deepcopy(stored.original_body)
+        return True
 
     def all(self) -> tuple[StoredCertificate, ...]:
         """Every stored certificate."""

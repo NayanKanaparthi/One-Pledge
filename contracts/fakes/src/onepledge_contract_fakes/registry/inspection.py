@@ -25,12 +25,13 @@ MAX_SEQ = 10**18 - 1
 
 
 class TamperMode(StrEnum):
-    """The four ways the double can break its own integrity on purpose."""
+    """The four ways the double can break its own integrity on purpose, and the undo of the fourth."""
 
     REWRITE_HISTORY = "REWRITE_HISTORY"
     EDIT_IN_PLACE = "EDIT_IN_PLACE"
     BAD_CHECKPOINT_SIGNATURE = "BAD_CHECKPOINT_SIGNATURE"
     CERTIFICATE_BODY = "CERTIFICATE_BODY"
+    CERTIFICATE_RESTORE = "CERTIFICATE_RESTORE"
 
 
 @dataclass(frozen=True)
@@ -43,12 +44,13 @@ class TamperRequest:
 
 
 def parse_tamper_request(document: object) -> TamperRequest:
-    """Validate a tamper body: `seq` for the two ledger modes, `certificate_id` for CERTIFICATE_BODY."""
+    """Validate a tamper body: `seq` for the two ledger modes, `certificate_id` for the certificate modes."""
     mode_text = document.get("mode") if isinstance(document, dict) else None
     optional = {
         TamperMode.REWRITE_HISTORY.value: ("seq",),
         TamperMode.EDIT_IN_PLACE.value: ("seq",),
         TamperMode.CERTIFICATE_BODY.value: ("certificate_id",),
+        TamperMode.CERTIFICATE_RESTORE.value: ("certificate_id",),
     }.get(mode_text if isinstance(mode_text, str) else "", ())
     fields = JsonFields(document, required=("mode", *optional))
     mode = fields.choice("mode", [m.value for m in TamperMode])
@@ -153,4 +155,11 @@ class RegistryInspector:
         if request.mode == TamperMode.CERTIFICATE_BODY and request.certificate_id is not None:
             self._certificates.tamper_locked_count(request.certificate_id)
             return {"mode": request.mode.value, "certificate_id": request.certificate_id}
+        if request.mode == TamperMode.CERTIFICATE_RESTORE and request.certificate_id is not None:
+            restored = self._certificates.restore(request.certificate_id)
+            return {
+                "mode": request.mode.value,
+                "certificate_id": request.certificate_id,
+                "restored": restored,
+            }
         raise ValidationFailedError(details=(ErrorDetail("mode", Issue.INVALID_VALUE),))

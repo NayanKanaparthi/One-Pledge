@@ -23,7 +23,7 @@ from onepledge_contract_fakes.errors import (
 from onepledge_contract_fakes.members import MemberDirectory, key_matches
 from onepledge_contract_fakes.registry.config import RegistryConfig
 from onepledge_contract_fakes.registry.idempotency import IdempotencyStore, StoredResponse
-from onepledge_contract_fakes.registry.inspection import RegistryInspector, TamperRequest
+from onepledge_contract_fakes.registry.inspection import RegistryInspector, TamperMode, TamperRequest
 from onepledge_contract_fakes.registry.model import CaseStatus, EventType, Position, Submission
 from onepledge_contract_fakes.registry.publisher import Publisher
 from onepledge_contract_fakes.registry.signing import RegistrySigner
@@ -76,6 +76,11 @@ class RegistryTestControls:
         """Apply one tamper mode for the integrity tests."""
         with self._lock:
             return self._inspector.tamper(request)
+
+    def restore_certificate(self, certificate_id: str) -> bool:
+        """Put a tampered certificate back to the document first signed; False when it was untouched."""
+        answer = self.tamper(TamperRequest(TamperMode.CERTIFICATE_RESTORE, certificate_id=certificate_id))
+        return answer["restored"] is True
 
     def checkpoint_now(self) -> dict[str, JsonValue]:
         """Sign and distribute a checkpoint now."""

@@ -274,3 +274,22 @@ def test_submission_body_shapes_in_received_contain_only_contract_keys(http: Htt
     received = http.client.get("/_test/received", headers=CONTROL).json()["requests"]
     keys = set(json.loads(received[0]["body"]))
     assert keys == {"schema_version", "kind", "key_version", "items"}
+
+
+def test_certificate_restore_over_http(http: Http) -> None:
+    created = post_submission(http, 0, submission("restore"), code("restore"))
+    certificate_id = created.json()["certificate_id"]
+    url = f"/v1/certificates/{certificate_id}"
+    original = http.client.get(url, headers=http.member(0)).json()
+    tamper = {"mode": "CERTIFICATE_BODY", "certificate_id": certificate_id}
+    assert http.client.post("/_test/tamper", json=tamper, headers=CONTROL).status_code == 200
+    assert http.client.get(url, headers=http.member(0)).json() != original
+    restore = {"mode": "CERTIFICATE_RESTORE", "certificate_id": certificate_id}
+    answer = http.client.post("/_test/tamper", json=restore, headers=CONTROL)
+    assert (answer.status_code, answer.json()["restored"]) == (200, True)
+    assert http.client.get(url, headers=http.member(0)).json() == original
+    again = http.client.post("/_test/tamper", json=restore, headers=CONTROL)
+    assert (again.status_code, again.json()["restored"]) == (200, False)
+    unknown = {"mode": "CERTIFICATE_RESTORE", "certificate_id": str(uuid.uuid4())}
+    missing = http.client.post("/_test/tamper", json=unknown, headers=CONTROL)
+    assert (missing.status_code, missing.json()["error"]["code"]) == (404, "CERTIFICATE_NOT_FOUND")
