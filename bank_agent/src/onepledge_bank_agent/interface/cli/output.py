@@ -1,8 +1,10 @@
 """The one output helper of the command line: aligned text by default, JSON with `--json` (SPEC 19).
 
-Tables have a title line, column headers, aligned columns, a count line and a closing
-line. Hashes are shown as their first 12 characters followed by `...`. Errors go to
-stderr as one sentence.
+stdout carries only the command's result: aligned text, or exactly one JSON document
+with `--json` (`"ok": true` and the facts, or `"ok": false` and the error). Log lines
+and the one sentence of an error go to stderr (SPEC_DECISIONS 20, 27). Tables have a
+title line, column headers, aligned columns, a count line and a closing line. Hashes
+are shown as their first 12 characters followed by `...`.
 """
 
 from __future__ import annotations
@@ -20,6 +22,11 @@ HASH_PREFIX = 12
 def short_hash(value: str) -> str:
     """The first 12 characters of a hash followed by `...`."""
     return value[:HASH_PREFIX] + "..."
+
+
+def counted(count: int, singular: str, plural: str) -> str:
+    """`1 stage`, `2 stages`: the count with the right form of the noun (SPEC_DECISIONS 23 (e))."""
+    return f"{count:,} {singular if count == 1 else plural}"
 
 
 class Output:
@@ -40,9 +47,24 @@ class Output:
         """One sentence on stderr."""
         self._err.write(sentence + "\n")
 
+    def detail(self, text: str) -> None:
+        """Diagnostic text on stderr (the traceback of `--debug`)."""
+        self._err.write(text if text.endswith("\n") else text + "\n")
+
     def json(self, value: JsonValue) -> None:
         """The JSON form of a result, indented, keys in order."""
         self._out.write(json.dumps(value, indent=2, ensure_ascii=True) + "\n")
+
+    def success(self, facts: Mapping[str, JsonValue]) -> None:
+        """The `--json` document of a successful command."""
+        self.json({"ok": True, **facts})
+
+    def failure(self, code: str, sentence: str) -> int:
+        """Report a failed command: the sentence on stderr and, with `--json`, the error document."""
+        self.error(sentence)
+        if self.as_json:
+            self.json({"ok": False, "error": {"code": code, "message": sentence}})
+        return 1
 
     def pairs(self, title: str, items: Mapping[str, str]) -> None:
         """A title and aligned `name  value` lines."""
@@ -56,10 +78,10 @@ class Output:
         title: str,
         headers: Sequence[str],
         rows: Sequence[Sequence[str]],
-        count_label: str,
+        count_label: tuple[str, str],
         closing: str,
     ) -> None:
-        """A title, headers, aligned rows, a count line and a closing line."""
+        """A title, headers, aligned rows, a count line (singular and plural label) and a closing line."""
         widths = [len(header) for header in headers]
         for row in rows:
             widths = [max(width, len(cell)) for width, cell in zip(widths, row, strict=True)]
@@ -69,5 +91,5 @@ class Output:
         )
         for row in rows:
             self.line("  " + "  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)))
-        self.line(f"{len(rows):,} {count_label}")
+        self.line(counted(len(rows), *count_label))
         self.line(closing)

@@ -9,6 +9,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from onepledge_bank_agent.application.ports import ReferenceData
+from onepledge_bank_agent.domain.canonical_json import sha256_hex
 from onepledge_bank_agent.domain.entities import Facility, Lender
 from onepledge_bank_agent.domain.enums import FacilityStatus
 from onepledge_bank_agent.domain.errors import InvalidValueError, ReferenceDataError
@@ -51,11 +52,15 @@ class ReferenceFileSource:
         """The facilities of `bank_code` and the lenders they lend to."""
         path = data_dir / REFERENCE_FILE
         try:
-            parsed = _ReferenceFile.model_validate_json(path.read_bytes())
+            content = path.read_bytes()
+            parsed = _ReferenceFile.model_validate_json(content)
         except FileNotFoundError:
-            raise ReferenceDataError(f"{REFERENCE_FILE} was not found in the data directory.") from None
-        except (OSError, ValidationError):
-            raise ReferenceDataError(f"{REFERENCE_FILE} is not a valid reference data file.") from None
+            raise ReferenceDataError(f"cannot read {path}: no such file.") from None
+        except OSError as error:
+            reason = (error.strerror or "it cannot be read").lower()
+            raise ReferenceDataError(f"cannot read {path}: {reason}.") from None
+        except ValidationError:
+            raise ReferenceDataError(f"{path} is not a valid reference data file.") from None
         facilities = [entry for entry in parsed.facilities if entry.bank_code == bank_code]
         if not facilities:
             raise ReferenceDataError(f"{REFERENCE_FILE} has no facility for the bank code {bank_code}.")
@@ -67,6 +72,7 @@ class ReferenceFileSource:
             return ReferenceData(
                 lenders=tuple(self._lender(lenders[code]) for code in used),
                 facilities=tuple(self._facility(entry, lenders[entry.lender_code]) for entry in facilities),
+                source_sha256=sha256_hex(content),
             )
         except InvalidValueError as error:
             raise ReferenceDataError(f"{REFERENCE_FILE} has an invalid {error.field}.") from None

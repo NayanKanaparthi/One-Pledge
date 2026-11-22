@@ -1,26 +1,31 @@
 """`onepledge-bank`: database administration, reference seeding and the pipeline worker (SPEC 19).
 
-Exit codes: 0 on success, 1 on failure (one sentence on stderr, never a traceback),
-2 on a usage error.
+Exit codes: 0 on success, 1 on failure (one sentence on stderr, never a traceback
+unless `--debug` is given), 2 on a usage error. With `--json` stdout holds exactly one
+JSON document, also on failure (SPEC_DECISIONS 20). Log lines go to stderr.
 """
 
 from __future__ import annotations
 
 import argparse
+import traceback
 from collections.abc import Sequence
 from pathlib import Path
 
 from onepledge_bank_agent.domain.errors import DomainError, ReferenceDataError
-from onepledge_bank_agent.infrastructure.db.errors import database_errors_as_operator_errors
 from onepledge_bank_agent.infrastructure.operator_errors import OperatorError
-from onepledge_bank_agent.infrastructure.settings import Settings, load_settings
 from onepledge_bank_agent.interface.cli.commands import run_command
 from onepledge_bank_agent.interface.cli.output import Output
-from onepledge_bank_agent.interface.composition import Collaborators, Composition
+from onepledge_bank_agent.interface.composition import Collaborators
+
+UNEXPECTED = "Unexpected error. Run with --debug for details."
+UNEXPECTED_CODE = "INTERNAL_ERROR"
 
 
-def _json_flag(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--json", action="store_true", help="print the result as JSON")
+def _common_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--json", action="store_true", help="print the result as one JSON document")
+    parser.add_argument("--quiet", action="store_true", help="log only warnings and errors")
+    parser.add_argument("--debug", action="store_true", help="print the traceback of an unexpected error")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -66,22 +71,20 @@ def build_parser() -> argparse.ArgumentParser:
         "calling outside records (OUTSIDE_RECORDS_URL, OUTSIDE_RECORDS_API_KEY). Stops on SIGTERM or SIGINT.",
     )
     worker.add_argument(
-        "--once", action="store_true", help="process until no submission is runnable, then exit"
+        "--once", action="store_true", help="process until no submission is runnable, print what ran, exit"
     )
     for sub in (provision, migrate, status, seed, worker):
-        _json_flag(sub)
+        _common_flags(sub)
     return parser
 
 
-def run(
-    arguments: argparse.Namespace,
-    settings: Settings,
-    output: Output,
-    collaborators: Collaborators | None = None,
-) -> int:
-    """Run one parsed command with its own composition."""
-    with database_errors_as_operator_errors(), Composition(settings, collaborators) as composition:
-        return run_command(arguments, settings, composition, output)
+def parse(argv: Sequence[str] | None) -> argparse.Namespace:
+    """Parse the arguments; `worker --json` without `--once` is a usage error (it prints no result)."""
+    parser = build_parser()
+    arguments = parser.parse_args(argv)
+    if arguments.command == "worker" and arguments.json and not arguments.once:
+        parser.error("--json needs --once: the worker without --once runs until stopped and prints no result")
+    return arguments
 
 
 def main(
@@ -90,15 +93,18 @@ def main(
     collaborators: Collaborators | None = None,
 ) -> int:
     """Entry point."""
-    arguments = build_parser().parse_args(argv)
-    out = output if output is not None else Output(as_json=bool(getattr(arguments, "json", False)))
-    out.as_json = bool(getattr(arguments, "json", False))
+    arguments = parse(argv)
+    out = output if output is not None else Output()
+    out.as_json = arguments.json
     try:
-        return run(arguments, load_settings(), out, collaborators)
+        return run_command(arguments, out, collaborators)
     except OperatorError as error:
-        out.error(error.sentence)
+        return out.failure(error.code, error.sentence)
     except ReferenceDataError as error:
-        out.error(error.sentence)
+        return out.failure(error.code, error.sentence)
     except DomainError as error:
-        out.error(error.message)
-    return 1
+        return out.failure(error.code, error.message)
+    except Exception:  # the last resort of SPEC_DECISIONS 23 (d): one sentence, the traceback only on request
+        if arguments.debug:
+            out.detail(traceback.format_exc())
+        return out.failure(UNEXPECTED_CODE, UNEXPECTED)

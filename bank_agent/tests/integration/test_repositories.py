@@ -176,16 +176,21 @@ def test_concurrent_audit_appends_keep_the_chain_gapless(seeded: BankDatabase, a
         thread.start()
     for thread in threads:
         thread.join()
-    assert pairs(seeded, "SELECT 'n', count(*)::text FROM audit_log") == {"n": str(5 * (1 + 2 + 3 + 4))}
+    seeding = 1  # the REFERENCE_DATA_SEEDED entry of the fixture
+    assert pairs(seeded, "SELECT 'n', count(*)::text FROM audit_log") == {
+        "n": str(seeding + 5 * (1 + 2 + 3 + 4))
+    }
     assert first_broken_seq(seeded) is None
 
 
 def test_a_rolled_back_unit_of_work_writes_no_audit_entry(seeded: BankDatabase, app_engine: Engine) -> None:
+    before = pairs(seeded, "SELECT 'n', count(*)::text FROM audit_log")
+    assert before == {"n": "1"}, "only the seeding entry"
     with units(app_engine)() as unit:
         unit.record(
             AuditDraft(AuditAction.TAPE_FAILED, Actor.system(), AuditObjectType.TAPE_SUBMISSION, None)
         )
-    assert pairs(seeded, "SELECT 'n', count(*)::text FROM audit_log") == {"n": "0"}
+    assert pairs(seeded, "SELECT 'n', count(*)::text FROM audit_log") == before
 
 
 def test_an_advisory_lock_is_exclusive_until_released(seeded: BankDatabase, app_engine: Engine) -> None:

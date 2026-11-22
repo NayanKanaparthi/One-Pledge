@@ -12,6 +12,7 @@ from collections.abc import Callable, Collection, Iterable, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import date, datetime
+from enum import StrEnum
 from pathlib import Path
 from types import TracebackType
 from typing import Protocol, Self
@@ -41,6 +42,14 @@ class IdGenerator(Protocol):
     def new_id(self) -> uuid.UUID:
         """A fresh UUID version 4."""
         ...
+
+
+class Upserted(StrEnum):
+    """What an upsert did to the row with that id."""
+
+    INSERTED = "inserted"
+    UPDATED = "updated"
+    UNCHANGED = "unchanged"
 
 
 @dataclass(frozen=True)
@@ -175,11 +184,11 @@ class FacilityRepository(Protocol):
         """A facility with its lender."""
         ...
 
-    def upsert_lender(self, lender: Lender) -> None:
-        """Insert or update a lender by id (reference seeding, owner role)."""
+    def upsert_lender(self, lender: Lender) -> Upserted:
+        """Insert or update a lender by id (reference seeding, owner role); says which happened."""
         ...
 
-    def upsert_facility(self, facility: Facility) -> None:
+    def upsert_facility(self, facility: Facility) -> Upserted:
         """Insert or update a facility by id, keeping its status (reference seeding, owner role)."""
         ...
 
@@ -309,10 +318,11 @@ class OperationalLog(Protocol):
 
 @dataclass(frozen=True)
 class ReferenceData:
-    """One bank's lenders and facilities, as read from a reference data file."""
+    """One bank's lenders and facilities, as read from a reference data file, and that file's SHA-256."""
 
     lenders: tuple[Lender, ...]
     facilities: tuple[Facility, ...]
+    source_sha256: str
 
 
 class ReferenceSource(Protocol):

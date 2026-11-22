@@ -7,7 +7,11 @@ from collections.abc import Iterator
 
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
-from onepledge_bank_agent.infrastructure.operator_errors import OperatorError
+from onepledge_bank_agent.infrastructure.operator_errors import (
+    DATABASE_UNAVAILABLE,
+    SCHEMA_NOT_CURRENT,
+    OperatorError,
+)
 
 
 @contextlib.contextmanager
@@ -17,7 +21,11 @@ def database_errors_as_operator_errors() -> Iterator[None]:
         yield
     except OperationalError:
         raise OperatorError(
-            "PostgreSQL refused the connection or is not reachable; check it is running and run db provision."
+            "PostgreSQL refused the connection or is not reachable; check it is running and run "
+            "db provision.",
+            DATABASE_UNAVAILABLE,
         ) from None
     except ProgrammingError:
-        raise OperatorError("The bank database is missing tables or privileges; run db migrate.") from None
+        raise OperatorError(
+            "The bank database is missing tables or privileges; run db migrate.", SCHEMA_NOT_CURRENT
+        ) from None

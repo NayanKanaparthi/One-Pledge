@@ -38,7 +38,7 @@ ALLOWED_KEYS: frozenset[str] = frozenset(
     }
 )  # fmt: skip
 REDACTED = "[REDACTED]"
-SERVICE_NAME = "bank-agent"
+SERVICE_NAME = "bank_agent"
 _SAFE_VALUE = re.compile(r"^[A-Za-z0-9_.:{}/\- ]{0,128}$")
 _SAFE_STACK = re.compile(r"^[A-Za-z0-9_.:{}/\- \n<>]*$")
 _VIN_SHAPE = re.compile(r"\b[A-HJ-NPR-Z0-9]{17}\b", re.IGNORECASE)

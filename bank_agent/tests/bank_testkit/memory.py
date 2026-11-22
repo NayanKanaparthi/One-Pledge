@@ -14,7 +14,7 @@ from datetime import datetime
 from types import TracebackType
 from typing import Self
 
-from onepledge_bank_agent.application.ports import AcceptedItem, NewItem, StoredRawRow
+from onepledge_bank_agent.application.ports import AcceptedItem, NewItem, StoredRawRow, Upserted
 from onepledge_bank_agent.domain.audit import AuditDraft
 from onepledge_bank_agent.domain.entities import Facility, FacilityWithLender, Lender
 from onepledge_bank_agent.domain.enums import LoanState, RowDisposition, TapeStatus
@@ -187,14 +187,23 @@ class _Facilities:
             return None
         return FacilityWithLender(facility, self._state.lenders[facility.lender_id])
 
-    def upsert_lender(self, lender: Lender) -> None:
+    def upsert_lender(self, lender: Lender) -> Upserted:
+        existing = self._state.lenders.get(lender.lender_id)
         self._state.lenders[lender.lender_id] = lender
+        return _outcome(existing, lender)
 
-    def upsert_facility(self, facility: Facility) -> None:
+    def upsert_facility(self, facility: Facility) -> Upserted:
         existing = self._state.facilities.get(facility.facility_id)
         if existing is not None:
             facility = Facility(**{**facility.__dict__, "status": existing.status})
         self._state.facilities[facility.facility_id] = facility
+        return _outcome(existing, facility)
+
+
+def _outcome[T](existing: T | None, new: T) -> Upserted:
+    if existing is None:
+        return Upserted.INSERTED
+    return Upserted.UNCHANGED if existing == new else Upserted.UPDATED
 
 
 class MemoryUnitOfWork:

@@ -16,7 +16,7 @@ from onepledge_bank_agent.domain.enums import Role
 from onepledge_bank_agent.infrastructure.db.engines import DatabaseTarget
 from onepledge_bank_agent.infrastructure.db.migrations import MigrationRunner
 from onepledge_bank_agent.infrastructure.db.provisioning import DatabaseProvisioner
-from onepledge_bank_agent.infrastructure.settings import Settings
+from onepledge_bank_agent.infrastructure.settings import RuntimeSettings
 
 ADMIN_URL = os.environ.get("PG_ADMIN_URL", "postgresql://postgres@localhost:55432/postgres")
 TEST_PREFIX = "opwp2t"
@@ -49,9 +49,9 @@ class BankDatabase:
             **extra,
         }
 
-    def settings(self, extra: Mapping[str, str] | None = None) -> Settings:
-        """Settings for this database (plus extra variables)."""
-        return Settings.from_env(self.environment(**dict(extra or {})))
+    def settings(self, extra: Mapping[str, str] | None = None) -> RuntimeSettings:
+        """Runtime settings for this database (plus extra variables)."""
+        return RuntimeSettings.from_env(self.environment(**dict(extra or {})))
 
     def connect(self, role: str) -> psycopg.Connection[tuple[object, ...]]:
         """A psycopg connection as `admin`, `owner` or `app`, in autocommit mode."""

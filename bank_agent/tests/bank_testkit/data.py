@@ -36,6 +36,6 @@ def seed_reference(database: BankDatabase, data_dir: Path, bank_code: str = "HAR
     engine = make_engine(database.owner_url)
     try:
         units = SqlUnitOfWorkFactory(engine, HashChainedAuditWriter(SystemClock(), RandomIds()), RandomIds())
-        SeedReferenceData(units, ReferenceFileSource()).run(data_dir, bank_code)
+        SeedReferenceData(units, ReferenceFileSource(), "test").run(data_dir, bank_code)
     finally:
         engine.dispose()

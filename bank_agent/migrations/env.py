@@ -12,7 +12,7 @@ from sqlalchemy import create_engine
 
 from onepledge_bank_agent.infrastructure.db.engines import sqlalchemy_url
 from onepledge_bank_agent.infrastructure.db.models import Base
-from onepledge_bank_agent.infrastructure.settings import load_settings
+from onepledge_bank_agent.infrastructure.settings import load_admin_settings
 
 
 def run_migrations() -> None:
@@ -20,7 +20,7 @@ def run_migrations() -> None:
     config = context.config
     url = config.attributes.get("url")
     if url is None:
-        settings = load_settings()
+        settings = load_admin_settings()
         url = sqlalchemy_url(settings.require_migration_url())
         config.attributes["app_role"] = settings.require_app_role()
     engine = create_engine(url, hide_parameters=True)

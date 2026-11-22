@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from dataclasses import replace
@@ -10,8 +11,9 @@ from pathlib import Path
 import pytest
 
 from bank_testkit.world import World
-from onepledge_bank_agent.application.seed_reference import SeedReferenceData
-from onepledge_bank_agent.domain.enums import FacilityStatus
+from onepledge_bank_agent.application.seed_reference import SeedReferenceData, UpsertCounts
+from onepledge_bank_agent.domain.audit import Actor
+from onepledge_bank_agent.domain.enums import AuditAction, AuditObjectType, FacilityStatus
 from onepledge_bank_agent.domain.errors import ReferenceDataError
 from onepledge_bank_agent.infrastructure.seed_reference_file import ReferenceFileSource
 
@@ -53,22 +55,58 @@ def test_one_banks_lenders_and_facilities_are_upserted_and_status_is_kept(tmp_pa
     ]
     directory = write(tmp_path, {"banks": [], "lenders": LENDERS, "facilities": facilities, "demo_users": []})
     world = World()
-    seeder = SeedReferenceData(world.units, ReferenceFileSource())
+    seeder = SeedReferenceData(world.units, ReferenceFileSource(), "cli")
     result = seeder.run(directory, "HARBOR")
-    assert (result.lenders, result.facilities) == (1, 1)
+    assert (result.lenders, result.facilities) == (UpsertCounts(1, 0, 0), UpsertCounts(1, 0, 0))
     seeded_id = uuid.UUID(str(facilities[0]["facility_id"]))
     stored = world.store.state.facilities[seeded_id]
     assert stored.code == "HARBOR-SUMMIT" and stored.status is FacilityStatus.ACTIVE
     world.store.state.facilities[seeded_id] = replace(stored, status=FacilityStatus.SUSPENDED)
-    assert seeder.run(directory, "HARBOR") == result
+    again = seeder.run(directory, "HARBOR")
+    assert (again.lenders, again.facilities) == (UpsertCounts(0, 0, 1), UpsertCounts(0, 0, 1))
     assert world.store.state.facilities[seeded_id].status is FacilityStatus.SUSPENDED
+    facilities[0]["name"] = "renamed line"
+    changed = seeder.run(write(tmp_path, {"lenders": LENDERS, "facilities": facilities}), "HARBOR")
+    assert (changed.lenders, changed.facilities) == (UpsertCounts(0, 0, 1), UpsertCounts(0, 1, 0))
+
+
+def test_every_run_is_audited_with_the_file_hash_and_the_counts(tmp_path: Path) -> None:
+    directory = write(
+        tmp_path, {"lenders": LENDERS, "facilities": [facility("HARBOR-SUMMIT", "HARBOR", "SUMMIT")]}
+    )
+    world = World()
+    seeder = SeedReferenceData(world.units, ReferenceFileSource(), "cli")
+    seeder.run(directory, "HARBOR")
+    seeder.run(directory, "HARBOR")
+    first, second = world.audit(AuditAction.REFERENCE_DATA_SEEDED)
+    assert (first.actor, first.object_type, first.object_id) == (
+        Actor.system(),
+        AuditObjectType.REFERENCE_DATA,
+        None,
+    )
+    digest = hashlib.sha256((directory / "reference.json").read_bytes()).hexdigest()
+    assert dict(first.detail) == {
+        "via": "cli", "source_sha256": digest,
+        "lenders": {"inserted": 1, "updated": 0, "unchanged": 0},
+        "facilities": {"inserted": 1, "updated": 0, "unchanged": 0},
+    }  # fmt: skip
+    assert second.detail["facilities"] == {"inserted": 0, "updated": 0, "unchanged": 1}, (
+        "audited unchanged too"
+    )
+
+
+def test_a_refused_file_writes_no_entry(tmp_path: Path) -> None:
+    world = World()
+    with pytest.raises(ReferenceDataError):
+        SeedReferenceData(world.units, ReferenceFileSource(), "cli").run(tmp_path, "HARBOR")
+    assert world.audit() == []
 
 
 @pytest.mark.parametrize(
     ("content", "sentence"),
     [
-        (None, "reference.json was not found in the data directory."),
-        ("{not json", "reference.json is not a valid reference data file."),
+        (None, "cannot read {dir}/reference.json: no such file."),
+        ("{not json", "{dir}/reference.json is not a valid reference data file."),
         ({"lenders": LENDERS, "facilities": []}, "reference.json has no facility for the bank code HARBOR."),
         (
             {"lenders": [], "facilities": [facility("HARBOR-SUMMIT", "HARBOR", "SUMMIT")]},
@@ -94,4 +132,11 @@ def test_an_unusable_file_is_one_sentence(tmp_path: Path, content: object, sente
         write(tmp_path, content)
     with pytest.raises(ReferenceDataError) as raised:
         ReferenceFileSource().load(tmp_path, "HARBOR")
-    assert raised.value.sentence == sentence
+    assert raised.value.sentence == sentence.format(dir=tmp_path)
+
+
+def test_a_reference_path_that_is_a_directory_is_named_in_the_sentence(tmp_path: Path) -> None:
+    (tmp_path / "reference.json").mkdir()
+    with pytest.raises(ReferenceDataError) as raised:
+        ReferenceFileSource().load(tmp_path, "HARBOR")
+    assert raised.value.sentence == f"cannot read {tmp_path}/reference.json: is a directory."

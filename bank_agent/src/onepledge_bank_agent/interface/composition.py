@@ -1,8 +1,11 @@
 """The composition root of the bank agent: the one place that wires implementations to ports.
 
 Use cases receive every collaborator through their constructor; nothing else in the
-code base builds an engine, an HTTP client or a repository. Stages are registered
-with `AdvanceSubmission` here, in pipeline order.
+code base builds an engine, an HTTP client or a repository. There are two roots, one
+per settings scope: `AdminComposition` for the administrative commands (owner and
+superuser URLs) and `RuntimeComposition` for the processes that handle tapes, which
+never see an owner credential. Stages are registered with `AdvanceSubmission` in
+`RuntimeComposition.stages`, in pipeline order.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from onepledge_bank_agent.application.clean_tape import CleanTape
 from onepledge_bank_agent.application.faults import FaultInjector, NoFaults
 from onepledge_bank_agent.application.ingest_tape import IngestTape
 from onepledge_bank_agent.application.ports import Clock, IdGenerator
+from onepledge_bank_agent.application.record_schema_migration import RecordSchemaMigration
 from onepledge_bank_agent.application.run_local_checks import OutsideRecordsClients, RunLocalChecks
 from onepledge_bank_agent.application.run_pipeline_worker import RunPipelineWorker, WorkerSettings
 from onepledge_bank_agent.application.runtime import Runtime
@@ -42,9 +46,10 @@ from onepledge_bank_agent.infrastructure.http.outside_records import OutsideReco
 from onepledge_bank_agent.infrastructure.ids import RandomIds
 from onepledge_bank_agent.infrastructure.logging import StructlogOperationalLog
 from onepledge_bank_agent.infrastructure.seed_reference_file import ReferenceFileSource
-from onepledge_bank_agent.infrastructure.settings import Settings
+from onepledge_bank_agent.infrastructure.settings import AdminSettings, RuntimeSettings
 
 OUTSIDE_RECORDS = "outside_records"
+VIA_CLI = "cli"
 
 
 @dataclass(frozen=True)
@@ -58,11 +63,10 @@ class Collaborators:
     sleep: Callable[[float], None] = time.sleep
 
 
-class Composition:
-    """Builds what a command needs from the settings, and disposes every engine and client it made."""
+class _Resources:
+    """Engines, HTTP callers and the shared runtime of one command; closed together on exit."""
 
-    def __init__(self, settings: Settings, collaborators: Collaborators | None = None) -> None:
-        self._settings = settings
+    def __init__(self, collaborators: Collaborators | None) -> None:
         self._parts = collaborators if collaborators is not None else Collaborators()
         self._engines = EngineSet()
         self._callers: list[RetryingHttpCaller] = []
@@ -83,6 +87,17 @@ class Composition:
         self._callers.clear()
         self._engines.dispose()
 
+    def _units(self, url: str) -> SqlUnitOfWorkFactory:
+        return SqlUnitOfWorkFactory(self._engines.engine(url), self._writer, self._parts.ids)
+
+
+class AdminComposition(_Resources):
+    """`db provision`, `db migrate`, `db status` and `seed-reference`."""
+
+    def __init__(self, settings: AdminSettings, collaborators: Collaborators | None = None) -> None:
+        super().__init__(collaborators)
+        self._settings = settings
+
     def provisioner(self) -> tuple[DatabaseProvisioner, DatabaseTarget]:
         """The superuser provisioner and the database and roles it provisions."""
         target = DatabaseTarget.from_urls(
@@ -94,16 +109,30 @@ class Composition:
         """Alembic as the owner role."""
         return MigrationRunner(self._settings.require_migration_url(), self._settings.require_app_role())
 
+    def record_schema_migration(self) -> RecordSchemaMigration:
+        """The `SCHEMA_MIGRATED` audit entry, written as the owner role."""
+        return RecordSchemaMigration(self._units(self._settings.require_migration_url()), VIA_CLI)
+
     def schema(self) -> SchemaInspector:
         """The schema revision, read as the app role."""
         return SchemaInspector(self._engines.engine(self._settings.require_database_url()))
 
     def seed_reference(self) -> SeedReferenceData:
         """Reference seeding as the owner role."""
-        engine = self._engines.engine(self._settings.require_migration_url())
-        return SeedReferenceData(
-            SqlUnitOfWorkFactory(engine, self._writer, self._parts.ids), ReferenceFileSource()
-        )
+        units = self._units(self._settings.require_migration_url())
+        return SeedReferenceData(units, ReferenceFileSource(), VIA_CLI)
+
+
+class RuntimeComposition(_Resources):
+    """Intake and the pipeline worker, on the app role only."""
+
+    def __init__(self, settings: RuntimeSettings, collaborators: Collaborators | None = None) -> None:
+        super().__init__(collaborators)
+        self._settings = settings
+
+    def schema(self) -> SchemaInspector:
+        """The schema revision, read as the app role."""
+        return SchemaInspector(self._engines.engine(self._settings.require_database_url()))
 
     def ingest_tape(self) -> IngestTape:
         """Intake as the app role."""
@@ -146,8 +175,7 @@ class Composition:
         )
 
     def _app_units(self) -> SqlUnitOfWorkFactory:
-        engine = self._engines.engine(self._settings.require_database_url())
-        return SqlUnitOfWorkFactory(engine, self._writer, self._parts.ids)
+        return self._units(self._settings.require_database_url())
 
     def _outside_records(self) -> OutsideRecordsClient:
         url, key = self._settings.require_outside_records()

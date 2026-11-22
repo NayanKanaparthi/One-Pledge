@@ -19,7 +19,7 @@ from onepledge_bank_agent.domain.audit import Actor
 from onepledge_bank_agent.domain.enums import Role, TapeKind
 from onepledge_bank_agent.domain.tape import TapeSubmission
 from onepledge_bank_agent.infrastructure.clock import SystemClock
-from onepledge_bank_agent.interface.composition import Collaborators, Composition
+from onepledge_bank_agent.interface.composition import Collaborators, RuntimeComposition
 
 
 def _no_sleep(seconds: float) -> None:
@@ -53,7 +53,7 @@ class BankAgentHarness:
             http_client_factory=outside.client_factory(),
             sleep=_no_sleep,
         )
-        self.composition = Composition(self.settings, self.collaborators)
+        self.composition = RuntimeComposition(self.settings, self.collaborators)
         self.analyst = insert_user(database, Role.ANALYST)
         self.officer = insert_user(database, Role.CREDIT_OFFICER)
 

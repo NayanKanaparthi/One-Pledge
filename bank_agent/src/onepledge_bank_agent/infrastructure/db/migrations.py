@@ -8,13 +8,20 @@ from importlib import resources
 
 from alembic import command
 from alembic.config import Config
+from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from alembic.util import CommandError
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import DBAPIError, OperationalError
 
 from onepledge_bank_agent.infrastructure.db.engines import sqlalchemy_url
-from onepledge_bank_agent.infrastructure.operator_errors import OperatorError
+from onepledge_bank_agent.infrastructure.operator_errors import (
+    CONFIGURATION_ERROR,
+    DATABASE_UNAVAILABLE,
+    INSTALLATION_ERROR,
+    SCHEMA_NOT_CURRENT,
+    OperatorError,
+)
 
 MIGRATIONS_PACKAGE = "onepledge_bank_agent_migrations"
 
@@ -34,7 +41,9 @@ def head_revision() -> str:
     """The newest revision of the packaged migrations."""
     head = ScriptDirectory.from_config(alembic_config()).get_current_head()
     if head is None:
-        raise OperatorError("The packaged migrations have no head revision; reinstall the bank agent.")
+        raise OperatorError(
+            "The packaged migrations have no head revision; reinstall the bank agent.", INSTALLATION_ERROR
+        )
     return head
 
 
@@ -43,6 +52,20 @@ class MigrationRunner:
 
     def __init__(self, migration_url: str, app_role: str) -> None:
         self._config = alembic_config(migration_url, app_role)
+        self._url: str = self._config.attributes["url"]
+
+    def current_revision(self) -> str | None:
+        """The revision the database is at, read as the owner role; None before the first migration."""
+        engine = create_engine(self._url, hide_parameters=True)
+        try:
+            with engine.connect() as connection:
+                return MigrationContext.configure(connection).get_current_revision()
+        except OperationalError:
+            raise OperatorError(
+                "PostgreSQL refused the owner connection; run db provision first.", DATABASE_UNAVAILABLE
+            ) from None
+        finally:
+            engine.dispose()
 
     def upgrade(self, revision: str = "head") -> None:
         """Migrate up to `revision`."""
@@ -57,9 +80,11 @@ class MigrationRunner:
         try:
             action()
         except OperationalError:
-            raise OperatorError("PostgreSQL refused the owner connection; run db provision first.") from None
+            raise OperatorError(
+                "PostgreSQL refused the owner connection; run db provision first.", DATABASE_UNAVAILABLE
+            ) from None
         except CommandError as error:
-            raise OperatorError(str(error)) from None
+            raise OperatorError(str(error), CONFIGURATION_ERROR) from None
 
 
 @dataclass(frozen=True)
@@ -97,11 +122,12 @@ class SchemaInspector:
                 )
         except OperationalError:
             raise OperatorError(
-                "PostgreSQL refused the connection at DATABASE_URL; run db provision first."
+                "PostgreSQL refused the connection at DATABASE_URL; run db provision first.",
+                DATABASE_UNAVAILABLE,
             ) from None
         except DBAPIError:
             raise OperatorError(
-                "The database at DATABASE_URL cannot be read; run db migrate first."
+                "The database at DATABASE_URL cannot be read; run db migrate first.", SCHEMA_NOT_CURRENT
             ) from None
         return SchemaStatus(str(database), current, head_revision())
 
@@ -110,5 +136,6 @@ class SchemaInspector:
         status = self.status()
         if not status.at_head:
             raise OperatorError(
-                f"The database {status.database} is not at the latest revision; run db migrate."
+                f"The database {status.database} is not at the latest revision; run db migrate.",
+                SCHEMA_NOT_CURRENT,
             )

@@ -1,9 +1,11 @@
 """Environment settings of the bank agent (SPEC 3.1, 3.3).
 
-The only module of this package that reads `os.environ`. Each command asks only for
-the values it needs; a missing or malformed value stops it with one sentence naming
-the variable, never its value. Database URLs and API keys are secrets and are masked
-in every repr.
+The only module of this package that reads `os.environ`. Settings are scoped to the
+command: a runtime process (`worker`, later `serve`) parses `RuntimeSettings`, which
+cannot hold an owner or superuser URL; the administrative commands parse
+`AdminSettings`. A missing or malformed value stops the command with one sentence
+naming the variable, never its value. Database URLs and API keys are secrets and are
+masked in every repr.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, SecretStr
 
-from onepledge_bank_agent.infrastructure.operator_errors import OperatorError
+from onepledge_bank_agent.infrastructure.operator_errors import CONFIGURATION_ERROR, OperatorError
 
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 _ROLE_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
@@ -38,11 +40,11 @@ def _reveal(secret: SecretStr) -> str:
 
 
 def _missing(name: str) -> OperatorError:
-    return OperatorError(f"Configuration error: {name} is required but not set.")
+    return OperatorError(f"Configuration error: {name} is required but not set.", CONFIGURATION_ERROR)
 
 
 def _invalid(name: str, rule: str) -> OperatorError:
-    return OperatorError(f"Configuration error: {name} must be {rule}.")
+    return OperatorError(f"Configuration error: {name} must be {rule}.", CONFIGURATION_ERROR)
 
 
 class Tunables(BaseModel):
@@ -134,8 +136,29 @@ def _tunables(read: _Reader) -> Tunables:
     )
 
 
-class Settings(BaseModel):
-    """Immutable settings of one bank agent process."""
+def _log_level(read: _Reader) -> str:
+    level = (read.text("LOG_LEVEL") or "INFO").upper()
+    if level not in _LOG_LEVELS:
+        raise _invalid("LOG_LEVEL", "DEBUG, INFO, WARNING, ERROR or CRITICAL")
+    return level
+
+
+def _bank_code(read: _Reader) -> str | None:
+    return read.matching("BANK_CODE", _BANK_CODE, "3 to 12 upper case letters")
+
+
+def _required[T](name: str, value: T | None, reveal: Callable[[T], str]) -> str:
+    if value is None:
+        raise _missing(name)
+    return reveal(value)
+
+
+class RuntimeSettings(BaseModel):
+    """Settings of a serving or working process (`worker`, and `serve` from WP4).
+
+    It has no field for MIGRATION_DATABASE_URL or PG_ADMIN_URL: a process that handles
+    tapes never holds an owner or superuser credential (SPEC_DECISIONS 22, finding 5).
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -144,9 +167,6 @@ class Settings(BaseModel):
     bind_host: str
     port: int | None
     database_url: SecretStr | None
-    migration_database_url: SecretStr | None
-    admin_url: SecretStr | None
-    db_app_role: str | None
     outside_records_url: str | None
     outside_records_api_key: SecretStr | None
     log_level: str
@@ -154,37 +174,24 @@ class Settings(BaseModel):
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> Self:
-        """Parse the variables that are present; requirements are checked per command."""
+        """Parse the variables of a runtime process that are present; requirements are checked per use."""
         read = _Reader(environ)
-        level = (read.text("LOG_LEVEL") or "INFO").upper()
-        if level not in _LOG_LEVELS:
-            raise _invalid("LOG_LEVEL", "DEBUG, INFO, WARNING, ERROR or CRITICAL")
         port_text = read.text("PORT")
-        port = read.integer("PORT", 0, 1, MAX_PORT) if port_text is not None else None
         return cls(
-            bank_code=read.matching("BANK_CODE", _BANK_CODE, "3 to 12 upper case letters"),
+            bank_code=_bank_code(read),
             bank_name=read.text("BANK_NAME"),
             bind_host=read.text("BIND_HOST") or "127.0.0.1",
-            port=port,
+            port=read.integer("PORT", 0, 1, MAX_PORT) if port_text is not None else None,
             database_url=read.secret("DATABASE_URL"),
-            migration_database_url=read.secret("MIGRATION_DATABASE_URL"),
-            admin_url=read.secret("PG_ADMIN_URL"),
-            db_app_role=read.matching("DB_APP_ROLE", _ROLE_NAME, "a lower case PostgreSQL role name"),
             outside_records_url=read.http_url("OUTSIDE_RECORDS_URL"),
             outside_records_api_key=read.secret("OUTSIDE_RECORDS_API_KEY"),
-            log_level=level,
+            log_level=_log_level(read),
             tunables=_tunables(read),
         )
 
-    @staticmethod
-    def _required[T](name: str, value: T | None, reveal: Callable[[T], str]) -> str:
-        if value is None:
-            raise _missing(name)
-        return reveal(value)
-
     def require_bank_code(self) -> str:
         """BANK_CODE."""
-        return self._required("BANK_CODE", self.bank_code, str)
+        return _required("BANK_CODE", self.bank_code, str)
 
     def require_port(self) -> int:
         """PORT (no default; the launcher always sets it)."""
@@ -194,27 +201,66 @@ class Settings(BaseModel):
 
     def require_database_url(self) -> str:
         """DATABASE_URL (app role)."""
-        return self._required("DATABASE_URL", self.database_url, _reveal)
-
-    def require_migration_url(self) -> str:
-        """MIGRATION_DATABASE_URL (owner role): `db provision`, `db migrate` and `seed-reference` only."""
-        return self._required("MIGRATION_DATABASE_URL", self.migration_database_url, _reveal)
-
-    def require_admin_url(self) -> str:
-        """PG_ADMIN_URL (superuser): `db provision` only."""
-        return self._required("PG_ADMIN_URL", self.admin_url, _reveal)
-
-    def require_app_role(self) -> str:
-        """DB_APP_ROLE."""
-        return self._required("DB_APP_ROLE", self.db_app_role, str)
+        return _required("DATABASE_URL", self.database_url, _reveal)
 
     def require_outside_records(self) -> tuple[str, str]:
         """OUTSIDE_RECORDS_URL and OUTSIDE_RECORDS_API_KEY."""
-        url = self._required("OUTSIDE_RECORDS_URL", self.outside_records_url, str)
-        key = self._required("OUTSIDE_RECORDS_API_KEY", self.outside_records_api_key, _reveal)
+        url = _required("OUTSIDE_RECORDS_URL", self.outside_records_url, str)
+        key = _required("OUTSIDE_RECORDS_API_KEY", self.outside_records_api_key, _reveal)
         return url, key
 
 
-def load_settings() -> Settings:
-    """Settings from the process environment."""
-    return Settings.from_env(read_environment())
+class AdminSettings(BaseModel):
+    """Settings of the administrative commands: db provision, migrate and status, and seed-reference."""
+
+    model_config = ConfigDict(frozen=True)
+
+    bank_code: str | None
+    database_url: SecretStr | None
+    migration_database_url: SecretStr | None
+    admin_url: SecretStr | None
+    db_app_role: str | None
+    log_level: str
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str]) -> Self:
+        """Parse the administrative variables that are present; requirements are checked per command."""
+        read = _Reader(environ)
+        return cls(
+            bank_code=_bank_code(read),
+            database_url=read.secret("DATABASE_URL"),
+            migration_database_url=read.secret("MIGRATION_DATABASE_URL"),
+            admin_url=read.secret("PG_ADMIN_URL"),
+            db_app_role=read.matching("DB_APP_ROLE", _ROLE_NAME, "a lower case PostgreSQL role name"),
+            log_level=_log_level(read),
+        )
+
+    def require_bank_code(self) -> str:
+        """BANK_CODE."""
+        return _required("BANK_CODE", self.bank_code, str)
+
+    def require_database_url(self) -> str:
+        """DATABASE_URL (app role)."""
+        return _required("DATABASE_URL", self.database_url, _reveal)
+
+    def require_migration_url(self) -> str:
+        """MIGRATION_DATABASE_URL (owner role)."""
+        return _required("MIGRATION_DATABASE_URL", self.migration_database_url, _reveal)
+
+    def require_admin_url(self) -> str:
+        """PG_ADMIN_URL (superuser): `db provision` only."""
+        return _required("PG_ADMIN_URL", self.admin_url, _reveal)
+
+    def require_app_role(self) -> str:
+        """DB_APP_ROLE."""
+        return _required("DB_APP_ROLE", self.db_app_role, str)
+
+
+def load_runtime_settings() -> RuntimeSettings:
+    """Runtime settings from the process environment."""
+    return RuntimeSettings.from_env(read_environment())
+
+
+def load_admin_settings() -> AdminSettings:
+    """Administrative settings from the process environment."""
+    return AdminSettings.from_env(read_environment())

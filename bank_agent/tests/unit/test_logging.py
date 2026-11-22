@@ -105,7 +105,7 @@ def test_records_are_json_with_fixed_keys_and_no_exception_text(captured: io.Str
     first, second = lines(captured)
     assert {"ts", "level", "event", "service", "bank_code"} <= set(first)
     assert (first["service"], first["bank_code"], first["event"], first["rows"]) == (
-        "bank-agent",
+        "bank_agent",
         "HARBOR",
         "tape_received",
         3,
