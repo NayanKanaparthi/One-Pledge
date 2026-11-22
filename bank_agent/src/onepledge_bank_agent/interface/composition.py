@@ -133,7 +133,9 @@ class AdminComposition(_Resources):
 
     def record_schema_migration(self) -> RecordSchemaMigration:
         """The `SCHEMA_MIGRATED` audit entry, written as the owner role."""
-        return RecordSchemaMigration(self._units(self._settings.require_migration_url()), VIA_CLI)
+        return RecordSchemaMigration(
+            self._units(self._settings.require_migration_url()), VIA_CLI, self._runtime.log
+        )
 
     def schema(self) -> SchemaInspector:
         """The schema revision, read as the app role."""

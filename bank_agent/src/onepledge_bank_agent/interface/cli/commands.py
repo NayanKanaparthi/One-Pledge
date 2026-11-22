@@ -91,11 +91,11 @@ def _migrate(
 ) -> None:
     runner = composition.migrations()
     before = runner.current_revision()
-    runner.upgrade()
+    applied = runner.upgrade()
     after = runner.current_revision()
     if after is None:
         after = before or ""
-    changed = composition.record_schema_migration().run(before, after)
+    changed = composition.record_schema_migration().run(before, after, applied)
     if output.as_json:
         output.success({"from_revision": before, "to_revision": after, "changed": changed})
         return

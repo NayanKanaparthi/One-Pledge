@@ -11,10 +11,12 @@ from onepledge_bank_agent.domain.enums import AuditAction, AuditObjectType, Audi
 
 pytestmark = pytest.mark.unit
 
+APPLIED = ("0001_schema", "0002_guards", "0003_grants")
+
 
 def test_an_upgrade_of_a_new_database_records_from_none_to_the_head() -> None:
     world = World()
-    assert RecordSchemaMigration(world.units, "cli").run(None, "0003_grants")
+    assert RecordSchemaMigration(world.units, "cli", world.log).run(None, "0003_grants", APPLIED)
     (entry,) = world.audit(AuditAction.SCHEMA_MIGRATED)
     assert (entry.actor, entry.object_type, entry.object_id, entry.outcome) == (
         Actor.system(),
@@ -23,12 +25,16 @@ def test_an_upgrade_of_a_new_database_records_from_none_to_the_head() -> None:
         AuditOutcome.SUCCESS,
     )
     assert dict(entry.detail) == {"via": "cli", "from_revision": None, "to_revision": "0003_grants"}
+    assert world.log.events == [
+        ("info", "schema_migration_applied", {"revision": revision}) for revision in APPLIED
+    ]
 
 
 def test_an_upgrade_between_revisions_names_both_and_a_no_op_records_nothing() -> None:
     world = World()
-    record = RecordSchemaMigration(world.units, "cli")
-    assert record.run("0002_guards", "0003_grants")
-    assert not record.run("0003_grants", "0003_grants")
+    record = RecordSchemaMigration(world.units, "cli", world.log)
+    assert record.run("0002_guards", "0003_grants", ("0003_grants",))
+    assert not record.run("0003_grants", "0003_grants", ())
     (entry,) = world.audit()
     assert entry.detail["from_revision"] == "0002_guards"
+    assert world.log.events == [("info", "schema_migration_applied", {"revision": "0003_grants"})]

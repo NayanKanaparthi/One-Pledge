@@ -22,6 +22,7 @@ class LogEvent(StrEnum):
     DEPENDENCY_UNAVAILABLE = "dependency_unavailable"
     ACCESS_DENIED = "access_denied"
     LIBRARY_LOG = "library_log"
+    SCHEMA_MIGRATION_APPLIED = "schema_migration_applied"
     CODES_STORED = "codes_stored"
     REGISTRY_REQUESTS_PLANNED = "registry_requests_planned"
     REGISTRY_REQUEST_SENT = "registry_request_sent"

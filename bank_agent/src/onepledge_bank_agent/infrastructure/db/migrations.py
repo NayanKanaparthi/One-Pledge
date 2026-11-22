@@ -67,9 +67,16 @@ class MigrationRunner:
         finally:
             engine.dispose()
 
-    def upgrade(self, revision: str = "head") -> None:
-        """Migrate up to `revision`."""
+    def upgrade(self, revision: str = "head") -> tuple[str, ...]:
+        """Migrate up to `revision`; the revisions this applied, oldest first."""
+        before = self.current_revision()
         self._guarded(lambda: command.upgrade(self._config, revision))
+        after = self.current_revision()
+        if after is None or after == before:
+            return ()
+        script = ScriptDirectory.from_config(self._config)
+        applied = script.iterate_revisions(after, before if before is not None else "base")
+        return tuple(reversed([step.revision for step in applied]))
 
     def downgrade(self, revision: str = "base") -> None:
         """Migrate down to `revision`."""

@@ -161,6 +161,19 @@ def test_migrating_a_database_behind_the_head_records_both_revisions(
     )
 
 
+def test_db_migrate_logs_each_applied_revision_and_no_library_line(bank_db: BankDatabase) -> None:
+    """SPEC_DECISIONS 43.6: a schema_migration_applied record per applied revision; no Alembic INFO."""
+    MigrationRunner(bank_db.owner_url, bank_db.app_role).downgrade("0002_guards")
+    versions = Path(__file__).resolve().parents[2] / "migrations" / "versions"
+    expected = sorted(path.stem for path in versions.glob("0*.py") if path.stem > "0002_guards")
+    finished = run_program("onepledge-bank", ["db", "migrate", "--json"], bank_db.environment())
+    assert finished.returncode == 0, finished.stderr
+    records, sentences = log_lines_and_sentences(finished.stderr)
+    assert sentences == []
+    assert [record["event"] for record in records] == ["schema_migration_applied"] * len(expected)
+    assert [record["revision"] for record in records] == expected
+
+
 def test_status_reports_a_database_behind_the_latest_revision(
     bank_db: BankDatabase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
