@@ -41,6 +41,18 @@ BANKS = ("HARBOR", "NORTHGATE", "CALDER")
 
 
 @dataclass(frozen=True)
+class SentRequest:
+    """One request a bank agent client sent to a double, exactly as it left the client."""
+
+    base_url: str
+    method: str
+    path: str
+    query: dict[str, str]
+    headers: dict[str, str]
+    body: bytes
+
+
+@dataclass(frozen=True)
 class Member:
     """One bank's registry identity and its three service keys."""
 
@@ -104,6 +116,7 @@ class InProcessDoubles:
             self._clients[url] = TestClient(create_key_holder_app(config), base_url=url)
         self.down: set[str] = set()
         self._forged: dict[str, list[dict[str, Any]]] = {}
+        self.sent: list[SentRequest] = []
         self.public_key_b64 = base64.b64encode(
             Ed25519PrivateKey.from_private_bytes(self.signing_seed)
             .public_key()
@@ -130,6 +143,16 @@ class InProcessDoubles:
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
         base = f"{request.url.scheme}://{request.url.host}"
+        self.sent.append(
+            SentRequest(
+                base,
+                request.method,
+                request.url.path,
+                dict(request.url.params),
+                dict(request.headers),
+                request.read(),
+            )
+        )
         if base in self.down:
             raise httpx.ConnectError("the service is stopped", request=request)
         forged = self._forged.get(request.headers.get("X-API-Key", ""), [])
