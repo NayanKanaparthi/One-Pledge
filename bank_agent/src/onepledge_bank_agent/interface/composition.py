@@ -135,7 +135,9 @@ class AdminComposition(_Resources):
 
     def migrations(self) -> MigrationRunner:
         """Alembic as the owner role."""
-        return MigrationRunner(self._settings.require_migration_url(), self._settings.require_app_role())
+        return MigrationRunner(
+            self._settings.require_migration_url(), self._settings.require_app_role(), self._runtime.log
+        )
 
     def record_schema_migration(self) -> RecordSchemaMigration:
         """The `SCHEMA_MIGRATED` audit entry, written as the owner role."""

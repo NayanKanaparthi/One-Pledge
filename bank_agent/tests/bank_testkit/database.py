@@ -16,6 +16,7 @@ from onepledge_bank_agent.domain.enums import Role
 from onepledge_bank_agent.infrastructure.db.engines import DatabaseTarget
 from onepledge_bank_agent.infrastructure.db.migrations import MigrationRunner
 from onepledge_bank_agent.infrastructure.db.provisioning import DatabaseProvisioner
+from onepledge_bank_agent.infrastructure.logging import StructlogOperationalLog
 from onepledge_bank_agent.infrastructure.settings import RuntimeSettings
 from onepledge_testtools.scratch_databases import new_name
 
@@ -67,6 +68,13 @@ def pairs(database: BankDatabase, query: str, parameters: tuple[object, ...] = (
         return {str(row[0]): str(row[1]) for row in connection.execute(query, parameters)}
 
 
+def migration_runner(database: BankDatabase, app_role: str | None = None) -> MigrationRunner:
+    """The product's migration runner on this database's owner URL, logging as the product does."""
+    return MigrationRunner(
+        database.owner_url, app_role or database.app_role, StructlogOperationalLog("onepledge_bank_agent")
+    )
+
+
 def new_bank_database(code: str = "harbor") -> BankDatabase:
     """Names and passwords for a fresh bank database; nothing is created yet. The name is a scratch
     name of SPEC_DECISIONS 76 (`optest_<UTC time>_<pid>_<8 hex>_bank_<code>`), so the session sweep
@@ -84,7 +92,7 @@ def new_bank_database(code: str = "harbor") -> BankDatabase:
 def provision_and_migrate(database: BankDatabase) -> None:
     """Provision the roles and database and migrate to head, as `make db-up` and `make migrate` will."""
     DatabaseProvisioner(database.admin_url).provision(database.target)
-    MigrationRunner(database.owner_url, database.app_role).upgrade()
+    migration_runner(database).upgrade()
 
 
 def drop(database: BankDatabase) -> None:

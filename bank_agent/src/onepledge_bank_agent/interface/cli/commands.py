@@ -35,6 +35,15 @@ from onepledge_bank_agent.interface.cli.registry_commands import (
 from onepledge_bank_agent.interface.composition import AdminComposition, Collaborators, RuntimeComposition
 
 QUIET_LEVEL = "WARNING"
+ADMIN_VARIABLES: Mapping[str, str] = MappingProxyType(
+    {
+        "provision": "PG_ADMIN_URL",
+        "migrate": "MIGRATION_DATABASE_URL",
+        "status": "DATABASE_URL",
+        "seed-reference": "MIGRATION_DATABASE_URL",
+    }
+)
+"""The variable each administrative command connects with, named by its database failure sentences."""
 WORKER_PROCESS = "worker"
 type AdminHandler = Callable[[argparse.Namespace, AdminSettings, AdminComposition, Output], None]
 type RuntimeHandler = Callable[[argparse.Namespace, RuntimeComposition, Output], int]
@@ -60,10 +69,12 @@ def run_command(arguments: argparse.Namespace, output: Output, collaborators: Co
         "status": _status,
         "seed-reference": _seed_reference,
     }
-    handler = handlers[arguments.db_command if arguments.command == "db" else arguments.command]
+    name = arguments.db_command if arguments.command == "db" else arguments.command
+    handler = handlers[name]
     settings = load_admin_settings()
     _route_logs(settings.bank_code, settings.log_level, arguments.quiet)
-    with database_errors_as_operator_errors(), AdminComposition(settings, collaborators) as composition:
+    connects_with = database_errors_as_operator_errors(ADMIN_VARIABLES[name])
+    with connects_with, AdminComposition(settings, collaborators) as composition:
         handler(arguments, settings, composition, output)
     return 0
 
@@ -86,8 +97,8 @@ def _provision(
 def _migrate(
     arguments: argparse.Namespace, settings: AdminSettings, composition: AdminComposition, output: Output
 ) -> None:
-    composition.owner_guard().require_owner()
     runner = composition.migrations()
+    runner.precondition(composition.owner_guard().require_owner)
     before = runner.current_revision()
     applied = runner.upgrade()
     after = runner.current_revision()

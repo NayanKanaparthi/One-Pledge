@@ -12,11 +12,11 @@ import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 
-from bank_testkit.database import BankDatabase, pairs
+from bank_testkit.database import BankDatabase, migration_runner, pairs
 from onepledge_bank_agent.domain import enums
 from onepledge_bank_agent.domain.cleaning.rows import FIELD_ORDER
 from onepledge_bank_agent.infrastructure.db.engines import make_engine
-from onepledge_bank_agent.infrastructure.db.migrations import MigrationRunner, SchemaInspector, head_revision
+from onepledge_bank_agent.infrastructure.db.migrations import SchemaInspector, head_revision
 from onepledge_bank_agent.infrastructure.db.models import Base
 from onepledge_bank_agent.infrastructure.operator_errors import OperatorError
 
@@ -102,7 +102,7 @@ def test_every_table_of_spec_12_1_exists_owned_by_the_owner_role(bank_db: BankDa
 def test_upgrade_downgrade_upgrade_leaves_an_identical_schema(bank_db: BankDatabase) -> None:
     before = snapshot(bank_db)
     assert before["triggers"] and before["grants"]
-    runner = MigrationRunner(bank_db.owner_url, bank_db.app_role)
+    runner = migration_runner(bank_db)
     runner.downgrade("base")
     emptied = snapshot(bank_db)
     assert (
@@ -150,20 +150,23 @@ def test_the_schema_status_reads_the_revision_as_the_app_role(bank_db: BankDatab
             True,
         )
         SchemaInspector(engine).require_head()
-        MigrationRunner(bank_db.owner_url, bank_db.app_role).downgrade("0002_guards")
+        migration_runner(bank_db).downgrade("0002_guards")
         with pytest.raises(OperatorError) as raised:
             SchemaInspector(engine).require_head()
-        assert raised.value.sentence == "The database at DATABASE_URL cannot be read; run db migrate first."
+        assert raised.value.sentence == (
+            "The role of DATABASE_URL lacks a privilege this command needs; "
+            "run db migrate to restore the grants, or use the role the command expects."
+        ), "before 0003 the app role holds no grant, not even SELECT on alembic_version"
     finally:
         engine.dispose()
-    MigrationRunner(bank_db.owner_url, bank_db.app_role).upgrade()
+    migration_runner(bank_db).upgrade()
 
 
 def test_the_grants_migration_refuses_a_missing_app_role(bank_db: BankDatabase) -> None:
-    runner = MigrationRunner(bank_db.owner_url, bank_db.app_role)
+    runner = migration_runner(bank_db)
     runner.downgrade("0002_guards")
     with pytest.raises(OperatorError) as raised:
-        MigrationRunner(bank_db.owner_url, "no_such_role_here").upgrade()
+        migration_runner(bank_db, "no_such_role_here").upgrade()
     assert "DB_APP_ROLE" in raised.value.sentence
     runner.upgrade()
     with psycopg.connect(bank_db.app_url) as connection:

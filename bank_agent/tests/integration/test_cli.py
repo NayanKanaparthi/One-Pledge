@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import subprocess
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import date
@@ -21,13 +22,21 @@ from psycopg import sql
 
 from bank_testkit.audit_chain import first_broken_seq
 from bank_testkit.data import seed_reference
-from bank_testkit.database import BankDatabase, drop, new_bank_database, pairs
+from bank_testkit.database import (
+    BankDatabase,
+    drop,
+    migration_runner,
+    new_bank_database,
+    pairs,
+    provision_and_migrate,
+)
 from bank_testkit.doubles import InProcessDoubles
 from bank_testkit.outside import InProcessOutsideRecords, ScriptedOutsideRecords
 from bank_testkit.pipeline import BankAgentHarness, Services
 from bank_testkit.programs import run_program
 from onepledge_bank_agent.domain.enums import TapeKind
-from onepledge_bank_agent.infrastructure.db.migrations import MigrationRunner, head_revision
+from onepledge_bank_agent.infrastructure.db.migrations import head_revision
+from onepledge_bank_agent.infrastructure.db.provisioning import DatabaseProvisioner
 from onepledge_bank_agent.infrastructure.http.base import HttpTimeouts
 from onepledge_bank_agent.interface.cli.main import main
 from onepledge_bank_agent.interface.cli.output import Output
@@ -151,7 +160,7 @@ def test_provision_migrate_and_status_bring_up_a_new_bank_database(
 def test_migrating_a_database_behind_the_head_records_both_revisions(
     bank_db: BankDatabase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    MigrationRunner(bank_db.owner_url, bank_db.app_role).downgrade("0002_guards")
+    migration_runner(bank_db).downgrade("0002_guards")
     cli = cli_for(monkeypatch, bank_db.environment())
     migrated = cli("db", "migrate", "--json")
     assert migrated.json() == {
@@ -166,7 +175,7 @@ def test_migrating_a_database_behind_the_head_records_both_revisions(
 
 def test_db_migrate_logs_each_applied_revision_and_no_library_line(bank_db: BankDatabase) -> None:
     """SPEC_DECISIONS 43.6: a schema_migration_applied record per applied revision; no Alembic INFO."""
-    MigrationRunner(bank_db.owner_url, bank_db.app_role).downgrade("0002_guards")
+    migration_runner(bank_db).downgrade("0002_guards")
     versions = Path(__file__).resolve().parents[2] / "migrations" / "versions"
     expected = sorted(path.stem for path in versions.glob("0*.py") if path.stem > "0002_guards")
     finished = run_program("onepledge-bank", ["db", "migrate", "--json"], bank_db.environment())
@@ -452,21 +461,75 @@ def test_the_worker_refuses_to_start_as_a_superuser_whatever_the_server_checks_o
     assert pairs(bank_db, "SELECT 'audit', count(*)::text FROM audit_log") == {"audit": "0"}
 
 
-def test_an_unreachable_database_is_one_sentence_without_the_url(bank_db: BankDatabase) -> None:
-    unreachable_url = "postgresql://someone:hunter2-secret@127.0.0.1:9/nowhere"
-    finished = run_program(
-        "onepledge-bank",
-        ["db", "status", "--json"],
-        {**bank_db.environment(), "DATABASE_URL": unreachable_url},
+def sentence_of(finished: subprocess.CompletedProcess[str]) -> tuple[int, str, str]:
+    """Exit code, the `--json` error code and the one sentence on stderr."""
+    _, sentences = log_lines_and_sentences(finished.stderr)
+    document = json.loads(finished.stdout)
+    assert sentences == [document["error"]["message"]]
+    return finished.returncode, document["error"]["code"], sentences[0]
+
+
+def test_an_unreachable_database_and_a_refused_connection_are_different_sentences_without_the_url(
+    bank_db: BankDatabase,
+) -> None:
+    """SPEC_DECISIONS 78: the real cause, the variable, never the value."""
+    unreachable = "postgresql://someone:hunter2-secret@127.0.0.1:9/nowhere"
+    server = bank_db.app_url.rsplit("@", 1)[1].split("/", 1)[0]
+    refused = f"postgresql://someone:hunter2-secret@{server}/optest_no_such_database"
+    environment = bank_db.environment()
+    away = run_program(
+        "onepledge-bank", ["db", "status", "--json"], {**environment, "DATABASE_URL": unreachable}
     )
-    sentence = "PostgreSQL refused the connection at DATABASE_URL; run db provision first."
-    assert finished.returncode == 1
-    assert json.loads(finished.stdout) == {
-        "ok": False,
-        "error": {"code": "DATABASE_UNAVAILABLE", "message": sentence},
-    }
-    assert log_lines_and_sentences(finished.stderr)[1] == [sentence]
-    assert "hunter2" not in finished.stderr + finished.stdout
+    assert sentence_of(away) == (
+        1,
+        "DATABASE_UNAVAILABLE",
+        "PostgreSQL is not reachable at DATABASE_URL; start it or fix the URL.",
+    )
+    no = run_program("onepledge-bank", ["db", "status", "--json"], {**environment, "DATABASE_URL": refused})
+    assert sentence_of(no) == (
+        1, "DATABASE_UNAVAILABLE",
+        "PostgreSQL refused the connection of DATABASE_URL: its role, password or database is not set up; "
+        "run db provision, or fix the URL.",
+    )  # fmt: skip
+    assert "hunter2" not in away.stderr + away.stdout + no.stderr + no.stdout
+
+
+def test_a_database_without_tables_and_a_role_without_a_privilege_are_different_sentences(
+    fresh: BankDatabase, small_data: Path
+) -> None:
+    DatabaseProvisioner(fresh.admin_url).provision(fresh.target)
+    seeding = ["seed-reference", "--data-dir", str(small_data), "--json"]
+    empty = run_program("onepledge-bank", seeding, fresh.environment())
+    assert sentence_of(empty) == (
+        1,
+        "SCHEMA_NOT_CURRENT",
+        "The bank database tables are missing; run db migrate first.",
+    )
+    migration_runner(fresh).upgrade()
+    with fresh.connect("admin") as connection:
+        connection.execute(
+            sql.SQL("REVOKE SELECT ON alembic_version FROM {}").format(sql.Identifier(fresh.app_role))
+        )
+    denied = run_program("onepledge-bank", ["db", "status", "--json"], fresh.environment())
+    assert sentence_of(denied) == (
+        1, "CONFIGURATION_ERROR",
+        "The role of DATABASE_URL lacks a privilege this command needs; "
+        "run db migrate to restore the grants, or use the role the command expects.",
+    )  # fmt: skip
+
+
+def test_provision_with_an_admin_url_that_is_not_a_superuser_says_so(fresh: BankDatabase) -> None:
+    owner_of_other = new_bank_database()
+    provision_and_migrate(owner_of_other)
+    try:
+        environment = {**fresh.environment(), "PG_ADMIN_URL": owner_of_other.owner_url}
+        refused = run_program("onepledge-bank", ["db", "provision", "--json"], environment)
+    finally:
+        drop(owner_of_other)
+    assert sentence_of(refused) == (
+        1, "CONFIGURATION_ERROR",
+        "PG_ADMIN_URL connects as a role that is not a superuser; db provision needs a superuser.",
+    )  # fmt: skip
 
 
 def test_an_unexpected_error_is_one_sentence_and_the_traceback_needs_debug(

@@ -1,7 +1,15 @@
-"""Running the Alembic migrations as the owner role, and reading where a database stands (SPEC 12.5)."""
+"""Running the Alembic migrations as the owner role, and reading where a database stands (SPEC 12.5).
+
+Every exception raised while a migration runs is a migration failure (SPEC_DECISIONS 79):
+one `schema_migration_failed` record with the exception type, its frames and the revision
+whose script was running (or the next one), and the sentence naming that revision. A
+connection that never opened names that cause instead; an unknown revision keeps Alembic's
+own sentence.
+"""
 
 from __future__ import annotations
 
+import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
 from importlib import resources
@@ -14,16 +22,24 @@ from alembic.util import CommandError
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import DBAPIError, OperationalError
 
+from onepledge_bank_agent.application.events import LogEvent
+from onepledge_bank_agent.application.ports import OperationalLog
 from onepledge_bank_agent.infrastructure.db.engines import sqlalchemy_url
+from onepledge_bank_agent.infrastructure.db.failures import (
+    connection_failed,
+    migration_failed,
+    query_refused,
+    sqlstate,
+)
 from onepledge_bank_agent.infrastructure.operator_errors import (
     CONFIGURATION_ERROR,
-    DATABASE_UNAVAILABLE,
     INSTALLATION_ERROR,
     SCHEMA_NOT_CURRENT,
     OperatorError,
 )
 
 MIGRATIONS_PACKAGE = "onepledge_bank_agent_migrations"
+OWNER_VARIABLE = "MIGRATION_DATABASE_URL"
 
 
 def alembic_config(migration_url: str | None = None, app_role: str | None = None) -> Config:
@@ -50,9 +66,10 @@ def head_revision() -> str:
 class MigrationRunner:
     """Upgrades or downgrades a bank schema as the owner role."""
 
-    def __init__(self, migration_url: str, app_role: str) -> None:
+    def __init__(self, migration_url: str, app_role: str, log: OperationalLog) -> None:
         self._config = alembic_config(migration_url, app_role)
         self._url: str = self._config.attributes["url"]
+        self._log = log
 
     def current_revision(self) -> str | None:
         """The revision the database is at, read as the owner role; None before the first migration."""
@@ -60,17 +77,20 @@ class MigrationRunner:
         try:
             with engine.connect() as connection:
                 return MigrationContext.configure(connection).get_current_revision()
-        except OperationalError:
-            raise OperatorError(
-                "PostgreSQL refused the owner connection; run db provision first.", DATABASE_UNAVAILABLE
-            ) from None
+        except OperationalError as error:
+            raise connection_failed(error, OWNER_VARIABLE) from None
         finally:
             engine.dispose()
 
+    def precondition(self, check: Callable[[], None]) -> None:
+        """Run a check that must pass before migrating (the owner mirror check of SPEC_DECISIONS 72) under
+        the same failure handling: its failure is recorded as a failed migration to head."""
+        self._guarded(check, lambda: "head")
+
     def upgrade(self, revision: str = "head") -> tuple[str, ...]:
         """Migrate up to `revision`; the revisions this applied, oldest first."""
-        before = self.current_revision()
-        self._guarded(lambda: command.upgrade(self._config, revision))
+        before = self._guarded(self.current_revision, lambda: revision)
+        self._guarded(lambda: command.upgrade(self._config, revision), lambda: self._next(before, revision))
         after = self.current_revision()
         if after is None or after == before:
             return ()
@@ -80,18 +100,51 @@ class MigrationRunner:
 
     def downgrade(self, revision: str = "base") -> None:
         """Migrate down to `revision`."""
-        self._guarded(lambda: command.downgrade(self._config, revision))
+        before = self._guarded(self.current_revision, lambda: revision)
+        self._guarded(lambda: command.downgrade(self._config, revision), lambda: before or revision)
 
-    @staticmethod
-    def _guarded(action: Callable[[], None]) -> None:
+    def _next(self, before: str | None, target: str) -> str:
+        """The first revision an upgrade from `before` towards `target` applies, or `target`."""
         try:
-            action()
-        except OperationalError:
-            raise OperatorError(
-                "PostgreSQL refused the owner connection; run db provision first.", DATABASE_UNAVAILABLE
-            ) from None
-        except CommandError as error:
-            raise OperatorError(str(error), CONFIGURATION_ERROR) from None
+            script = ScriptDirectory.from_config(self._config)
+            pending = list(script.iterate_revisions(target, before if before is not None else "base"))
+        except CommandError:
+            return target
+        return pending[-1].revision if pending else target
+
+    def _guarded[T](self, action: Callable[[], T], applying: Callable[[], str]) -> T:
+        """Every exception while migrating is a migration failure, not the last resort (SPEC_DECISIONS 79)."""
+        try:
+            return action()
+        except Exception as error:  # SPEC_DECISIONS 79: every failure of a migration ends here
+            revision = _revision_being_applied(error) or applying()
+            failure = _failure(error, revision)
+            self._log.failure(
+                LogEvent.SCHEMA_MIGRATION_FAILED, error, error_code=failure.code, revision=revision
+            )
+            raise failure from None
+
+
+def _revision_being_applied(error: BaseException) -> str | None:
+    """The `revision` of the innermost migration script on the stack of the failure, if any."""
+    found = None
+    for frame, _ in traceback.walk_tb(error.__traceback__):
+        names = frame.f_globals
+        if "down_revision" in names and isinstance(names.get("revision"), str):
+            found = names["revision"]
+    return found
+
+
+def _failure(error: BaseException, revision: str) -> OperatorError:
+    """The operator sentence of a failed migration: the connection's cause, Alembic's own sentence for an
+    unknown revision, a sentence a migration raised itself, or the fixed sentence naming the revision."""
+    if isinstance(error, OperatorError):
+        return error
+    if isinstance(error, OperationalError) and _revision_being_applied(error) is None:
+        return connection_failed(error, OWNER_VARIABLE)
+    if isinstance(error, CommandError):
+        return OperatorError(str(error), CONFIGURATION_ERROR)
+    return migration_failed(revision)
 
 
 @dataclass(frozen=True)
@@ -127,15 +180,10 @@ class SchemaInspector:
                     if exists is not None
                     else None
                 )
-        except OperationalError:
-            raise OperatorError(
-                "PostgreSQL refused the connection at DATABASE_URL; run db provision first.",
-                DATABASE_UNAVAILABLE,
-            ) from None
-        except DBAPIError:
-            raise OperatorError(
-                "The database at DATABASE_URL cannot be read; run db migrate first.", SCHEMA_NOT_CURRENT
-            ) from None
+        except OperationalError as error:
+            raise connection_failed(error, "DATABASE_URL") from None
+        except DBAPIError as error:
+            raise query_refused(sqlstate(error), "DATABASE_URL") from None
         return SchemaStatus(str(database), current, head_revision())
 
     def require_head(self) -> None:

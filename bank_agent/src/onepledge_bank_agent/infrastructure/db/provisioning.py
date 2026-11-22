@@ -16,11 +16,8 @@ from psycopg import sql
 from psycopg.rows import TupleRow
 
 from onepledge_bank_agent.infrastructure.db.engines import DatabaseTarget
-from onepledge_bank_agent.infrastructure.operator_errors import (
-    CONFIGURATION_ERROR,
-    DATABASE_UNAVAILABLE,
-    OperatorError,
-)
+from onepledge_bank_agent.infrastructure.db.failures import connection_failed, not_a_superuser
+from onepledge_bank_agent.infrastructure.operator_errors import CONFIGURATION_ERROR, OperatorError
 
 _NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
@@ -45,15 +42,18 @@ class DatabaseProvisioner:
             if database is None:
                 return psycopg.connect(self._admin_url, autocommit=True)
             return psycopg.connect(self._admin_url, autocommit=True, dbname=database)
-        except psycopg.OperationalError:
-            raise OperatorError(
-                "PostgreSQL is not reachable at PG_ADMIN_URL; start it or fix the URL.", DATABASE_UNAVAILABLE
-            ) from None
+        except psycopg.OperationalError as error:
+            raise connection_failed(error, "PG_ADMIN_URL") from None
 
     def provision(self, target: DatabaseTarget) -> None:
         """Create or update both roles, create the database, and lock down its default privileges."""
         _check_names(target)
         with self._connect() as connection:
+            superuser = connection.execute(
+                "SELECT rolsuper FROM pg_roles WHERE rolname = current_user"
+            ).fetchone()
+            if superuser != (True,):
+                raise not_a_superuser()
             for role, password in (
                 (target.owner_role, target.owner_password),
                 (target.app_role, target.app_password),

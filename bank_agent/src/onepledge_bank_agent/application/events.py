@@ -24,6 +24,7 @@ class LogEvent(StrEnum):
     ACCESS_DENIED = "access_denied"
     LIBRARY_LOG = "library_log"
     SCHEMA_MIGRATION_APPLIED = "schema_migration_applied"
+    SCHEMA_MIGRATION_FAILED = "schema_migration_failed"
     CODES_STORED = "codes_stored"
     REGISTRY_REQUESTS_PLANNED = "registry_requests_planned"
     REGISTRY_REQUEST_SENT = "registry_request_sent"
