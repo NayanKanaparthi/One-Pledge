@@ -19,10 +19,8 @@ from typing import Protocol, Self
 
 from onepledge_bank_agent.application.evidence_ports import (
     AlertRepository,
-    CertificateRepository,
-    CheckpointRepository,
-    EvidenceReader,
-    QuarantineRepository,
+    EvidenceStores,
+    HistoryReader,
     RegistryRequestRepository,
 )
 from onepledge_bank_agent.domain.audit import AuditDraft
@@ -265,28 +263,18 @@ class UnitOfWork(Protocol):
         ...
 
     @property
-    def certificates(self) -> CertificateRepository:
-        """Stored certificates."""
-        ...
-
-    @property
     def alerts(self) -> AlertRepository:
         """Alerts."""
         ...
 
     @property
-    def checkpoints(self) -> CheckpointRepository:
-        """Checkpoints received."""
+    def evidence(self) -> EvidenceStores:
+        """The insert-only proof stores: certificates, checkpoints, quarantine, integrity runs."""
         ...
 
     @property
-    def quarantine(self) -> QuarantineRepository:
-        """Registry messages quarantined."""
-        ...
-
-    @property
-    def evidence(self) -> EvidenceReader:
-        """The stored forms of every tape, reads of the audit log, and the deep verifications."""
+    def history(self) -> HistoryReader:
+        """The audit log and the stored forms of every tape, read for deep verification."""
         ...
 
     def __enter__(self) -> Self:

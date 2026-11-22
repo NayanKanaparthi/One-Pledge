@@ -74,16 +74,20 @@ class VerifyCertificate:
         """The verified certificate of the request, or the one just fetched with its verdict."""
         facts = answered(request)
         with self._units() as unit:
-            stored = unit.certificates.verified_for_requests([request.request_id]).get(request.request_id)
+            stored = unit.evidence.certificates.verified_for_requests([request.request_id]).get(
+                request.request_id
+            )
         if stored is not None:
             return stored
         signed = self._registry.certificate(facts.certificate_id)
         with self._units() as unit:
-            existing = unit.certificates.verified_for_requests([request.request_id]).get(request.request_id)
+            existing = unit.evidence.certificates.verified_for_requests([request.request_id]).get(
+                request.request_id
+            )
             if existing is not None:
                 return existing
             certificate = self._verified(unit, request, facts, signed)
-            if not unit.certificates.add(certificate):
+            if not unit.evidence.certificates.add(certificate):
                 return certificate
             failure = certificate.failure.value if certificate.failure else None
             unit.record(certificate_checked(certificate.certificate_id, request, failure, facts.as_of_seq))

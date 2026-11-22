@@ -83,15 +83,15 @@ class RunDeepVerification:
     def execute(self, requester: Requester) -> IntegrityReport:
         """The fresh report, stored and audited."""
         with self._units() as unit:
-            checkpoints = unit.checkpoints.all()
+            checkpoints = unit.evidence.checkpoints.all()
         events = self._sources.headers.read(0, ledger_end(checkpoints))
         findings = deep_findings(checkpoints, events, self._sources.verifier)
         with self._units() as unit:
             audit = self._audit_chain(unit)
             raw = self._raw_data(unit)
-            certificates = unit.certificates.all()
-            expected = unit.certificates.expected()
-            quarantined = unit.quarantine.count()
+            certificates = unit.evidence.certificates.all()
+            expected = unit.evidence.certificates.expected()
+            quarantined = unit.evidence.quarantine.count()
         verifier = self._sources.verifier
         broken_proofs = [
             problem for row in certificates if (problem := certificate_finding(row, verifier)) is not None
@@ -112,16 +112,16 @@ class RunDeepVerification:
 
     @staticmethod
     def _audit_chain(unit: UnitOfWork) -> AuditChainSection:
-        entries, last_seq = unit.evidence.audit_size()
-        first_bad = first_broken_seq(unit.evidence.audit_entries())
+        entries, last_seq = unit.history.audit_size()
+        first_bad = first_broken_seq(unit.history.audit_entries())
         return AuditChainSection(broken_if(first_bad is not None), entries, last_seq, first_bad)
 
     @staticmethod
     def _raw_data(unit: UnitOfWork) -> RawDataSection:
         bad = []
         submissions = rows = 0
-        for submission_id in unit.evidence.submission_ids():
-            tape = unit.evidence.tape(submission_id)
+        for submission_id in unit.history.submission_ids():
+            tape = unit.history.tape(submission_id)
             submissions += 1
             if tape is None or not tape_is_intact(tape):
                 bad.append(submission_id)

@@ -14,6 +14,9 @@ from pathlib import Path
 
 import pytest
 
+from onepledge_bank_agent.application.evidence_ports import EvidenceStores
+from onepledge_bank_agent.application.ports import UnitOfWork
+
 pytestmark = pytest.mark.unit
 
 PACKAGE = Path(__file__).resolve().parents[2]
@@ -344,3 +347,16 @@ def test_the_patching_rule_finds_each_planted_form() -> None:
     assert [name for name, _ in patching(planted)] == [
         "unittest.mock", "unittest.mock", "monkeypatch.setattr", "monkeypatch.setitem",
     ]  # fmt: skip
+
+
+def _properties(cls: type) -> set[str]:
+    return {name for name, value in vars(cls).items() if isinstance(value, property)}
+
+
+def test_the_evidence_group_holds_exactly_the_insert_only_proof_stores() -> None:
+    """SPEC_DECISIONS 67: `unit.evidence` is certificates, checkpoints, quarantine and runs, and no
+    proof store sits outside it."""
+    proof_stores = {"certificates", "checkpoints", "quarantine", "runs"}
+    assert _properties(EvidenceStores) == proof_stores
+    assert not proof_stores & _properties(UnitOfWork)
+    assert {"alerts", "requests", "tapes", "loans"} <= _properties(UnitOfWork), "mutable stores stay outside"

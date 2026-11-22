@@ -201,17 +201,36 @@ class IntegrityRunRepository(Protocol):
         ...
 
 
-class EvidenceReader(Protocol):
-    """The stored forms of every tape and the audit log, as deep verification reads them, and the
-    deep verifications stored.
+class EvidenceStores(Protocol):
+    """The insert-only proof stores and nothing else (SPEC_DECISIONS 67): what the registry signed and
+    the bank verified, the registry messages it quarantined, and its own deep verifications."""
 
-    Audit entries are appended through the unit of work; these are reads only.
-    """
+    @property
+    def certificates(self) -> CertificateRepository:
+        """`certificates`: every certificate received, with the bank's verdict."""
+        ...
+
+    @property
+    def checkpoints(self) -> CheckpointRepository:
+        """`checkpoints_seen`: every signed checkpoint received, with the bank's verdict."""
+        ...
+
+    @property
+    def quarantine(self) -> QuarantineRepository:
+        """`registry_messages_quarantined`: known messages whose payload broke the contract."""
+        ...
 
     @property
     def runs(self) -> IntegrityRunRepository:
         """`integrity_runs`: the deep verifications and their reports."""
         ...
+
+
+class HistoryReader(Protocol):
+    """The audit log and the stored forms of every tape, as deep verification reads them.
+
+    Audit entries are appended through the unit of work; these are reads only.
+    """
 
     def audit_entries(self) -> Iterator[AuditEntry]:
         """Every audit entry in seq order."""

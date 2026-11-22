@@ -181,7 +181,7 @@ class SyncRegistryOutbox:
             self._clock.now(),
         )  # fmt: skip
         with self._units() as unit:
-            stored = unit.quarantine.add(row)
+            stored = unit.evidence.quarantine.add(row)
             if stored:
                 unit.record(message_quarantined(message.message_id, message.message_type, quarantined))
             unit.commit()

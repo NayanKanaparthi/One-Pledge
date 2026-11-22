@@ -73,10 +73,10 @@ class VerifyCheckpoint:
     def assess(self, signed: SignedCheckpoint) -> Assessment:
         """Steps 1 to 6 of SPEC 15.3; reads headers from the registry when the checks before pass."""
         with self._units() as unit:
-            if unit.checkpoints.delivered(signed.checkpoint_seq, signed.head_hash, signed.signature):
+            if unit.evidence.checkpoints.delivered(signed.checkpoint_seq, signed.head_hash, signed.signature):
                 return Assessment(True, None)
-            previous = unit.checkpoints.latest_verified()
-            same_seq = unit.checkpoints.verified_with_seq(signed.checkpoint_seq)
+            previous = unit.evidence.checkpoints.latest_verified()
+            same_seq = unit.evidence.checkpoints.verified_with_seq(signed.checkpoint_seq)
         verdict = screen(signed, previous, same_seq, self._verifier)
         if verdict.failure is None:
             start = chain_start(previous)
@@ -88,7 +88,7 @@ class VerifyCheckpoint:
         self, unit: UnitOfWork, signed: SignedCheckpoint, verdict: CheckpointVerdict
     ) -> Checkpoint | None:
         """Store the checkpoint with its verdict and audit it; None when it was stored meanwhile."""
-        if unit.checkpoints.delivered(signed.checkpoint_seq, signed.head_hash, signed.signature):
+        if unit.evidence.checkpoints.delivered(signed.checkpoint_seq, signed.head_hash, signed.signature):
             return None
         now = self._clock.now()
         checkpoint = Checkpoint(
@@ -105,7 +105,7 @@ class VerifyCheckpoint:
             failure=verdict.failure,
             first_bad_event_seq=verdict.first_bad_event_seq,
         )
-        unit.checkpoints.add(checkpoint)
+        unit.evidence.checkpoints.add(checkpoint)
         unit.record(checkpoint_checked(checkpoint))
         log = self._log.info if checkpoint.verified else self._log.warning
         log(

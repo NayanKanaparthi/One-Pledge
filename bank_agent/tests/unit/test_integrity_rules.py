@@ -94,7 +94,7 @@ def test_any_quarantined_message_breaks_the_registry_messages_section(
 
 def failed_checkpoint(world: World) -> None:
     with world.units() as unit:
-        unit.checkpoints.add(
+        unit.evidence.checkpoints.add(
             Checkpoint(
                 uuid.uuid4(),
                 1,
@@ -115,7 +115,7 @@ def failed_checkpoint(world: World) -> None:
 
 def unproven_certificate(world: World) -> None:
     with world.units() as unit:
-        unit.certificates.add(certificate(FIRST, BAD, body=2))
+        unit.evidence.certificates.add(certificate(FIRST, BAD, body=2))
         unit.commit()
 
 
@@ -123,7 +123,9 @@ def quarantined(message_type: str) -> object:
     def store(world: World) -> None:
         payload = QuarantinedPayload(QuarantineReason.SCHEMA_MISMATCH, {"x": 1}, "e" * 64)
         with world.units() as unit:
-            unit.quarantine.add(QuarantinedMessage(uuid.uuid4(), uuid.uuid4(), 9, message_type, payload, AT))
+            unit.evidence.quarantine.add(
+                QuarantinedMessage(uuid.uuid4(), uuid.uuid4(), 9, message_type, payload, AT)
+            )
             unit.commit()
 
     return store
@@ -162,7 +164,9 @@ def test_a_verified_certificate_for_the_same_request_releases_the_halt_rule() ->
     rule = HaltRule(world.units, True, world.log)
     assert rule.active()
     with world.units() as unit:
-        assert unit.certificates.add(certificate(FIRST, None))
-        assert not unit.certificates.add(certificate(FIRST, None)), "the same delivery is stored once"
+        assert unit.evidence.certificates.add(certificate(FIRST, None))
+        assert not unit.evidence.certificates.add(certificate(FIRST, None)), (
+            "the same delivery is stored once"
+        )
         unit.commit()
     assert not rule.active()

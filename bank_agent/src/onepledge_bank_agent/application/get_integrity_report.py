@@ -57,11 +57,11 @@ class GetIntegrityReport:
     def execute(self) -> IntegrityReport:
         """The report as of now."""
         with self._units() as unit:
-            checkpoints = unit.checkpoints.all()
-            certificates = unit.certificates.all()
-            expected = unit.certificates.expected()
-            quarantined = unit.quarantine.count()
-            entries, last_seq = unit.evidence.audit_size()
+            checkpoints = unit.evidence.checkpoints.all()
+            certificates = unit.evidence.certificates.all()
+            expected = unit.evidence.certificates.expected()
+            quarantined = unit.evidence.quarantine.count()
+            entries, last_seq = unit.history.audit_size()
             run = unit.evidence.runs.latest()
         deep_checkpoints: tuple[CheckpointProblem, ...] = ()
         deep_certificates: tuple[CertificateProblem, ...] = ()

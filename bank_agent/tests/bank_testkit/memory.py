@@ -408,15 +408,34 @@ class _IntegrityRuns:
 AUDIT_TIME = datetime(2026, 11, 20, tzinfo=UTC)
 
 
-class _Evidence:
-    """The stored tapes, and the committed drafts chained the way the SQL writer chains them."""
+class _EvidenceStores:
+    """The four insert-only proof stores, over the current state."""
 
     def __init__(self, state: MemoryState) -> None:
         self._state = state
 
     @property
+    def certificates(self) -> _Certificates:
+        return _Certificates(self._state)
+
+    @property
+    def checkpoints(self) -> _Checkpoints:
+        return _Checkpoints(self._state)
+
+    @property
+    def quarantine(self) -> _Quarantine:
+        return _Quarantine(self._state)
+
+    @property
     def runs(self) -> _IntegrityRuns:
         return _IntegrityRuns(self._state)
+
+
+class _History:
+    """The stored tapes, and the committed drafts chained the way the SQL writer chains them."""
+
+    def __init__(self, state: MemoryState) -> None:
+        self._state = state
 
     def audit_entries(self) -> Iterator[AuditEntry]:
         previous: tuple[int, str] | None = None
@@ -489,8 +508,8 @@ def _outcome[T](existing: T | None, new: T) -> Upserted:
 
 
 REPOSITORIES = (
-    "tapes", "raw_rows", "items", "loans", "checks", "tokens", "facilities", "requests", "certificates",
-    "alerts", "checkpoints", "quarantine", "evidence",
+    "tapes", "raw_rows", "items", "loans", "checks", "tokens", "facilities", "requests", "alerts",
+    "evidence", "history",
 )  # fmt: skip
 
 
@@ -511,11 +530,9 @@ class MemoryUnitOfWork:
         self.tokens = _Tokens(self._state)
         self.facilities = _Facilities(self._state)
         self.requests = _Requests(self._state)
-        self.certificates = _Certificates(self._state)
         self.alerts = _Alerts(self._state)
-        self.checkpoints = _Checkpoints(self._state)
-        self.quarantine = _Quarantine(self._state)
-        self.evidence = _Evidence(self._state)
+        self.evidence = _EvidenceStores(self._state)
+        self.history = _History(self._state)
         return self
 
     def __exit__(

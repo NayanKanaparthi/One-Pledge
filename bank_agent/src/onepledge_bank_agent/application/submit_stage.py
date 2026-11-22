@@ -48,9 +48,9 @@ class HaltRule:
             return False
         with self._units() as unit:
             return (
-                unit.checkpoints.any_failed()
-                or unit.certificates.any_unproven()
-                or unit.quarantine.any_checkpoint()
+                unit.evidence.checkpoints.any_failed()
+                or unit.evidence.certificates.any_unproven()
+                or unit.evidence.quarantine.any_checkpoint()
             )
 
     def check(self, submission_id: uuid.UUID | None = None) -> None:
