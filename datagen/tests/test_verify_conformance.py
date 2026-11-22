@@ -217,11 +217,13 @@ def first_cell_replaced(relative: str, column: int, value: str) -> Change:
 @pytest.mark.parametrize(
     ("change", "sentence"),
     [
-        (raw(MANIFEST, lambda b: b"{"), "manifest.json is not valid JSON at line 1, column 2.\n"),
-        (raw(MANIFEST, lambda b: b'{"seed": ' + b"9" * 5000 + b"}"), "manifest.json nests too deeply"),
-        (raw(MANIFEST, lambda b: b"[" * 100_000), "manifest.json nests too deeply"),
-        (raw(MANIFEST, lambda b: b'{"seed": 1, "seed": 2}'), "manifest.json repeats a key or holds NaN"),
-        (raw(KEY, lambda b: b"\xff\xfe"), "answer_key/answer_key.json is not UTF-8 text.\n"),
+        (raw(MANIFEST, lambda b: b"{"), "manifest.json: not valid JSON.\n"),
+        (raw(MANIFEST, lambda b: b'{"seed": ' + b"9" * 5000 + b"}"), "manifest.json: not valid JSON.\n"),
+        (raw(MANIFEST, lambda b: b"[" * 100_000), "manifest.json: nests too deeply.\n"),
+        (raw(MANIFEST, lambda b: b"[" * 33 + b"]" * 33), "manifest.json: nests too deeply.\n"),
+        (raw(MANIFEST, lambda b: b'{"seed": 1, "seed": 2}'), "manifest.json: not valid JSON.\n"),
+        (raw(MANIFEST, lambda b: b'{"seed": NaN}'), "manifest.json: not valid JSON.\n"),
+        (raw(KEY, lambda b: b"\xff\xfe"), "answer_key/answer_key.json: not UTF-8 text.\n"),
         (
             first_cell_replaced("outside_records/payments.csv", 3, "²"),
             "payments.csv line 2 column amount_cents is not a positive whole number of cents.\n",
@@ -238,6 +240,15 @@ def first_cell_replaced(relative: str, column: int, value: str) -> Change:
         (
             edit_json(MANIFEST, lambda m: m["steps"][0].__setitem__("as_of_date", "2026-13-45")),
             "manifest.json step: field as_of_date is not a YYYY-MM-DD date.\n",
+        ),
+        # SPEC_DECISIONS 74: a path read from a file stays inside the data set (review 3 finding 6).
+        (
+            edit_json(MANIFEST, lambda m: m["steps"][0].__setitem__("file", "../../../../etc/passwd")),
+            "manifest.json names a path outside the directory.\n",
+        ),
+        (
+            edit_json(MANIFEST, lambda m: m["steps"][0].__setitem__("file", "/etc/passwd")),
+            "manifest.json names a path outside the directory.\n",
         ),
     ],
 )
@@ -438,3 +449,32 @@ def test_verify_regenerates_in_memory_and_leaves_no_file_behind(small_dir: Path,
     assert snapshot(target) == before
     assert sorted(p.name for p in tmp_path.iterdir()) == beside
     assert {p.name for p in temp.iterdir()} - temp_before == set()
+
+
+# SPEC_DECISIONS 74: a checksums entry that leaves the data set, and a file that links out of it.
+def test_a_checksums_entry_outside_the_data_set_is_named_as_such(small_dir: Path, tmp_path: Path) -> None:
+    def add_outside_entry(directory: Path) -> None:
+        path = directory / "checksums.json"
+        document = json.loads(path.read_text())
+        document["files"]["../../../../etc/passwd"] = "0" * 64
+        path.write_text(json.dumps(document))
+
+    code, out, err = run(
+        "verify", "--data-dir", str(tampered(small_dir, tmp_path / "copy", add_outside_entry, repair=False))
+    )
+    assert code == 1
+    assert "checksums.json names a path outside the directory" in out + err
+    assert "/etc/passwd is listed" not in out + err
+
+
+def test_a_file_that_links_out_of_the_data_set_is_refused_unread(small_dir: Path, tmp_path: Path) -> None:
+    def link_out(directory: Path) -> None:
+        secret = tmp_path / "secret.txt"
+        secret.write_text("not part of any data set")
+        (directory / "tapes" / "stray.csv").symlink_to(secret)
+
+    code, out, err = run(
+        "verify", "--data-dir", str(tampered(small_dir, tmp_path / "copy", link_out, repair=False))
+    )
+    assert (code, out) == (1, "")
+    assert err == "tapes/stray.csv links to a path outside the directory.\n"

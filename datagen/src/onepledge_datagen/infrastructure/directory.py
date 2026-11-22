@@ -81,11 +81,17 @@ class LocalDataDirectory:
         if not source.is_dir():
             raise DataSetUnreadableError(f"{source} is not a directory.")
         try:
-            return {
-                path.relative_to(source).as_posix(): path.read_bytes()
-                for path in sorted(source.rglob("*"))
-                if path.is_file()
-            }
+            root = source.resolve()
+            files: dict[str, bytes] = {}
+            for path in sorted(source.rglob("*")):
+                if not path.is_file():
+                    continue
+                relative = path.relative_to(source).as_posix()
+                if not path.resolve().is_relative_to(root):
+                    # A symbolic link out of the data set is never followed (SPEC_DECISIONS 74).
+                    raise DataSetUnreadableError(f"{relative} links to a path outside the directory.")
+                files[relative] = path.read_bytes()
+            return files
         except OSError as error:
             raise DataSetUnreadableError(
                 f"Cannot read the data set in {source}: {describe(error)}."

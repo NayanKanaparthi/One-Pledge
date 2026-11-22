@@ -26,7 +26,11 @@ same sentence on stderr. Two codes carry a list of problems (SPEC_DECISIONS 66):
 Every failure is one sentence and exit 1, including a path the file system refuses ("Cannot
 write the data set to PATH: permission denied; choose another --out.") and a malformed
 data set file, which is named with what is wrong ("outside_records/payments.csv line 2
-column amount_cents is not a positive whole number of cents."). An unexpected error
+column amount_cents is not a positive whole number of cents."). JSON files are read with
+the bounded parser of SPEC_DECISIONS 74 (`manifest.json: nests too deeply.`,
+`manifest.json: not valid JSON.`); a path read from a file must stay inside the data set
+(`manifest.json names a path outside the directory.`), and a file that is a symbolic link
+out of it is refused unread. An unexpected error
 prints `Unexpected error. Run with --debug for details.`; `--debug` adds the exception
 type and its frames (file, line, function), never the exception message, a source line or
 a local variable. No output holds a Python repr: lists are comma separated, alerts are

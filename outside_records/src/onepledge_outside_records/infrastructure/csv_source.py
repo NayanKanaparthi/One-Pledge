@@ -38,6 +38,11 @@ HEADERS: Mapping[str, tuple[str, ...]] = MappingProxyType(
 def _rows(directory: Path, name: str) -> list[list[str]]:
     path = directory / "outside_records" / name
     try:
+        if path.exists() and not path.resolve().is_relative_to(directory.resolve()):
+            # A symbolic link out of the data directory is never followed (SPEC_DECISIONS 74).
+            raise OperatorError(
+                f"outside_records/{name} links to a path outside the directory.", "INVALID_INPUT"
+            )
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         raise OperatorError(

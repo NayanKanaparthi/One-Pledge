@@ -14,7 +14,12 @@ from openapi_spec_validator import OpenAPIV31SpecValidator
 
 from onepledge_contract_fakes.cli_output import plural
 from onepledge_contract_fakes.contracts_check.cleaning_cases import check_cleaning_cases
-from onepledge_contract_fakes.contracts_check.documents import DocumentError, load_json, load_yaml_mapping
+from onepledge_contract_fakes.contracts_check.documents import (
+    DocumentError,
+    confined,
+    load_json,
+    load_yaml_mapping,
+)
 from onepledge_contract_fakes.contracts_check.schemas import ContractSchemas, plain_problem
 from onepledge_contract_fakes.contracts_check.vectors import (
     check_key_holder_examples,
@@ -74,6 +79,9 @@ def _external_values(node: object) -> Iterator[str]:
             yield from _external_values(item)
 
 
+INDEX = "examples/index.json"
+
+
 class ContractsChecker:
     """Runs every check over one contracts directory."""
 
@@ -98,9 +106,9 @@ class ContractsChecker:
         for name in CONTRACT_FILES:
             outcome = CheckOutcome(f"openapi {name}", "valid OpenAPI 3.1")
             try:
-                spec = load_yaml_mapping(self._dir / name)
+                spec = load_yaml_mapping(self._dir / name, name)
             except DocumentError as error:
-                outcome.problems.append(f"{name} {error.problem}")
+                outcome.problems.append(error.message)
                 outcomes.append(outcome)
                 continue
             if spec.get("openapi") != OPENAPI_VERSION:
@@ -114,11 +122,9 @@ class ContractsChecker:
 
     def _load_index(self, outcomes: list[CheckOutcome]) -> list[Mapping[str, Any]]:
         try:
-            document = load_json(self._examples / "index.json")
+            document = load_json(self._examples / "index.json", INDEX)
         except DocumentError as error:
-            outcomes.append(
-                CheckOutcome("index", "examples/index.json", [f"examples/index.json {error.problem}"])
-            )
+            outcomes.append(CheckOutcome("index", INDEX, [error.message]))
             return []
         entries = document.get("examples") if isinstance(document, dict) else None
         if not isinstance(entries, list):
@@ -143,9 +149,10 @@ class ContractsChecker:
                 invalid.add(str(file_name))
                 continue
             try:
-                instance = load_json(self._examples / str(file_name))
+                path = confined(self._examples, file_name, INDEX)
+                instance = load_json(path, f"examples/{file_name}")
             except DocumentError as error:
-                outcome.problems.append(f"examples/{file_name} {error.problem}")
+                outcome.problems.append(error.message)
                 invalid.add(str(file_name))
                 continue
             problems = validator.component_errors(schema, instance)
@@ -162,7 +169,12 @@ class ContractsChecker:
             "references", f"{plural(len(references), 'externalValue link')} resolve, every example is indexed"
         )
         for name, reference in references:
-            if not (self._dir / reference).is_file():
+            try:
+                target = confined(self._dir, reference, name)
+            except DocumentError as error:
+                outcome.problems.append(error.message)
+                continue
+            if not target.is_file():
                 outcome.problems.append(f"{name}: externalValue {reference} does not resolve to a file")
         indexed = {str(entry.get("file")) for entry in index}
         for folder in EXAMPLE_FOLDERS:
@@ -171,7 +183,11 @@ class ContractsChecker:
                 if path.is_file() and relative not in indexed:
                     outcome.problems.append(f"examples/{relative} is not listed in examples/index.json")
         for entry in index:
-            if not (self._examples / str(entry.get("file"))).is_file():
+            try:
+                listed = confined(self._examples, entry.get("file"), INDEX)
+            except DocumentError:
+                continue  # Reported once, by the examples check.
+            if not listed.is_file():
                 outcome.problems.append(
                     f"examples/index.json lists examples/{entry.get('file')}, which does not exist"
                 )
@@ -181,9 +197,9 @@ class ContractsChecker:
         """The neutral cleaning table exists and every case has the documented shape."""
         outcome = CheckOutcome("cleaning cases", "cleaning_cases.json")
         try:
-            document = load_json(self._examples / "cleaning_cases.json")
+            document = load_json(self._examples / "cleaning_cases.json", "examples/cleaning_cases.json")
         except DocumentError as error:
-            outcome.problems.append(f"cleaning_cases.json {error.problem}")
+            outcome.problems.append(error.message)
             return outcome
         outcome.problems.extend(check_cleaning_cases(document))
         cases = document.get("cases") if isinstance(document, dict) else None
@@ -203,11 +219,11 @@ class ContractsChecker:
     def _check_vector(self, name: str, summary: str, invalid_examples: set[str]) -> CheckOutcome:
         """One vector file; skipped with one line when an example it reads was already reported invalid."""
         outcome = CheckOutcome(f"vectors {name}", summary)
-        path = self._examples / "vectors" / name
+        shown = f"examples/vectors/{name}"
         try:
-            vector = load_json(path)
+            vector = load_json(self._examples / "vectors" / name, shown)
             if not isinstance(vector, dict):
-                raise DocumentError(path, "is not a JSON object")
+                raise DocumentError(shown, "not a JSON object")
             broken = sorted(set(vector_dependencies(name, vector)) & invalid_examples)
             if broken:
                 outcome.skipped_because = (
@@ -220,7 +236,7 @@ class ContractsChecker:
             else:
                 outcome.problems.extend(check_signatures(vector, self._examples))
         except DocumentError as error:
-            outcome.problems.append(f"vectors/{name} {error.problem}")
+            outcome.problems.append(error.message)
         except KeyError:
             outcome.problems.append(f"vectors/{name} lacks a field the check needs")
         except (TypeError, ValueError):

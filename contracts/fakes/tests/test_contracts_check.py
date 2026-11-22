@@ -133,14 +133,14 @@ def test_no_output_names_a_python_class(contracts_dir: Path, tmp_path: Path) -> 
     (broken / "examples" / "vectors" / "tokenization.json").write_text("[1]")
     code, text = run(broken)
     assert code == 1
-    assert "examples/registry/outbox.response.json is not valid JSON at line 1, column 2" in text
-    assert "vectors/tokenization.json is not a JSON object" in text
+    assert "examples/registry/outbox.response.json: not valid JSON" in text
+    assert "examples/vectors/tokenization.json: not a JSON object" in text
     second = copy_contracts(contracts_dir, tmp_path / "second")
     (second / "registry.yaml").write_bytes(b"\xff\xfe")
     (second / "key_holder.yaml").write_text("a: [unclosed")
     code, more = run(second)
     assert code == 1
-    assert "registry.yaml is not UTF-8 text" in more and "key_holder.yaml is not valid YAML" in more
+    assert "registry.yaml: not UTF-8 text" in more and "key_holder.yaml: not valid YAML" in more
     for name in ("Error", "Exception", "KeyError", "TypeError", "ValueError"):
         assert name not in text + more
 
@@ -229,7 +229,7 @@ def test_a_missing_cleaning_table_is_one_problem(contracts_dir: Path, tmp_path: 
     broken = copy_contracts(contracts_dir, tmp_path)
     (broken / "examples" / "cleaning_cases.json").unlink()
     code, text = run(broken)
-    assert code == 1 and "cleaning_cases.json cannot be read" in text
+    assert code == 1 and "examples/cleaning_cases.json: cannot be read" in text
     assert text.splitlines()[-1] == "contracts-check: FAILED, 1 problem"
 
 
@@ -338,3 +338,97 @@ def test_an_empty_contracts_dir_is_a_usage_error_and_the_metavar_is_dir(
     with pytest.raises(SystemExit):
         main(["check", "--help"])
     assert "--contracts-dir DIR" in capsys.readouterr().out
+
+
+# SPEC_DECISIONS 74: every file is hostile input. Each failure is one problem naming the file.
+DEEP_JSON = b"[" * 100_000
+DEEP_YAML = b"openapi: " + b"[" * 100_000
+
+
+def _index_entry_file(value: str) -> Callable[[Path], None]:
+    def change(root: Path) -> None:
+        path = root / "examples" / "index.json"
+        document = json.loads(path.read_text())
+        document["examples"][0]["file"] = value
+        path.write_text(json.dumps(document))
+
+    return change
+
+
+def _signatures_file(value: str) -> Callable[[Path], None]:
+    def change(root: Path) -> None:
+        path = root / "examples" / "vectors" / "signatures.json"
+        document = json.loads(path.read_text())
+        document["certificate"]["file"] = value
+        path.write_text(json.dumps(document))
+
+    return change
+
+
+def _symlink_out(root: Path) -> None:
+    outside = root.parent / "outside.json"
+    outside.write_text("{}")
+    (root / "examples" / "registry" / "escape.json").symlink_to(outside)
+    _index_entry_file("registry/escape.json")(root)
+
+
+HOSTILE: dict[str, tuple[Callable[[Path], None], str]] = {
+    "deep_signatures": (
+        _write("examples/vectors/signatures.json", DEEP_JSON),
+        "examples/vectors/signatures.json: nests too deeply",
+    ),
+    "deep_tokenization": (
+        _write("examples/vectors/tokenization.json", DEEP_JSON),
+        "examples/vectors/tokenization.json: nests too deeply",
+    ),
+    "deep_index": (_write("examples/index.json", DEEP_JSON), "examples/index.json: nests too deeply"),
+    "deep_cleaning": (
+        _write("examples/cleaning_cases.json", DEEP_JSON),
+        "examples/cleaning_cases.json: nests too deeply",
+    ),
+    "deep_example": (
+        _write("examples/key_holder/evaluate.request.json", DEEP_JSON),
+        "examples/key_holder/evaluate.request.json: nests too deeply",
+    ),
+    "deep_yaml": (_write("registry.yaml", DEEP_YAML), "registry.yaml: nests too deeply"),
+    "yaml_alias": (_write("registry.yaml", b"a: &x [1]\nb: *x\n"), "registry.yaml: uses a YAML alias"),
+    "yaml_too_large": (
+        _write("registry.yaml", b"#" * (5 * 1024 * 1024 + 1)),
+        "registry.yaml: larger than 5 MiB",
+    ),
+    "duplicate_key": (
+        _write("examples/index.json", b'{"examples": [], "examples": []}'),
+        "examples/index.json: not valid JSON",
+    ),
+    "long_number": (
+        _write("examples/index.json", b'{"n": ' + b"1" * 31 + b"}"),
+        "examples/index.json: not valid JSON",
+    ),
+    "index_parent_path": (
+        _index_entry_file("../../../../etc/passwd"),
+        "examples/index.json names a path outside the directory.",
+    ),
+    "index_absolute_path": (
+        _index_entry_file("/etc/passwd"),
+        "examples/index.json names a path outside the directory.",
+    ),
+    "index_symlink_out": (_symlink_out, "examples/index.json names a path outside the directory."),
+    "vector_parent_path": (
+        _signatures_file("../../../etc/passwd"),
+        "examples/vectors/signatures.json names a path outside the directory.",
+    ),
+}
+
+
+@pytest.mark.parametrize("variant", sorted(HOSTILE))
+def test_a_hostile_file_is_one_problem_that_names_it(
+    contracts_dir: Path, tmp_path: Path, variant: str
+) -> None:
+    broken = copy_contracts(contracts_dir, tmp_path)
+    change, problem = HOSTILE[variant]
+    change(broken)
+    out, err = io.StringIO(), io.StringIO()
+    assert main(["check", "--contracts-dir", str(broken)], CliOutput(out, err)) == 1
+    lines = out.getvalue().splitlines()
+    assert lines.count(f"    {problem}") == 1, out.getvalue()
+    assert "Unexpected error" not in out.getvalue() + err.getvalue()

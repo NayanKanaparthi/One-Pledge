@@ -95,7 +95,7 @@ def test_verify_of_a_missing_or_broken_directory_is_one_sentence(tmp_path: Path)
     assert code == 1 and err.endswith("is not a directory.\n")
     (tmp_path / "manifest.json").write_text("{not json")
     code, _, err = run("verify", "--data-dir", str(tmp_path))
-    assert code == 1 and err == "manifest.json is not valid JSON at line 1, column 2.\n"
+    assert code == 1 and err == "manifest.json: not valid JSON.\n"
 
 
 def test_verify_checks_the_example_contract_files(example_dir: Path, tmp_path: Path) -> None:

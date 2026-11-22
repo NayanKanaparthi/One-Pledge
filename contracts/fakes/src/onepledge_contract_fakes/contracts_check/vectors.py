@@ -21,7 +21,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from onepledge_contract_fakes.canonical_json import canonical_json, sha256_hex
-from onepledge_contract_fakes.contracts_check.documents import load_json
+from onepledge_contract_fakes.contracts_check.documents import confined, load_json
 from onepledge_contract_fakes.registry.ledger import event_hash
 
 INPUT_PREFIX = b"onepledge:v1:"
@@ -98,6 +98,7 @@ def check_tokenization(vector: Mapping[str, Any]) -> list[str]:
     return problems
 
 
+SIGNATURES = "examples/vectors/signatures.json"
 KEY_HOLDER_EXAMPLES = ("key_holder/evaluate.request.json", "key_holder/evaluate.response.json")
 
 
@@ -115,7 +116,7 @@ def vector_dependencies(name: str, vector: Mapping[str, Any]) -> list[str]:
 
 def check_key_holder_examples(vector: Mapping[str, Any], examples_dir: Path) -> list[str]:
     """The key holder examples must carry the vector's blinded and holder 1 values."""
-    request, response = (load_json(examples_dir / name) for name in KEY_HOLDER_EXAMPLES)
+    request, response = (load_json(examples_dir / name, f"examples/{name}") for name in KEY_HOLDER_EXAMPLES)
     blinded = [entry["blinded"] for entry in vector["tokens"]]
     after_1 = [entry["after_holder_1"] for entry in vector["tokens"]]
     problems = []
@@ -147,7 +148,7 @@ def _check_signed(
     key: Ed25519PrivateKey, entry: Mapping[str, Any], examples_dir: Path, with_body_hash: bool
 ) -> list[str]:
     name = entry["file"]
-    example = load_json(examples_dir / name)
+    example = load_json(confined(examples_dir, name, SIGNATURES), f"examples/{name}")
     if not isinstance(example, dict):
         return [f"{name} is not a JSON object"]
     canonical = canonical_json(example["body"])
@@ -166,7 +167,7 @@ def _check_signed(
 
 def _check_ledger_event(entry: Mapping[str, Any], examples_dir: Path) -> list[str]:
     name = entry["file"]
-    page = load_json(examples_dir / name)
+    page = load_json(confined(examples_dir, name, SIGNATURES), f"examples/{name}")
     if not isinstance(page, dict):
         return [f"{name} is not a JSON object"]
     problems = []

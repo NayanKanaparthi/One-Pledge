@@ -26,6 +26,10 @@ class MalformedJsonError(ValueError):
     """The text is not one well formed JSON document inside the bounds of SPEC_DECISIONS 38."""
 
 
+class NestingTooDeepError(MalformedJsonError):
+    """The text nests deeper than MAX_DEPTH, found before any value is built."""
+
+
 class _RefusedJsonError(ValueError):
     """An object repeats a key, or the text uses NaN or Infinity."""
 
@@ -42,7 +46,7 @@ def require_json_content_type(content_type: str | None) -> None:
 
 
 def _within_bounds(text: str) -> bool:
-    """Depth and number length on the raw text, strings skipped."""
+    """Depth and number length on the raw text, strings skipped; too deep raises NestingTooDeepError."""
     depth = number_length = 0
     index, end = 0, len(text)
     while index < end:
@@ -56,7 +60,7 @@ def _within_bounds(text: str) -> bool:
             return False
         depth += (char in _OPENING) - (char in _CLOSING)
         if depth > MAX_DEPTH:
-            return False
+            raise NestingTooDeepError
         index += 1
     return True
 
@@ -96,7 +100,9 @@ def parse_bounded_json(text: str) -> JsonValue:
         document: JsonValue = json.loads(
             text, object_pairs_hook=_object_without_duplicates, parse_constant=_refuse_constant
         )
-    except (ValueError, RecursionError):
+    except RecursionError:
+        raise NestingTooDeepError from None
+    except ValueError:
         raise MalformedJsonError from None
     return document
 

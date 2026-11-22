@@ -10,6 +10,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 
+from onepledge_datagen.domain.data_paths import is_inside, outside
 from onepledge_datagen.domain.entities import ContractRecord, PaymentRecord, TitleRecord
 from onepledge_datagen.domain.errors import DataSetUnreadableError
 from onepledge_datagen.domain.text_values import parse_iso_date
@@ -149,10 +150,12 @@ def _list(document: object, name: str, where: str) -> Sequence[object]:
 
 
 def parse_steps(manifest: object) -> tuple[ManifestStep, ...]:
-    """The steps of manifest.json."""
+    """The steps of manifest.json; a step file outside the data set is refused as such."""
     steps = []
     for entry in _list(manifest, "steps", "manifest.json"):
         where = "manifest.json step"
+        if not is_inside(_text(entry, "file", where)):
+            raise outside("manifest.json")
         steps.append(
             ManifestStep(
                 step_id=_text(entry, "step_id", where),

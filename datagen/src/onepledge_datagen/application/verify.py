@@ -29,6 +29,7 @@ from onepledge_datagen.application.model import (
 from onepledge_datagen.application.ports import DataSetCodec, DataSetDirectory
 from onepledge_datagen.application.view import DataSetView
 from onepledge_datagen.domain.bounded_json import parse_bounded_json
+from onepledge_datagen.domain.data_paths import is_inside, outside
 from onepledge_datagen.domain.entities import Profile
 from onepledge_datagen.domain.errors import DataSetUnreadableError, GeneratorVersionError
 from onepledge_datagen.domain.oracle.model import RowObservation
@@ -86,6 +87,9 @@ def checksum_violations(files: dict[str, bytes]) -> list[str]:
     if not isinstance(listed, dict) or not all(isinstance(value, str) for value in listed.values()):
         return [f"{CHECKSUMS} has no files object of path to SHA-256 text"]
     violations = []
+    if not all(is_inside(path) for path in listed):
+        violations.append(outside(CHECKSUMS).sentence.removesuffix("."))
+        listed = {path: digest for path, digest in listed.items() if is_inside(path)}
     others = {path for path in files if path != CHECKSUMS}
     for path in sorted(set(listed) | others):
         if path not in files:

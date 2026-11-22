@@ -77,6 +77,13 @@ one `SKIP` line naming the example and adds no problem. No line names a Python c
 holds a Python repr: schema problems are plain sentences (`lacks the required property
 has_more`), lists are comma separated. It also checks the shape of
 `examples/cleaning_cases.json` (at least 120 cases, SPEC_DECISIONS 50).
+Every file is read as hostile input (SPEC_DECISIONS 74): JSON through the bounded parser
+(depth 32, number literals of at most 30 characters, no duplicate key), YAML through the
+safe loader with the same depth, at most 5 MiB and no alias. A file that fails is one
+problem naming it (`examples/vectors/signatures.json: nests too deeply`,
+`registry.yaml: not valid YAML`), and a path read from a file (an index entry, a vector's
+example file, an `externalValue`) must stay inside the directory, or the problem is
+`examples/index.json names a path outside the directory.`
 With `--json`, stdout holds exactly one JSON document: `ok`, the file, example and
 problem counts, and one entry per check with its status, summary and problems (a
 `FAILED` check's summary is the count of problems found, never its success sentence); on

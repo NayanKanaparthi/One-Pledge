@@ -128,3 +128,18 @@ def test_bytes_that_are_not_utf8_are_refused(tmp_path: Path, copy_records: Calla
     (directory / "outside_records" / "titles.csv").write_bytes(b"vin,state\n\xff\xfe\n")
     with pytest.raises(OperatorError, match="cannot be read"):
         CsvRecordsSource().load(directory)
+
+
+def test_a_file_that_links_out_of_the_data_directory_is_refused_unread(
+    tmp_path: Path, copy_records: Callable[[Path], Path]
+) -> None:
+    """SPEC_DECISIONS 74: seed never follows a symbolic link out of the directory it was given."""
+    directory = copy_records(tmp_path / "data")
+    outside = tmp_path / "elsewhere.csv"
+    outside.write_text((directory / "outside_records" / "titles.csv").read_text(encoding="utf-8"))
+    titles = directory / "outside_records" / "titles.csv"
+    titles.unlink()
+    titles.symlink_to(outside)
+    with pytest.raises(OperatorError) as raised:
+        CsvRecordsSource().load(directory)
+    assert raised.value.sentence == "outside_records/titles.csv links to a path outside the directory."
