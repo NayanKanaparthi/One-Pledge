@@ -24,8 +24,13 @@ What a reviewer can check, and where:
   status, failed stage and code, and leaves FAILED only to its resume status (`OP004`,
   SPEC_DECISIONS 46); an alert is created NEW and OPEN and follows SPEC 8.5, with its
   facts immutable, its position set once and its case leaving OPEN once (`OP006`,
-  SPEC_DECISIONS 47); an audit entry that does not extend the chain fails with `OP005`
-  (`migrations/versions/0002_guards.py`, `0005_state_guards.py`). `TRUNCATE loans_raw` by the
+  SPEC_DECISIONS 47); an alert's status and case status move together, enforced by a check
+  constraint (SPEC_DECISIONS 86); every column of `loans`, `tape_submissions` and `alerts`
+  is classified as immutable, conditionally mutable or mutable, and a RELEASED loan, a
+  COMPLETED tape and a closed alert are frozen whole (SPEC_DECISIONS 87,
+  `infrastructure/db/guard_columns.py`); an audit entry that does not extend the chain
+  fails with `OP005` (`migrations/versions/0002_guards.py`, `0005_state_guards.py`,
+  `0010_column_guards.py`). `TRUNCATE loans_raw` by the
   owner fails with `0A000` first, because other tables reference it by foreign key, and
   `TRUNCATE loans_raw CASCADE` fails with `OP001` (SPEC_DECISIONS 24).
 - **What the lender sent can be rebuilt byte for byte.** Each upload keeps its BOM
@@ -35,8 +40,11 @@ What a reviewer can check, and where:
   and a test rebuilds every tape of the `full` data set from the database alone.
 - **The program cannot even try.** The API and the worker connect as `{db}_app`, which
   has `SELECT, INSERT` on those tables (and `login_attempts`), `SELECT, INSERT, UPDATE`
-  on six working tables, `SELECT` on reference data, and nothing else: no `UPDATE`,
-  `DELETE`, `TRUNCATE` or DDL (`migrations/versions/0003_grants.py`). The worker's
+  on seven working tables (`registry_outbox_attempts` among them), `SELECT` on reference
+  data and `alembic_version`, and nothing else: no `UPDATE`, `DELETE`, `TRUNCATE`, no
+  sequence and no DDL. `GRANT_MATRIX` in `infrastructure/db/role_check.py` is the one
+  statement of these grants: migration `0009_grant_matrix.py` applies it, and the startup
+  guard and the integrity report compare the connected role with it. The worker's
   settings object has no field for an owner or superuser URL, so it cannot hold one.
 - **Every change is audited in a hash chain.** Each unit of work appends its audit
   entries just before commit, under one advisory lock, each entry hashing the previous
@@ -59,16 +67,29 @@ What a reviewer can check, and where:
   (`infrastructure/crypto/blinder.py` is the only module importing `oprf`); the registry
   sees only the eight scrambled codes of each loan; alerts are explained from the
   registry's match facts alone (`AlertFacts` has no loan value).
-- **The process refuses more power than it needs.** `worker` checks the role behind
-  `DATABASE_URL` at startup and exits 1 with one line naming the variable when it is a
-  superuser, owns a table, or holds UPDATE, DELETE or TRUNCATE on an insert-only table,
-  DELETE or TRUNCATE on any table, or CREATE on the schema (SPEC_DECISIONS 43.4).
+- **The process refuses more power than it needs.** Every command that connects with
+  `DATABASE_URL` except `integrity report` (`worker`, `registry sync`, `integrity verify`)
+  inspects the connected role at startup with `inspect_role()` and exits 1 with one line
+  naming the variable and the first violation unless the role is least-privilege by the
+  six points of SPEC_DECISIONS 72: no superuser and no `CREATEDB`, `CREATEROLE`,
+  `REPLICATION` or `BYPASSRLS`; a member of no role; owner of nothing; `CONNECT` and
+  schema `USAGE` only; on every table exactly the privileges of the grant matrix, counting
+  grants to `PUBLIC` and column level grants; no sequence privilege. `integrity report`
+  shows the same violations under the control `APP_ROLE_GRANTS_EXACT` instead. `db
+  migrate` and `seed-reference` refuse a `MIGRATION_DATABASE_URL` role that does not own
+  the tables.
 - **Others can check us without trusting us, and we check them.** Every certificate and
   checkpoint is verified with the keys of `REGISTRY_PUBLIC_KEYS` only, stored with its
   verdict, and failures are never removed: a certificate that failed stays as evidence
-  beside the verified one a retry fetches (SPEC_DECISIONS 61), and an outbox message of
-  a known type whose payload breaks the contract is kept in
-  `registry_messages_quarantined` (SPEC_DECISIONS 57). The halt rule
+  beside the verified one a retry fetches (SPEC_DECISIONS 61), and an outbox message the
+  bank cannot apply is kept in `registry_messages_quarantined` with its reason
+  (SPEC_DECISIONS 85). Evidence that disappears is itself a finding: a COMPLETED tape's
+  answered request without a verified certificate is `CERTIFICATE_MISSING`, and deep
+  verification reconciles every proof table, tape and loan with the audit log and checks
+  the audit log still ends where the last verification saw it (SPEC_DECISIONS 89). The
+  database controls compare every trigger with a guard manifest of its table, events,
+  function and function source hash (`infrastructure/db/guard_manifest.py`,
+  SPEC_DECISIONS 90). The halt rule
   (`HALT_ON_REGISTRY_INTEGRITY_FAILURE`, SPEC_DECISIONS 56) stops every submission,
   resubmission and case position while a checkpoint failed, a request has a failed
   certificate and no verified one, or a CHECKPOINT message is quarantined; turning the
@@ -87,7 +108,10 @@ bank_agent/
                        0004_checkpoint_body.py (the signed checkpoint body),
                        0005_state_guards.py (tape guard, insert guards, alert guard),
                        0006_quarantine.py (the 19th table), 0007_certificate_evidence.py
-                       (failed certificates kept beside verified ones)
+                       (failed certificates kept beside verified ones),
+                       0008_outbox_poison.py (registry_outbox_attempts, the 20th table),
+                       0009_grant_matrix.py (the grant matrix), 0010_column_guards.py
+                       (status and case status pairs, column by column guards)
   src/onepledge_bank_agent/
     domain/            values (Vin, Money, Lei, ...), enums, errors (one DomainError tree and
                        the fixed message table), tape and loan state machines, alert,
@@ -143,7 +167,8 @@ onepledge-bank integrity report           the live integrity report (SPEC 15.5)
 onepledge-bank integrity verify           deep verification (SPEC 15.6): stored, audited and printed
 ```
 
-Every command takes `--json`, `--quiet` and `--debug`.
+Every command takes `--json`, `--quiet`, `--debug` and `--wide`. No option can be
+abbreviated, so `--json` is always spelled in full.
 
 - stdout carries only the result: aligned text, or with `--json` exactly one JSON
   document, `{"ok": true, ...}` with the facts the text shows, or on failure
@@ -152,8 +177,25 @@ Every command takes `--json`, `--quiet` and `--debug`.
   failure, one plain sentence.
 - Exit 0 on success, 1 for a failure (a variable missing, PostgreSQL not reachable, the
   schema not at the latest revision, an unusable reference file), 2 for a usage error.
-  An unexpected error prints `Unexpected error. Run with --debug for details.`; only
-  `--debug` adds the traceback. No output holds a URL with a password or a key.
+  A usage error prints argparse's usage text on stderr and, when `--json` is among the
+  arguments, also `{"ok": false, "error": {"code": "USAGE", "message": "The command line
+  is not valid. See the usage text."}}` on stdout (SPEC_DECISIONS 78). An unexpected
+  error prints `Unexpected error. Run with --debug for details.` and writes one `error`
+  log record `unhandled_exception` with `exception_type` and `stack` (frames only), for
+  every command; `--debug` prints the exception type and call frames. No output holds a
+  URL with a password or a key.
+- Sentences name the real cause and the variable, never its value: a server that is not
+  there, a server that refuses the connection, a database without tables, a role without
+  a privilege, and `db provision` with a `PG_ADMIN_URL` role that is not a superuser are
+  different sentences. A setting every service shares has the same sentence in each of
+  them (`PORT`, `LOG_LEVEL`, `BIND_HOST`, a database URL, a value that is not plain
+  text), and a well formed number outside its bounds says "is out of range".
+- Human readable output is at most 100 columns. The last column of a table and the
+  value of a name and value pair wrap at spaces onto lines that start under that column;
+  any other long line, an error sentence included, wraps onto lines indented two more
+  spaces; a long identifier in a table is shortened as a hash is (12 characters and
+  `...`). `--wide` turns the limit and the shortening off; `--json` carries every value
+  in full.
 - `worker` without `--once` runs until stopped and prints no result, so `--json`
   without `--once` is a usage error. The worker refuses a schema that is not at the
   latest revision.
@@ -169,16 +211,30 @@ Every command takes `--json`, `--quiet` and `--debug`.
   entry; after `downgrade base` the audit table no longer exists.
 - `seed-reference` reports, and audits in the same transaction, how many lenders and
   facilities were inserted, updated or unchanged, with the SHA-256 of `reference.json`;
-  a run that changes nothing is audited too.
+  its closing line gives the same counts, and a run that changes nothing says so and is
+  audited too. `reference.json` is read as hostile input (SPEC_DECISIONS 74): at most 5
+  MiB, at most 32 levels deep, no key twice, and each problem is one sentence that starts
+  with the file's path.
 - `worker` writes `HALT_RULE_DISABLED` at every start while
   `HALT_ON_REGISTRY_INTEGRITY_FAILURE` is false.
 - `registry sync` prints the messages processed, alerts created, case updates applied
   and checkpoints verified or failed, and is audited as `REGISTRY_SYNC_REQUESTED` with
   `via` cli. When another sync holds the bank's outbox lock it does nothing and says so.
-- `integrity report` and `integrity verify` print the six sections, their facts and
-  every failure (the twelve database controls among them); with `--json` the document is the `IntegrityReport` of
-  `bank_agent.yaml` plus `"ok": true`. `integrity verify` needs the registry: when it
-  cannot be reached it prints `DEPENDENCY_UNAVAILABLE` and stores nothing.
+  It exits 1 only when it could not reach the registry or the database; a message it
+  cannot apply is quarantined and the sync goes on (SPEC_DECISIONS 85).
+- `worker --once` runs every runnable stage even when the outbox sync failed, reports the
+  sync failure in its result, and then exits 1.
+- `integrity report` and `integrity verify` print the seven sections with their facts,
+  then under "Open failures" every finding that makes a section BROKEN (the thirteen
+  database controls and the role violations among them) and under "Recovered (evidence
+  kept)" the failures a later proof recovered; the text and the JSON form walk the same
+  lists (SPEC_DECISIONS 88). With `--json` the document is the `IntegrityReport` of
+  `bank_agent.yaml` plus `"ok": true`. Both exit 0 when the status is OK and 1 when it is
+  BROKEN, after printing the whole report. `integrity report` skips the schema and role
+  checks, so it can show `SCHEMA_AT_MIGRATION_HEAD` or a role control false; a section
+  whose query the database refuses is `NOT_VERIFIED` with the SQLSTATE. `integrity
+  verify` needs the registry: when it cannot be reached it prints
+  `DEPENDENCY_UNAVAILABLE` and stores nothing.
 - A transient dependency failure prints `DEPENDENCY_UNAVAILABLE`; a refusal or an
   answer outside the contract prints `DEPENDENCY_REJECTED` (SPEC_DECISIONS 59); the halt
   rule prints `REGISTRY_INTEGRITY_BROKEN`. Each with its fixed message.
@@ -200,10 +256,19 @@ Every command takes `--json`, `--quiet` and `--debug`.
 | COMPLETED | `CollectCertificates` | Fetches and verifies the certificate of every answered request that has no verified one (SPEC 15.2) and stores it either way; any failure ends the tape FAILED with `CERTIFICATE_INVALID`, resume status SUBMITTED (loan states are kept as the registry answered). A retry fetches again; the same failed certificate stores nothing new. Then one outbox sync. |
 
 Outside the stages: `SyncRegistryOutbox` processes ALERT, CASE_UPDATE and CHECKPOINT
-messages in position order, one transaction each, then acknowledges (SPEC 14.1); a
-known type whose payload breaks the contract is quarantined with its reason
-(`SCHEMA_MISMATCH`, `UNKNOWN_ASSET_TOKEN_FORMAT`, `OVERSIZED`), audited as
-`REGISTRY_MESSAGE_QUARANTINED` and acknowledged, so it never blocks the outbox;
+messages in position order, one transaction each, then acknowledges (SPEC 14.1). Each
+message has one of three outcomes (SPEC_DECISIONS 85, `application/outbox_outcomes.py`):
+applied; deferred (the bank's database connection lost, a serialisation failure or
+deadlock, or a passing registry outage), counted in `registry_outbox_attempts` and
+poison at the fifth deferral; or poison, which is everything else. A poison message is
+quarantined with its reason (`SCHEMA_MISMATCH`, `VALUE_OUT_OF_RANGE`,
+`CONTRADICTS_STORED_STATE`, `REFUSED_BY_DATABASE`, `REJECTED_BY_DEPENDENCY`,
+`REPEATED_FAILURE`, `OVERSIZED`, `UNEXPECTED_ERROR`), audited as
+`REGISTRY_MESSAGE_QUARANTINED`, acknowledged, and the sync goes on, so nothing a
+registry sends can block the outbox or go unrecorded. Every message is validated against
+its whole schema before a handler runs, every stored number must fit its column, and
+every id and base64 value must be spelled canonically (SPEC_DECISIONS 75), in answers of
+the shared services too. A quarantined CHECKPOINT activates the halt rule;
 `VerifyCheckpoint` applies SPEC 15.3 and stores every checkpoint with its verdict;
 `ReviewAlert`, `ResubmitLoan`, `CreateReleaseInstruction` and `RetryTape` are the
 actions of SPEC 13.8, 14.5 and 14.6 (their HTTP routes come with WP4);
@@ -246,7 +311,7 @@ records and the worker output carry the same keys. Every failure code except
 |---|---|---|
 | `BANK_CODE` | `seed-reference`, `worker`, `registry sync`, `integrity report`, `integrity verify` | `HARBOR`, `NORTHGATE` or `CALDER`. Required by every runtime command (SPEC_DECISIONS 93, item 11). |
 | `BANK_NAME` | `worker`, `registry sync`, `integrity report`, `integrity verify` | The bank's display name, 1 to 100 printable ASCII characters. Required by every runtime command. |
-| `DATABASE_URL` | `db provision`, `db status`, `worker` | `postgresql://{db}_app:PASSWORD@HOST:PORT/{db}`, the app role. |
+| `DATABASE_URL` | `db provision`, `db status`, `worker`, `registry sync`, `integrity report`, `integrity verify` | `postgresql://{db}_app:PASSWORD@HOST:PORT/{db}`, the app role. |
 | `MIGRATION_DATABASE_URL` | `db provision`, `db migrate`, `seed-reference` | `postgresql://{db}_owner:PASSWORD@HOST:PORT/{db}`, the owner role. Never read by the worker. |
 | `DB_APP_ROLE` | `db migrate` | The role that receives the grants (`{db}_app`). |
 | `PG_ADMIN_URL` | `db provision` | Superuser URL. Provisioning only. |
@@ -268,12 +333,16 @@ records and the worker output carry the same keys. Every failure code except
 `BIND_HOST` (default `127.0.0.1`) and `PORT` are read only by `serve`, the HTTP API of
 WP4 (SPEC_DECISIONS 73): no other command parses them, so a wrong value cannot stop a
 worker or a one-shot command. `BIND_HOST` is an IPv4 or IPv6 literal, or the wildcard
-`0.0.0.0` or `::`; a name such as `localhost` is refused with "set BIND_HOST to 127.0.0.1
-or 0.0.0.0". The loader checks the format now (`ServeSettings`); the probe that the
-address belongs to this machine comes with `serve`.
+`0.0.0.0` or `::`; a name such as `localhost` is refused with "Configuration error:
+BIND_HOST must be an IPv4 or IPv6 address; set it to 127.0.0.1 or 0.0.0.0.", the sentence
+of the other services. The loader checks the format now (`ServeSettings`); the probe that
+the address belongs to this machine comes with `serve` (WP4), with the sentences of
+SPEC_DECISIONS 73.
 Every value is trimmed of ASCII space, tab, CR and LF at both ends; a value that still
 holds a control character or whitespace other than the ASCII space names its variable,
-secrets included. `PORT` has no default (SPEC_DECISIONS 12); it is used by the HTTP API of WP4. Role names
+secrets included. A database URL must be `postgresql://USER:PASSWORD@HOST:PORT/DATABASE`
+(the superuser URL may omit the database), checked where it is read. `PORT` has no
+default (SPEC_DECISIONS 12); it is used by the HTTP API of WP4. Role names
 are derived from the two database URLs (SPEC_DECISIONS 17): the roles must be named
 `{db}_owner` and `{db}_app`. Database URLs and keys are held as secrets and never appear
 in a settings repr, a log line or an error message.
@@ -427,7 +496,9 @@ action and object type checks.
 | alerts | `ix_alerts_loan_id` | Lineage and loan pages list a loan's alerts (SPEC 14). |
 | checkpoints_seen | `body jsonb NOT NULL` with `ck_checkpoints_seen_body` (an object), migration 0004 | The signed body exactly as received. SPEC 12.1 stores `signed_at` as a timestamp, but the signature covers its text; deep verification (SPEC 15.6 step 4) re-verifies every stored signature, which needs the exact signed bytes (SPEC_DECISIONS 54). |
 | certificates | migration 0007 (SPEC_DECISIONS 61, 64): primary key `certificate_row_id`; `delivered_body_sha256 char(64) NOT NULL` with `ck_certificates_delivered_body_sha256` (a hex digest); `uq_certificates_verified_certificate_id` and `uq_certificates_verified_request_id` (partial, `WHERE verified`); `uq_certificates_delivery` on `(certificate_id, delivered_body_sha256, signature)`; `ix_certificates_request_id` | A failed certificate is kept beside the verified one a retry stores. `delivered_body_sha256` is the SHA-256 of the canonical JSON of the body as it arrived, computed by the bank, never taken from the registry; `body_hash` keeps the registry's claim, so the two differ exactly in a row whose body was altered. `VerifyCertificate` compares the stored column with the claim, and deep verification recomputes it from the stored body, so an edit of both `body` and `body_hash` is still found. The claim is not in the delivery key because CERTIFICATE_BODY changes only the body. |
-| registry_messages_quarantined | the 19th table, migration 0006 (SPEC_DECISIONS 57): `uq_registry_messages_quarantined_message_id`; value list on `reason`; `payload_sha256` a hex digest; `position >= 1`; `message_type` 1 to 64 characters; `(reason = 'OVERSIZED') = (payload IS NULL)` | One row per message however often it is delivered, and an oversized payload is the only one kept as its hash alone. `REGISTRY_MESSAGE_QUARANTINED` joins the audit action list. |
+| registry_messages_quarantined | the 19th table, migration 0006 (SPEC_DECISIONS 57), amended by 0008 (SPEC_DECISIONS 85): `uq_registry_messages_quarantined_message_id`; value list on `reason` (the eight reasons of decision 85); `payload_sha256` a hex digest; `position` null or `>= 1`; `message_type` 1 to 64 characters; `(reason = 'OVERSIZED') = (payload IS NULL)` | One row per message however often it is delivered, and an oversized payload is the only one kept as its hash alone. A position too large to store is kept as unknown. `REGISTRY_MESSAGE_QUARANTINED` joins the audit action list. |
+| registry_outbox_attempts | the 20th table, migration 0008 (SPEC_DECISIONS 85 rule 4): `message_id` primary key; `ck_registry_outbox_attempts_attempts`: `>= 1`; `ck_registry_outbox_attempts_last_reason`: a code | The deferrals of one message are counted in their own transaction; the fifth makes it poison. The app role may update it; rows are never removed. |
+| alerts | `ck_alerts_status_case_status`, migration 0010 (SPEC_DECISIONS 86): NEW and REVIEWING only with an OPEN case, CLEARED only with `CLEARED_DATA_ERROR` or `CLEARED_LATE_RELEASE`, ESCALATED only with CONFIRMED | Only the registry's case outcome closes an alert; no statement can store one without the other. |
 | loans, tape_submissions, alerts | insert guards `loans_insert_guard`, `tape_submissions_insert_guard`; `alerts_guard` on insert and update, migration 0005 (SPEC_DECISIONS 46, 47) | Creation in the one state SPEC allows, and the tape and alert machines as the only path. |
 | audit_log | `ck_audit_log_seq`: `>= 1`; `ck_audit_log_actor_user`: `(actor_type = 'USER') = (actor_user_id IS NOT NULL)`; `ck_audit_log_request_id`: at most 64 characters; value lists on `action` and `object_type` | The chain starts at 1; a user entry names its user and a system entry names none; request ids are bounded; actions and object types are those of SPEC 17.2 and SPEC_DECISIONS 30. |
 
@@ -443,12 +514,15 @@ action and object type checks.
 - The halt rule is checked by the submit stage, `ResubmitLoan` and the SUBMIT_POSITION
   action of `ReviewAlert`, before anything is sent (SPEC_DECISIONS 56); a release is
   accepted and its tape fails at the submit stage.
-- An outbox message of a known type whose payload is outside the contract is
-  quarantined and acknowledged (SPEC_DECISIONS 57); a number with a fraction or an
-  exponent in an outbox page is kept as its text so it fails that payload's schema
-  instead of the whole page. An unknown type is acknowledged and audited as
-  `REGISTRY_MESSAGE_IGNORED`. Only a message without a valid id, position and type
-  makes the page malformed.
+- An outbox message the bank cannot apply is quarantined and acknowledged
+  (SPEC_DECISIONS 85); a number with a fraction or an exponent, or an integer literal of
+  more than 4,000 digits, in an outbox page is kept as its text so it fails that
+  message's schema instead of the whole page, and an object that gives a key twice makes
+  only its message poison. An unknown type is acknowledged and audited as
+  `REGISTRY_MESSAGE_IGNORED`. Only a message without a parseable id or a type, or a page
+  that is not one bounded JSON document (deeper than 32 levels, a key twice at page
+  level), makes the page malformed: the sync then fails with `DEPENDENCY_REJECTED`, the
+  stages still run, and the page is read again on the next sync.
 - The certificates section counts as `total` the answered requests and as `verified`
   those with a verified row; `failures` lists every failed row ever stored with the
   last deep verification's own findings (a stored failed row is not one). Deep
