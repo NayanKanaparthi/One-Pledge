@@ -33,7 +33,9 @@ def canonical_values(loan: Mapping[str, Any]) -> dict[str, str]:
     """The canonical value string of each token kind for one loan (SPEC 9.2)."""
     vin = str(loan["vin"])
     borrower = f"{loan['lender_lei']}|{loan['borrower_ref']}"
-    cents = int(loan["original_amount_cents"])
+    cents = loan["original_amount_cents"]
+    if not isinstance(cents, int) or isinstance(cents, bool):
+        raise TypeError
     day = str(loan["origination_date"])
     return {
         "ASSET": "AUTO|" + vin,
@@ -118,9 +120,13 @@ def check_key_holder_examples(vector: Mapping[str, Any], examples_dir: Path) -> 
     after_1 = [entry["after_holder_1"] for entry in vector["tokens"]]
     problems = []
     if not isinstance(request, dict) or request.get("elements") != blinded:
-        problems.append("key_holder/evaluate.request.json elements differ from the vector's blinded values")
+        problems.append(
+            "key_holder/evaluate.request.json elements differ from the blinded values of the vector"
+        )
     if not isinstance(response, dict) or response.get("elements") != after_1:
-        problems.append("key_holder/evaluate.response.json elements differ from the vector's holder 1 values")
+        problems.append(
+            "key_holder/evaluate.response.json elements differ from the holder 1 values of the vector"
+        )
     return problems
 
 

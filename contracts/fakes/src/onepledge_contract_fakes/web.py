@@ -7,10 +7,10 @@ contracts, and validation that never echoes a submitted value.
 from __future__ import annotations
 
 import hmac
-import json
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping
+from dataclasses import dataclass
 from http import HTTPStatus
 from types import MappingProxyType
 from typing import Any
@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ValidationError
 
+from onepledge_contract_fakes.canonical_json import JsonValue
 from onepledge_contract_fakes.errors import (
     DomainError,
     ErrorDetail,
@@ -31,8 +32,9 @@ from onepledge_contract_fakes.errors import (
     UnauthenticatedError,
     ValidationFailedError,
 )
+from onepledge_contract_fakes.json_body import parse_json_request
 from onepledge_contract_fakes.logging_setup import LogEvent, get_logger
-from onepledge_contract_fakes.validation import Issue
+from onepledge_contract_fakes.validation import MAX_INTEGER, Issue, QueryParameters, parse_integer_text
 
 REQUEST_ID_HEADER = "X-Request-ID"
 TEST_CONTROL_HEADER = "X-Test-Control-Key"
@@ -44,7 +46,7 @@ _HTTP_SERVER_ERROR = 500
 # envelope is used without importing the web framework's internals. 500 stays with the
 # catch-all handler, which logs the exception.
 _HTTP_ERROR_STATUSES = tuple(
-    int(status) for status in HTTPStatus if status >= HTTPStatus.BAD_REQUEST and status != _HTTP_SERVER_ERROR
+    status.value for status in HTTPStatus if status >= HTTPStatus.BAD_REQUEST and status != _HTTP_SERVER_ERROR
 )
 
 type Scope = MutableMapping[str, Any]
@@ -73,7 +75,7 @@ _ISSUES: Mapping[str, Issue] = MappingProxyType(
         "value_error": Issue.INVALID_VALUE,
         "date_from_datetime_parsing": Issue.INVALID_DATE,
         "date_parsing": Issue.INVALID_DATE,
-        "json_invalid": Issue.INVALID_VALUE,
+        "json_invalid": Issue.INVALID_JSON,
         "int_from_float": Issue.INVALID_TYPE,
     }
 )
@@ -92,12 +94,14 @@ def request_id_of(request: Request) -> str:
     return value if isinstance(value, str) else str(uuid.uuid4())
 
 
-def error_response(error: DomainError, request_id: str) -> JSONResponse:
+def error_response(
+    error: DomainError, request_id: str, extra_headers: Mapping[str, str] | None = None
+) -> JSONResponse:
     """The contract error envelope for a named error."""
     body: dict[str, Any] = {"code": error.code, "message": error.message, "request_id": request_id}
     if error.details:
         body["details"] = [{"field": d.field, "issue": d.issue} for d in error.details]
-    headers = {REQUEST_ID_HEADER: request_id}
+    headers = {REQUEST_ID_HEADER: request_id, **(extra_headers or {})}
     if error.retry_after_seconds is not None:
         headers["Retry-After"] = str(error.retry_after_seconds)
     return JSONResponse(status_code=error.http_status, content={"error": body}, headers=headers)
@@ -148,20 +152,24 @@ def parse_model[M: BaseModel](model: type[M], document: object) -> M:
         raise ValidationFailedError(details=details_from_pydantic(list(error.errors()))) from None
 
 
-def parse_model_json[M: BaseModel](model: type[M], body: bytes) -> M:
-    """Validate raw JSON bytes against a strict request model."""
+def parse_request_model[M: BaseModel](
+    model: type[M], body: bytes, content_type: str | None
+) -> tuple[M, dict[str, JsonValue]]:
+    """A JSON request body: content type, bounded parse, then the strict model on the same bytes.
+
+    Returns the model and the parsed document (the document is what a double hashes).
+    """
+    document = parse_json_request(body, content_type)
     try:
-        return model.model_validate_json(body)
+        return model.model_validate_json(body), document
     except ValidationError as error:
         raise ValidationFailedError(details=details_from_pydantic(list(error.errors()))) from None
 
 
-def parse_json(body: bytes) -> object:
-    """Parse a request body as JSON or raise a validation error."""
-    try:
-        return json.loads(body)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        raise ValidationFailedError(details=(ErrorDetail("body", Issue.INVALID_VALUE),)) from None
+def check_test_control(request: Request, expected_key: str) -> None:
+    """A `/_test/` call: the control key, and no query parameter (none of these routes declares one)."""
+    check_test_control_key(request.headers.get(TEST_CONTROL_HEADER), expected_key)
+    QueryParameters(request.query_params.multi_items(), ()).finish()
 
 
 def check_test_control_key(presented: str | None, expected: str) -> None:
@@ -170,11 +178,26 @@ def check_test_control_key(presented: str | None, expected: str) -> None:
         raise UnauthenticatedError
 
 
+def new_service_app(title: str) -> FastAPI:
+    """A double's app: no documentation routes, no slash redirection, the envelope and the middleware.
+
+    With `redirect_slashes` off a path with a trailing slash is an unknown route, so no
+    response of a double is ever a redirect (SPEC_DECISIONS 35).
+    """
+    app = FastAPI(title=title, docs_url=None, redoc_url=None, openapi_url=None, redirect_slashes=False)
+    install_error_handlers(app)
+    app.add_middleware(RequestContextMiddleware)
+    return app
+
+
 def install_error_handlers(app: FastAPI) -> None:
     """Map every error to the contract envelope with a fixed message."""
 
     async def domain_error(request: Request, exc: Exception) -> Response:
         error = exc if isinstance(exc, DomainError) else DomainError()
+        if error.http_status == _HTTP_SERVER_ERROR:
+            # A named 500 (an injected failure, an invariant) is still one failure: one error record.
+            _log.error(LogEvent.INTERNAL_ERROR, error_code=error.code)
         return error_response(error, request_id_of(request))
 
     async def validation_error(request: Request, exc: Exception) -> Response:
@@ -187,12 +210,17 @@ def install_error_handlers(app: FastAPI) -> None:
         code = getattr(exc, "status_code", _HTTP_SERVER_ERROR)
         status = code if isinstance(code, int) else _HTTP_SERVER_ERROR
         if status == _HTTP_METHOD_NOT_ALLOWED:
-            return error_response(MethodNotAllowedError(), request_id_of(request))
+            # The router names the route's methods; RFC 9110 requires them in `Allow` (SPEC_DECISIONS 43.5).
+            headers = getattr(exc, "headers", None) or {}
+            allow = {"Allow": headers["Allow"]} if "Allow" in headers else {}
+            return error_response(MethodNotAllowedError(), request_id_of(request), allow)
         if status == _HTTP_NOT_FOUND:
             return error_response(ResourceNotFoundError(), request_id_of(request))
         return error_response(DomainError(), request_id_of(request))
 
     async def unexpected_error(request: Request, exc: Exception) -> Response:
+        # Reached only by a defect of the middleware itself: the middleware handles every
+        # exception the app raises while the request id is still bound.
         _log.error(LogEvent.UNHANDLED_EXCEPTION, exc_info=exc)
         return error_response(DomainError(), request_id_of(request))
 
@@ -213,16 +241,33 @@ def _request_id_from(scope: Scope) -> str:
     return str(uuid.uuid4())
 
 
-def _content_length(scope: Scope) -> int | None:
+def _declared_length(scope: Scope, limit: int) -> None:
+    """Refuse a malformed `Content-Length` (422) or one above the limit (413) before the body is read."""
     for name, value in scope.get("headers", []):
         if name.lower() == b"content-length":
-            text = value.decode("latin-1")
-            return int(text) if text.isdigit() else None
-    return None
+            parsed = parse_integer_text(value.decode("latin-1"), 0, MAX_INTEGER)
+            if isinstance(parsed, Issue):
+                raise ValidationFailedError(details=(ErrorDetail("Content-Length", parsed),))
+            if parsed > limit:
+                raise PayloadTooLargeError
+
+
+@dataclass
+class _Exchange:
+    """What the middleware knows about the response of one request."""
+
+    status: int = _HTTP_SERVER_ERROR
+    started: bool = False
 
 
 class RequestContextMiddleware:
-    """Binds the request id, limits the body size and writes one access record per request."""
+    """Binds the request id, limits the body size, handles every failure and writes one access record.
+
+    The request id stays bound until the failure record and the access record are written,
+    and is unbound last, whatever happened (SPEC_DECISIONS 36). An exception the app raises
+    is logged here, once, with the request id, and answered with the 500 envelope when no
+    response has started.
+    """
 
     def __init__(self, app: AsgiApp, max_body_bytes: int = MAX_BODY_BYTES) -> None:
         self._app = app
@@ -237,25 +282,27 @@ class RequestContextMiddleware:
         scope["onepledge.request_id"] = request_id
         structlog.contextvars.bind_contextvars(request_id=request_id)
         started = time.monotonic()
-        status_holder = {"status": _HTTP_SERVER_ERROR}
-        declared = _content_length(scope)
+        exchange = _Exchange()
+        sending = self._with_request_id(send, request_id, exchange)
         try:
-            if declared is not None and declared > self._max_body_bytes:
-                await error_response(PayloadTooLargeError(), request_id)(scope, receive, send)
-                status_holder["status"] = PayloadTooLargeError.http_status
-                return
-            await self._app(
-                scope, self._limited(receive), self._with_request_id(send, request_id, status_holder)
-            )
-        finally:
+            try:
+                _declared_length(scope, self._max_body_bytes)
+                await self._app(scope, self._limited(receive), sending)
+            except DomainError as error:
+                await error_response(error, request_id)(scope, receive, sending)
+            except Exception as error:  # Every failure of the app ends here, logged once (SPEC_DECISIONS 34).
+                _log.error(LogEvent.UNHANDLED_EXCEPTION, exc_info=error)
+                if not exchange.started:
+                    await error_response(DomainError(), request_id)(scope, receive, sending)
             route = scope.get("route")
             _log.info(
                 LogEvent.HTTP_REQUEST,
                 method=scope.get("method", ""),
                 route=getattr(route, "path", "unmatched"),
-                http_status=status_holder["status"],
-                duration_ms=int((time.monotonic() - started) * 1000),
+                http_status=exchange.status,
+                duration_ms=round((time.monotonic() - started) * 1000),
             )
+        finally:
             structlog.contextvars.unbind_contextvars("request_id")
 
     def _limited(self, receive: Receive) -> Receive:
@@ -274,10 +321,12 @@ class RequestContextMiddleware:
         return wrapped
 
     @staticmethod
-    def _with_request_id(send: Send, request_id: str, status_holder: dict[str, int]) -> Send:
+    def _with_request_id(send: Send, request_id: str, exchange: _Exchange) -> Send:
         async def wrapped(message: Message) -> None:
             if message["type"] == "http.response.start":
-                status_holder["status"] = int(message["status"])
+                exchange.started = True
+                status = message["status"]
+                exchange.status = status if isinstance(status, int) else _HTTP_SERVER_ERROR
                 headers = [(k, v) for k, v in message.get("headers", []) if k.lower() != b"x-request-id"]
                 headers.append((b"x-request-id", request_id.encode("latin-1")))
                 message["headers"] = headers

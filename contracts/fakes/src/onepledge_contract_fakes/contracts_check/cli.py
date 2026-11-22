@@ -11,7 +11,7 @@ from pathlib import Path
 
 from onepledge_contract_fakes.canonical_json import JsonValue
 from onepledge_contract_fakes.cli_output import CliOutput, common_options, plural, run_guarded
-from onepledge_contract_fakes.contracts_check.checker import CheckReport, ContractsChecker
+from onepledge_contract_fakes.contracts_check.checker import CheckOutcome, CheckReport, ContractsChecker
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -23,7 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
     check = commands.add_parser(
         "check",
-        parents=[common_options(result=True)],
+        parents=[common_options(result=True, logs=False)],
         help="run every contract check and print one line per check",
         description="Validate the four OpenAPI files, every indexed example, every externalValue link and "
         "the published test vectors. Exits 0 when everything passes and 1 otherwise.",
@@ -52,12 +52,19 @@ def render(report: CheckReport, out: CliOutput) -> None:
         files, examples = plural(report.contract_count, "file"), plural(report.example_count, "example")
         out.line(f"contracts-check: OK ({files}, {examples})")
     else:
-        out.line(f"contracts-check: FAILED ({plural(problem_count(report), 'problem')})")
+        out.line(f"contracts-check: FAILED, {plural(problem_count(report), 'problem')}")
 
 
 def problem_count(report: CheckReport) -> int:
     """Problems over every check (a skipped check adds none)."""
     return sum(len(outcome.problems) for outcome in report.outcomes)
+
+
+def _summary(outcome: CheckOutcome) -> str:
+    """What the check found: its success sentence only when it passed (SPEC_DECISIONS 40)."""
+    if outcome.skipped_because is not None:
+        return outcome.skipped_because
+    return outcome.summary if outcome.ok else f"{plural(len(outcome.problems), 'problem')} found"
 
 
 def report_json(report: CheckReport) -> dict[str, JsonValue]:
@@ -66,7 +73,7 @@ def report_json(report: CheckReport) -> dict[str, JsonValue]:
         {
             "name": outcome.name,
             "status": "SKIPPED" if outcome.skipped_because else ("OK" if outcome.ok else "FAILED"),
-            "summary": outcome.skipped_because or outcome.summary,
+            "summary": _summary(outcome),
             "problems": list(outcome.problems),
         }
         for outcome in report.outcomes

@@ -189,3 +189,95 @@ def test_environment_reader_optional_and_integer_defaults() -> None:
     assert env.integer("MISSING", 3) == 3
     with pytest.raises(ConfigurationError):
         env.integer("N", minimum=8)
+
+
+# SPEC_DECISIONS 37 and 43.3: every numeric or address setting goes through the one integer rule
+# and the loader, so a malformed value stops startup with one line naming the variable.
+
+RISTRETTO_ORDER = 2**252 + 27742317777372353535851937790883648493
+BAD_INTEGER_TEXTS = [
+    "\u00b2",
+    "\u0663",
+    "\uff11",
+    "+1",
+    "\u00a01",
+    "1 1",
+    "1.0",
+    "1e3",
+    "0x10",
+    "1_000",
+    "9" * 19,
+    "9" * 5000,
+]
+
+
+def scalar_b64(number: int) -> str:
+    return base64.b64encode(number.to_bytes(32, "little")).decode()
+
+
+@pytest.mark.parametrize("version", BAD_INTEGER_TEXTS)
+def test_a_key_version_that_is_not_ascii_digits_names_the_keys_variable(version: str) -> None:
+    keys = json.dumps({version: base64.b64encode(new_scalar()).decode()})
+    with pytest.raises(ConfigurationError) as raised:
+        KeyHolderSettings.from_env(key_holder_env(FAKE_KH_KEYS=keys, FAKE_KH_ACTIVE_VERSION="3"))
+    assert raised.value.variable == "FAKE_KH_KEYS"
+
+
+@pytest.mark.parametrize("variable", ["FAKE_KH_ACTIVE_VERSION", "PORT", "FAKE_KH_DAILY_ELEMENT_CAP"])
+@pytest.mark.parametrize("value", BAD_INTEGER_TEXTS)
+def test_an_integer_setting_that_is_not_ascii_digits_is_named(variable: str, value: str) -> None:
+    with pytest.raises(ConfigurationError) as raised:
+        KeyHolderSettings.from_env(key_holder_env(**{variable: value}))
+    assert raised.value.variable == variable
+    assert raised.value.problem == "must be a whole number written with the digits 0 to 9"
+
+
+@pytest.mark.parametrize(
+    "keys",
+    [
+        '{"1": ' + "9" * 5000 + "}",
+        '{"1": "a", "1": "b"}',
+        '{"01": "%s", "1": "%s"}',
+        "[" * 100_000,
+        '{"1": NaN}',
+    ],
+)
+def test_malformed_keys_json_names_the_variable(keys: str) -> None:
+    if "%s" in keys:
+        keys = keys % (scalar_b64(5), scalar_b64(7))
+    with pytest.raises(ConfigurationError) as raised:
+        KeyHolderSettings.from_env(key_holder_env(FAKE_KH_KEYS=keys))
+    assert raised.value.variable == "FAKE_KH_KEYS"
+
+
+@pytest.mark.parametrize("number", [0, 1, RISTRETTO_ORDER, RISTRETTO_ORDER + 1])
+def test_a_scalar_of_zero_or_one_is_refused(number: int) -> None:
+    keys = json.dumps({"1": scalar_b64(number)})
+    with pytest.raises(ConfigurationError) as raised:
+        KeyHolderSettings.from_env(key_holder_env(FAKE_KH_KEYS=keys))
+    assert raised.value.variable == "FAKE_KH_KEYS"
+    assert "zero or one" in raised.value.problem
+
+
+def test_a_scalar_of_two_is_accepted() -> None:
+    settings = KeyHolderSettings.from_env(key_holder_env(FAKE_KH_KEYS=json.dumps({"1": scalar_b64(2)})))
+    assert settings.active_version == 1
+
+
+BAD_HOSTS = ["999.1.1.1", "localhost", "127.0.0.1\u00a0", "1.2.3", "::g", "\u0661.0.0.1"]
+
+
+@pytest.mark.parametrize("host", BAD_HOSTS)
+def test_an_invalid_bind_host_is_named(host: str) -> None:
+    for build in (
+        lambda: KeyHolderSettings.from_env(key_holder_env(BIND_HOST=host)),
+        lambda: RegistrySettings.from_env(registry_env(BIND_HOST=host)),
+    ):
+        with pytest.raises(ConfigurationError) as raised:
+            build()
+        assert raised.value.variable == "BIND_HOST"
+
+
+@pytest.mark.parametrize("host", ["192.0.2.1", "127.0.0.1", "::1", "2001:db8::1"])
+def test_ip_address_bind_hosts_are_accepted(host: str) -> None:
+    assert KeyHolderSettings.from_env(key_holder_env(BIND_HOST=host)).bind_host == host

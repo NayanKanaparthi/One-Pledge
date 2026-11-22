@@ -48,7 +48,7 @@ def test_a_missing_required_field_fails_and_names_the_file(contracts_dir: Path, 
     assert code == 1
     assert "examples/registry/outbox.response.json" in text and "has_more" in text
     assert "contracts-check: FAIL examples: 1 problem" in text.splitlines()
-    assert text.splitlines()[-1] == "contracts-check: FAILED (1 problem)"
+    assert text.splitlines()[-1] == "contracts-check: FAILED, 1 problem"
 
 
 def test_a_wrong_format_fails(contracts_dir: Path, tmp_path: Path) -> None:
@@ -123,7 +123,7 @@ def test_a_broken_example_is_one_problem_and_its_vector_is_skipped(
         "contracts-check: SKIP vectors/signatures.json: not checked, depends on "
         "registry/certificate.response.json which is invalid"
     ) in text.splitlines()
-    assert text.splitlines()[-1] == "contracts-check: FAILED (1 problem)"
+    assert text.splitlines()[-1] == "contracts-check: FAILED, 1 problem"
     assert "Error" not in text and "(KeyError)" not in text
 
 
@@ -133,7 +133,7 @@ def test_no_output_names_a_python_class(contracts_dir: Path, tmp_path: Path) -> 
     (broken / "examples" / "vectors" / "tokenization.json").write_text("[1]")
     code, text = run(broken)
     assert code == 1
-    assert "examples/registry/outbox.response.json is not valid JSON (line 1, column 2)" in text
+    assert "examples/registry/outbox.response.json is not valid JSON at line 1, column 2" in text
     assert "vectors/tokenization.json is not a JSON object" in text
     second = copy_contracts(contracts_dir, tmp_path / "second")
     (second / "registry.yaml").write_bytes(b"\xff\xfe")
@@ -175,7 +175,11 @@ def test_an_unexpected_failure_is_one_sentence_and_the_traceback_needs_debug(
     assert (
         main(["check", "--debug", "--contracts-dir", str(contracts_dir)], CliOutput(io.StringIO(), err)) == 1
     )
-    assert "Traceback (most recent call last)" in err.getvalue() and "RuntimeError: boom" in err.getvalue()
+    text = err.getvalue()
+    # SPEC_DECISIONS 53.12: the type and the frames, never the message or a source line.
+    assert text.startswith("RuntimeError, raised at:\n") and "boom" not in text and "Traceback" not in text
+    assert "test_contracts_check.py:" in text and " explode\n" in text
+    assert 'raise RuntimeError("boom")' not in text
 
 
 def edit_cleaning_cases(broken: Path, change: Callable[[dict[str, Any]], None]) -> None:
@@ -226,4 +230,99 @@ def test_a_missing_cleaning_table_is_one_problem(contracts_dir: Path, tmp_path: 
     (broken / "examples" / "cleaning_cases.json").unlink()
     code, text = run(broken)
     assert code == 1 and "cleaning_cases.json cannot be read" in text
-    assert text.splitlines()[-1] == "contracts-check: FAILED (1 problem)"
+    assert text.splitlines()[-1] == "contracts-check: FAILED, 1 problem"
+
+
+# SPEC_DECISIONS 43.11 and 40: no Python repr in any failing output, and a FAILED check never
+# carries its success sentence in `--json`.
+
+
+def _delete_key(path: str, key: str) -> Callable[[Path], None]:
+    def change(root: Path) -> None:
+        target = root / "examples" / path
+        document = json.loads(target.read_text())
+        del document[key]
+        target.write_text(json.dumps(document))
+
+    return change
+
+
+def _set_key(path: str, key: str, value: object) -> Callable[[Path], None]:
+    def change(root: Path) -> None:
+        target = root / "examples" / path
+        document = json.loads(target.read_text())
+        document[key] = value
+        target.write_text(json.dumps(document))
+
+    return change
+
+
+def _write(path: str, content: bytes) -> Callable[[Path], None]:
+    def change(root: Path) -> None:
+        (root / path).write_bytes(content)
+
+    return change
+
+
+def _remove(path: str) -> Callable[[Path], None]:
+    def change(root: Path) -> None:
+        (root / path).unlink()
+
+    return change
+
+
+def _yaml_edit(name: str, old: str, new: str) -> Callable[[Path], None]:
+    def change(root: Path) -> None:
+        target = root / name
+        target.write_text(target.read_text().replace(old, new, 1))
+
+    return change
+
+
+BROKEN_VARIANTS: dict[str, Callable[[Path], None]] = {
+    "required": _delete_key("registry/certificate.response.json", "body"),
+    "required_in_request": _delete_key("registry/submission.pledge.request.json", "kind"),
+    "wrong_type": _set_key("registry/outbox.response.json", "has_more", "yes"),
+    "enum": _set_key("registry/submission.pledge.request.json", "kind", "NONSENSE"),
+    "extra_property": _set_key("registry/outbox.response.json", "unexpected['x']", 1),
+    "format": _set_key("outside_records/title.response.json", "lien_recorded_on", "2026-02-30"),
+    "invalid_json": _write("examples/key_holder/evaluate.request.json", b"{not json"),
+    "invalid_utf8": _write("examples/vectors/tokenization.json", b"\xff\xfe\x00"),
+    "broken_yaml": _write("registry.yaml", b"openapi: [unclosed"),
+    "invalid_openapi": _yaml_edit("key_holder.yaml", "paths:", "pathz:"),
+    "missing_index": _remove("examples/index.json"),
+    "empty_index": _write("examples/index.json", b"[]"),
+    "missing_vector": _remove("examples/vectors/tokenization.json"),
+    "wrong_vector": _write("examples/vectors/signatures.json", b'{"x": 1}'),
+    "unindexed": _write("examples/registry/unindexed.json", b"x"),
+    "missing_contract": _remove("key_holder.yaml"),
+    "cleaning_table": _write("examples/cleaning_cases.json", b'{"cases": [{"id": "(x)"}]}'),
+}
+
+
+@pytest.mark.parametrize("variant", sorted(BROKEN_VARIANTS))
+def test_no_failing_output_holds_a_python_repr(contracts_dir: Path, tmp_path: Path, variant: str) -> None:
+    broken = copy_contracts(contracts_dir, tmp_path)
+    BROKEN_VARIANTS[variant](broken)
+    out, err = io.StringIO(), io.StringIO()
+    assert main(["check", "--contracts-dir", str(broken)], CliOutput(out, err)) == 1
+    text = out.getvalue() + err.getvalue()
+    assert "FAIL" in text
+    for character in ("[", "'", "("):
+        assert character not in text, (variant, [line for line in text.splitlines() if character in line])
+    code, document, _ = run_json(broken)
+    checks = document["checks"]
+    assert code == 1 and isinstance(checks, list)
+    for check in checks:
+        assert isinstance(check, dict)
+        if check["status"] == "FAILED":
+            assert (
+                check["summary"]
+                == f"{len(check['problems'])} problem{'s' if len(check['problems']) != 1 else ''} found"
+            )
+
+
+def test_quiet_says_it_has_no_effect_where_no_log_is_written(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        main(["check", "--help"])
+    assert "no effect: this command writes no log lines" in " ".join(capsys.readouterr().out.split())

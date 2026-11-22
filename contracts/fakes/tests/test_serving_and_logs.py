@@ -24,6 +24,7 @@ from onepledge_contract_fakes.testing import new_members
 from onepledge_contract_fakes.web import RequestContextMiddleware, install_error_handlers
 
 pytestmark = pytest.mark.integration
+SERVED_REQUEST_ID = "44444444-4444-4444-8444-444444444444"
 
 
 def free_port() -> int:
@@ -57,7 +58,9 @@ def served_failing_app(capsys: pytest.CaptureFixture[str]) -> Iterator[Callable[
         if server.started:
             break
         time.sleep(0.05)
-    response = httpx.get(f"http://127.0.0.1:{port}/v1/boom", timeout=5)
+    response = httpx.get(
+        f"http://127.0.0.1:{port}/v1/boom", headers={"X-Request-ID": SERVED_REQUEST_ID}, timeout=5
+    )
     assert response.status_code == 500 and response.json()["error"]["code"] == "INTERNAL_ERROR"
     server.should_exit = True
     thread.join(timeout=10)
@@ -75,6 +78,7 @@ def test_one_unhandled_failure_writes_exactly_one_error_record(
     errors = [record for record in records if record["level"] == "error"]
     assert len(errors) == 1
     assert errors[0]["event"] == "unhandled_exception" and errors[0]["exception_type"] == "RuntimeError"
+    assert errors[0]["request_id"] == SERVED_REQUEST_ID
     assert all(record["service"] == "registry" for record in records)
     assert "1HGCM82633A004352" not in json.dumps(records) and "exploded" not in json.dumps(records)
 

@@ -48,7 +48,7 @@ class RegistrySettings(BaseModel):
         controls = env.boolean("FAKE_TEST_CONTROLS", default=False)
         control_key = env.test_control_key(controls)
         return cls(
-            bind_host=env.optional("BIND_HOST", "127.0.0.1"),
+            bind_host=env.bind_host(),
             port=env.port(),
             signing_seed=SecretBytes(env.secret_base64_32("FAKE_REGISTRY_SIGNING_SEED_B64")),
             signing_key_id=key_id,

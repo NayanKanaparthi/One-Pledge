@@ -7,10 +7,12 @@ reference every cleaning implementation runs.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from datetime import date
 
 MIN_CASES = 120
+_PLAIN_ID = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 FORMAT_VERSION = 1
 FIELDS = frozenset(
     {
@@ -77,7 +79,9 @@ def check_cleaning_cases(document: object) -> list[str]:
     seen: set[str] = set()
     for index, case in enumerate(cases):
         identifier = case.get("id") if isinstance(case, Mapping) else None
-        name = identifier if isinstance(identifier, str) else f"#{index}"
+        # An id is echoed only when it is plain text, so no output carries a quote or bracket.
+        plain = isinstance(identifier, str) and _PLAIN_ID.fullmatch(identifier) is not None
+        name = identifier if plain and isinstance(identifier, str) else f"#{index}"
         if name in seen:
             problems.append(f"cleaning case {name} is listed twice")
         seen.add(name)

@@ -6,6 +6,7 @@ One worker, uvicorn's own access log off, logging through `logging_setup`.
 from __future__ import annotations
 
 import errno
+import ipaddress
 import socket
 
 import uvicorn
@@ -13,25 +14,34 @@ from fastapi import FastAPI
 
 from onepledge_contract_fakes.logging_setup import LogEvent, configure_logging, get_logger
 
+IPV6 = 6
 
-class PortUnavailableError(Exception):
-    """The configured host and port cannot be bound."""
 
-    def __init__(self, host: str, port: int) -> None:
-        super().__init__("port unavailable")
-        self.host = host
-        self.port = port
+class BindError(Exception):
+    """The configured host and port cannot be bound; carries the operator sentence."""
+
+    def __init__(self, sentence: str) -> None:
+        super().__init__(sentence)
+        self.sentence = sentence
 
 
 def ensure_port_free(host: str, port: int) -> None:
-    """Fail early with a clear error when the port is already taken."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+    """Fail early with one sentence when the address cannot be bound (taken, not permitted, not local)."""
+    family = socket.AF_INET6 if ipaddress.ip_address(host).version == IPV6 else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as probe:
         probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             probe.bind((host, port))
         except OSError as error:
-            if error.errno in (errno.EADDRINUSE, errno.EACCES, errno.EADDRNOTAVAIL):
-                raise PortUnavailableError(host, port) from None
+            if error.errno == errno.EADDRNOTAVAIL:
+                raise BindError(
+                    f"BIND_HOST {host} is not an address of this machine; "
+                    "set BIND_HOST to 127.0.0.1 or 0.0.0.0."
+                ) from None
+            if error.errno in (errno.EADDRINUSE, errno.EACCES):
+                raise BindError(
+                    f"Port {port} on {host} is already in use or not permitted; set another PORT."
+                ) from None
             raise
 
 

@@ -46,4 +46,4 @@ def load_json(path: Path) -> object:
     except UnicodeDecodeError:
         raise DocumentError(path, "is not UTF-8 text") from None
     except json.JSONDecodeError as error:
-        raise DocumentError(path, f"is not valid JSON (line {error.lineno}, column {error.colno})") from None
+        raise DocumentError(path, f"is not valid JSON at line {error.lineno}, column {error.colno}") from None

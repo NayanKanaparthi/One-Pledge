@@ -243,7 +243,7 @@ def test_a_repeated_conflict_reuses_the_open_case_without_new_events_or_alerts(w
     assert len(world.messages(1, "ALERT")) == 1
 
 
-EXACT_COPY_KINDS = ALL_KINDS
+VERBATIM_COPY_KINDS = ALL_KINDS
 CHANGED_COPY_KINDS = ["ASSET", "VIN", "BORROWER", "AMOUNT_1000", "DATE_MONTH"]
 
 
@@ -267,7 +267,7 @@ def test_a_repeated_conflict_reports_this_items_own_match(
         exact = loan == Loan("VIN-R")
         assert result["result"] == "CONFLICT"
         assert (result["match_kind"], result["match_basis"]) == ("EXACT" if exact else "LIKELY", "ASSET")
-        assert result["kinds_matched"] == (EXACT_COPY_KINDS if exact else CHANGED_COPY_KINDS)
+        assert result["kinds_matched"] == (VERBATIM_COPY_KINDS if exact else CHANGED_COPY_KINDS)
     assert second["case_id"] == first["case_id"]
     added = world.events()[len(events_before) :]
     assert "CASE_OPENED" not in added and "CONFLICT_DETECTED" not in added

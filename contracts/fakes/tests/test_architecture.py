@@ -65,3 +65,66 @@ def test_no_type_check_is_suppressed() -> None:
     package = SOURCE.parents[1]
     for path in [*package.joinpath("src").rglob("*.py"), *package.joinpath("tests").rglob("*.py")]:
         assert "type: " + "ignore" not in path.read_text(encoding="utf-8"), path.name
+
+
+def parsed(path: Path) -> ast.Module:
+    return ast.parse(path.read_text(encoding="utf-8"))
+
+
+# SPEC_DECISIONS 37: one text to integer function, `validation.parse_integer_text`, which builds
+# the value by arithmetic. Nothing in the package calls `int()` at all, asks Unicode whether a
+# character is a digit, or writes the Unicode digit class `\d` in a pattern.
+UNICODE_DIGIT_PREDICATES = frozenset({"isdigit", "isdecimal", "isnumeric"})
+
+
+def test_no_text_becomes_an_integer_outside_the_one_function() -> None:
+    for path in modules():
+        nodes = list(ast.walk(parsed(path)))
+        name = path.relative_to(SOURCE)
+        called = {n.func.id for n in nodes if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        attributes = {n.attr for n in nodes if isinstance(n, ast.Attribute)}
+        strings = [n.value for n in nodes if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+        assert "int" not in called, f"{name} calls int(); use validation.parse_integer_text"
+        assert not attributes & UNICODE_DIGIT_PREDICATES, (
+            f"{name} asks Unicode whether a character is a digit"
+        )
+        assert not [s for s in strings if "\\d" in s], f"{name} writes the Unicode digit class in a pattern"
+
+
+# SPEC_DECISIONS 38: JSON text is parsed only by the bounded parser (request bodies and settings)
+# and by the contract checker's loader of the repository's own files; a request model validates
+# the same bytes only after the bounded parse in `web.parse_request_model`.
+JSON_PARSERS = frozenset({SOURCE / "json_body.py", SOURCE / "contracts_check" / "documents.py"})
+
+
+def json_parsing_calls(path: Path) -> list[str]:
+    found = []
+    for call in ast.walk(parsed(path)):
+        if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute):
+            owner = call.func.value.id if isinstance(call.func.value, ast.Name) else ""
+            attr = call.func.attr
+            if (attr in ("loads", "load") and owner == "json") or attr in ("json", "model_validate_json"):
+                found.append(attr)
+    return found
+
+
+def test_json_text_is_parsed_only_by_the_bounded_parser() -> None:
+    for path in modules():
+        found = json_parsing_calls(path)
+        if path == SOURCE / "web.py":
+            found = [attr for attr in found if attr != "model_validate_json"]
+        assert path in JSON_PARSERS or not found, f"{path.relative_to(SOURCE)} parses JSON with {found}"
+
+
+# SPEC_DECISIONS 35: every app is built by `web.new_service_app`, the one place that turns slash
+# redirection off.
+def test_apps_are_built_only_with_slash_redirection_off() -> None:
+    builders = 0
+    for path in modules():
+        for node in ast.walk(parsed(path)):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "FastAPI":
+                assert path == SOURCE / "web.py", f"{path.relative_to(SOURCE)} builds its own FastAPI app"
+                flag = {k.arg: k.value for k in node.keywords}.get("redirect_slashes")
+                assert isinstance(flag, ast.Constant) and flag.value is False
+                builders += 1
+    assert builders == 1

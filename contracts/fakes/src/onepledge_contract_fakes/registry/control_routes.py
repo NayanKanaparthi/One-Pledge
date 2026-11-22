@@ -6,13 +6,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from onepledge_contract_fakes.controls import ControlState, parse_failure_spec
+from onepledge_contract_fakes.json_body import parse_json_request
 from onepledge_contract_fakes.registry.double import RegistryDouble
 from onepledge_contract_fakes.registry.inspection import parse_tamper_request
 from onepledge_contract_fakes.web import (
-    TEST_CONTROL_HEADER,
-    check_test_control_key,
+    check_test_control,
     contract_routes,
-    parse_json,
 )
 
 
@@ -20,7 +19,7 @@ def mount_test_controls(app: FastAPI, double: RegistryDouble, controls: ControlS
     """Add the test control routes, each guarded by the test control key."""
 
     def guard(request: Request) -> None:
-        check_test_control_key(request.headers.get(TEST_CONTROL_HEADER), key)
+        check_test_control(request, key)
 
     @app.get("/_test/stats")
     async def stats(request: Request) -> JSONResponse:
@@ -36,7 +35,7 @@ def mount_test_controls(app: FastAPI, double: RegistryDouble, controls: ControlS
     @app.post("/_test/fail-next")
     async def fail_next(request: Request) -> JSONResponse:
         guard(request)
-        document = parse_json(await request.body())
+        document = parse_json_request(await request.body(), request.headers.get("content-type"))
         spec = parse_failure_spec(document, contract_routes(app), allow_after_commit=True)
         controls.arm(spec)
         return JSONResponse(
@@ -52,7 +51,11 @@ def mount_test_controls(app: FastAPI, double: RegistryDouble, controls: ControlS
     async def tamper(request: Request) -> JSONResponse:
         guard(request)
         return JSONResponse(
-            double.test_controls.tamper(parse_tamper_request(parse_json(await request.body())))
+            double.test_controls.tamper(
+                parse_tamper_request(
+                    parse_json_request(await request.body(), request.headers.get("content-type"))
+                )
+            )
         )
 
     @app.post("/_test/checkpoint")

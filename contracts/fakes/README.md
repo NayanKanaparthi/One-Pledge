@@ -6,7 +6,14 @@ as `contracts/key_holder.yaml` and `contracts/registry.yaml` describe, so layer 
 verified end to end now, and layer 2 has an executable reference of the draft contract.
 
 - No database. All state is in memory and is lost when the process stops.
-- Every response of `/healthz` carries `"test_double": true`.
+- Every response of `/healthz` carries `"test_double": true`. `/healthz` ignores its query
+  string (probes add cache busters) and never answers 422.
+- No response is a redirect: a path with a trailing slash is an unknown route, 404
+  `NOT_FOUND` in the error envelope. A 405 names the route's methods in `Allow`.
+- Every 500 writes exactly one `error` log record carrying the response's `request_id`.
+  Log lines are JSON with the allow-listed keys of SPEC 16.5 plus `revision`; records of
+  third party libraries below WARNING are dropped, and above it keep only `logger`,
+  `level` and `exception_type` (event `library_log`), never the library's message.
 - Test-only control endpoints live under `/_test/` and exist only when `FAKE_TEST_CONTROLS=true`.
 - Nothing in layers 2 or 3 imports this package outside tests.
 
@@ -49,8 +56,10 @@ onepledge-contracts check [--contracts-dir contracts] [--json] [--quiet] [--debu
 
 Every command prints one sentence on stderr and exits 1 when something is wrong, and
 exits 2 on a usage error. An unexpected error prints `Unexpected error. Run with --debug
-for details.`; `--debug` adds the traceback. `serve` prints no result, so it refuses
-`--json` as a usage error.
+for details.`; `--debug` adds the exception type and its frames (file, line, function),
+never the exception message, a source line or a local variable. `serve` prints no
+result, so it refuses `--json` as a usage error. The checker writes no log lines, so its
+`--quiet` has no effect (it is kept for one interface across commands).
 
 `onepledge-contracts check` (run from the repository root, or `make contracts-check`)
 validates the four OpenAPI 3.1 files with `openapi-spec-validator`, validates every entry
@@ -58,11 +67,16 @@ of `contracts/examples/index.json` against its component schema (JSON Schema 202
 `date`, `date-time` and `uuid` format checks), checks that every `externalValue` resolves
 and every example file is indexed, and recomputes `examples/vectors/tokenization.json` and
 `examples/vectors/signatures.json` from their stated inputs. It prints one line per check
-and `contracts-check: OK (4 files, N examples)`, or the problems and exit code 1. A vector
+and `contracts-check: OK (4 files, N examples)`, or the problems, `contracts-check: FAILED,
+N problems` and exit code 1. A vector
 that reads an example already reported invalid is not checked a second time: it prints
-one `SKIP` line naming the example and adds no problem. No line names a Python class.
+one `SKIP` line naming the example and adds no problem. No line names a Python class or
+holds a Python repr: schema problems are plain sentences (`lacks the required property
+has_more`), lists are comma separated. It also checks the shape of
+`examples/cleaning_cases.json` (at least 120 cases, SPEC_DECISIONS 50).
 With `--json`, stdout holds exactly one JSON document: `ok`, the file, example and
-problem counts, and one entry per check with its status, summary and problems; on
+problem counts, and one entry per check with its status, summary and problems (a
+`FAILED` check's summary is the count of problems found, never its success sentence); on
 failure also `error` with a `code` (`CONTRACTS_INVALID`, `CONTRACTS_DIR_NOT_FOUND`) and
 the sentence that went to stderr.
 
@@ -77,8 +91,8 @@ Key holder double:
 |---|---|---|
 | `HOLDER_ID` | required | `kh1` or `kh2`. |
 | `PORT` | required | TCP port. |
-| `BIND_HOST` | `127.0.0.1` | Address to bind (`0.0.0.0` in containers). |
-| `FAKE_KH_KEYS` | required | JSON object of key version to base64 scalar, for example `{"1": "<44 base64 characters>"}`. Every scalar must decode to 32 bytes and not be zero. |
+| `BIND_HOST` | `127.0.0.1` | IP address to bind (`0.0.0.0` in containers). A value that is not an IPv4 or IPv6 address, or not an address of this machine, stops startup with one line naming `BIND_HOST`. |
+| `FAKE_KH_KEYS` | required | JSON object of key version to base64 scalar, for example `{"1": "<44 base64 characters>"}`. Versions are ASCII digits; every scalar must decode to 32 bytes and be neither zero nor one (modulo the group order). |
 | `FAKE_KH_ACTIVE_VERSION` | required | The version used when a request does not pin one. |
 | `FAKE_KH_MEMBERS` | required | JSON list of `{"member_id": "<uuid>", "api_key_sha256": "<64 hex>"}`. |
 | `FAKE_KH_DAILY_ELEMENT_CAP` | `1000000` | Elements per member per UTC day. |
@@ -91,7 +105,7 @@ Registry double:
 | Variable | Default | Meaning |
 |---|---|---|
 | `PORT` | required | TCP port. |
-| `BIND_HOST` | `127.0.0.1` | Address to bind. |
+| `BIND_HOST` | `127.0.0.1` | IP address to bind, validated as for the key holder. |
 | `FAKE_REGISTRY_SIGNING_SEED_B64` | required | Base64 of a 32 byte Ed25519 seed. |
 | `REGISTRY_SIGNING_KEY_ID` | required | Key id placed on certificates and checkpoints, `^[a-z0-9-]{1,64}$`. |
 | `FAKE_REGISTRY_MEMBERS` | required | JSON list of `{"member_id", "api_key_sha256"}`, in the order members join. |
@@ -136,10 +150,22 @@ to 18 ASCII digits inside their bounds (`offset` at most 1,000,000). A 422 names
 contract field or `body` / `query` and one issue of the vocabulary of SPEC_DECISIONS 22:
 `REQUIRED`, `INVALID_TYPE`, `INVALID_INTEGER`, `OUT_OF_RANGE`, `PATTERN_MISMATCH`,
 `INVALID_VALUE`, `TOO_LONG`, `TOO_SHORT`, `TOO_MANY_ITEMS`, `TOO_FEW_ITEMS`, `DUPLICATE`,
-`UNKNOWN_FIELD`, `UNKNOWN_PARAMETER`, plus `NOT_A_VALID_POINT` and `DUPLICATE_ASSET_TOKEN`
+`UNKNOWN_FIELD`, `UNKNOWN_PARAMETER`, `INVALID_JSON`, plus `NOT_A_VALID_POINT` and `DUPLICATE_ASSET_TOKEN`
 from the contracts. A name the client invented is never returned: any unknown body key is
-`body` `UNKNOWN_FIELD` once, any unknown query parameter `query` `UNKNOWN_PARAMETER`. A
-body that is not valid JSON is `body` `INVALID_VALUE`.
+`body` `UNKNOWN_FIELD` once, any unknown query parameter `query` `UNKNOWN_PARAMETER`
+(also on the `/_test/` routes). A JSON `null` where a value is required is
+`INVALID_TYPE`; only an absent key is `REQUIRED`. A missing `Idempotency-Key` is
+`REQUIRED`, a malformed one `PATTERN_MISMATCH`.
+
+Every body, `/_test/` bodies included, is parsed by one bounded parser (SPEC_DECISIONS
+38): a syntax error, invalid UTF-8, nesting deeper than 32 levels, a number literal longer
+than 30 characters, a duplicate key, `NaN` or `Infinity`, or a top level value that is
+not an object is `body` `INVALID_JSON`. A body must be sent with `Content-Type:
+application/json` (parameters such as `charset` allowed), otherwise `Content-Type`
+`INVALID_VALUE`. A malformed `Content-Length` is `Content-Length` `INVALID_INTEGER` (a negative one `OUT_OF_RANGE`), one
+above 1 MiB is 413. Integer settings and header values follow the same rule as query
+integers (ASCII digits only), so a malformed numeric setting stops startup with one line
+naming the variable.
 
 ## Test controls (`/_test/`, not part of any contract)
 

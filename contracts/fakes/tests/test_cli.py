@@ -87,8 +87,62 @@ def test_a_port_in_use_is_one_sentence(clean_env: pytest.MonkeyPatch) -> None:
         assert registry_cli.main(["serve"], CliOutput(io.StringIO(), err)) == 1
         assert (
             err.getvalue()
-            == f"Port {port} on 127.0.0.1 is already in use or not available; set another PORT.\n"
+            == f"Port {port} on 127.0.0.1 is already in use or not permitted; set another PORT.\n"
         )
+
+
+def key_holder_env(keys: str, active: str = "1") -> dict[str, str]:
+    return {
+        "HOLDER_ID": "kh1",
+        "PORT": str(free_port()),
+        "FAKE_KH_KEYS": keys,
+        "FAKE_KH_ACTIVE_VERSION": active,
+        "FAKE_KH_MEMBERS": members_json(),
+    }
+
+
+SCALAR = base64.b64encode(new_scalar()).decode()
+ONE = base64.b64encode((1).to_bytes(32, "little")).decode()
+
+
+@pytest.mark.parametrize(
+    ("env", "sentence"),
+    [
+        (key_holder_env(json.dumps({"\u00b2": SCALAR})), "FAKE_KH_KEYS must map positive integer versions"),
+        (
+            key_holder_env(json.dumps({"\u0663": SCALAR}), "3"),
+            "FAKE_KH_KEYS must map positive integer versions",
+        ),
+        (key_holder_env(json.dumps({"9" * 5000: SCALAR})), "FAKE_KH_KEYS must map positive integer versions"),
+        (key_holder_env('{"1": ' + "9" * 5000 + "}"), "FAKE_KH_KEYS must be valid JSON"),
+        (
+            key_holder_env(json.dumps({"1": SCALAR}), "9" * 5000),
+            "FAKE_KH_ACTIVE_VERSION must be a whole number",
+        ),
+        (key_holder_env(json.dumps({"1": ONE})), "FAKE_KH_KEYS must not contain a scalar of zero or one"),
+        ({**key_holder_env(json.dumps({"1": SCALAR})), "BIND_HOST": "999.1.1.1"}, "BIND_HOST must be an IP"),
+    ],
+)
+def test_a_malformed_setting_is_one_line_naming_the_variable(
+    clean_env: pytest.MonkeyPatch, env: dict[str, str], sentence: str
+) -> None:
+    for name, value in env.items():
+        clean_env.setenv(name, value)
+    out, err = io.StringIO(), io.StringIO()
+    assert key_holder_cli.main(["serve"], CliOutput(out, err)) == 1
+    assert err.getvalue().startswith(f"Configuration error: {sentence}")
+    assert err.getvalue().count("\n") == 1 and "Unexpected error" not in err.getvalue()
+    assert out.getvalue() == ""
+
+
+def test_a_bind_host_that_is_not_local_is_one_sentence(clean_env: pytest.MonkeyPatch) -> None:
+    for name, value in {**registry_env(free_port()), "BIND_HOST": "192.0.2.77"}.items():
+        clean_env.setenv(name, value)
+    err = io.StringIO()
+    assert registry_cli.main(["serve"], CliOutput(io.StringIO(), err)) == 1
+    assert err.getvalue() == (
+        "BIND_HOST 192.0.2.77 is not an address of this machine; set BIND_HOST to 127.0.0.1 or 0.0.0.0.\n"
+    )
 
 
 @pytest.mark.integration

@@ -6,6 +6,7 @@ refused as a whole with the seconds until the next UTC midnight.
 
 from __future__ import annotations
 
+import math
 from datetime import date, datetime, time, timedelta
 
 from onepledge_contract_fakes.clock import Clock
@@ -32,4 +33,4 @@ class DailyCap:
 
 def _seconds_to_midnight(now: datetime) -> int:
     midnight = datetime.combine(now.date() + timedelta(days=1), time(0), tzinfo=now.tzinfo)
-    return max(1, int((midnight - now).total_seconds()))
+    return max(1, math.floor((midnight - now).total_seconds()))

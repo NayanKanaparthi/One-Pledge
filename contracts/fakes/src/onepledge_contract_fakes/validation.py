@@ -8,15 +8,12 @@ value or a name the client invented.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Collection, Sequence
 from enum import StrEnum, auto
 
 from onepledge_contract_fakes.errors import ErrorDetail, ValidationFailedError
 
 MAX_OFFSET = 1_000_000
-_UNSIGNED = re.compile(r"[0-9]{1,18}", re.ASCII)
-_NEGATIVE = re.compile(r"-[0-9]{1,18}", re.ASCII)
 
 
 class Issue(StrEnum):
@@ -41,22 +38,32 @@ class Issue(StrEnum):
     DUPLICATE = auto()
     UNKNOWN_FIELD = auto()
     UNKNOWN_PARAMETER = auto()
+    INVALID_JSON = auto()
     NOT_A_VALID_POINT = auto()
     DUPLICATE_ASSET_TOKEN = auto()
 
 
-def parse_integer_text(text: str, minimum: int, maximum: int) -> int | Issue:
-    """An integer written as 1 to 18 ASCII digits and inside its bounds, or the issue.
+MAX_DIGITS = 18
+MAX_INTEGER = 10**MAX_DIGITS - 1
+_DIGITS = "0123456789"
 
-    A sign, a space, a decimal point, an exponent, a non-ASCII digit, an empty value or
-    more than 18 digits is INVALID_INTEGER. A well formed negative number is outside
-    every bound here, so it is OUT_OF_RANGE, like any other number outside its bounds.
+
+def parse_integer_text(text: str, minimum: int, maximum: int) -> int | Issue:
+    """The one text to integer function of this package (SPEC_DECISIONS 37).
+
+    Well formed means `^-?[0-9]{1,18}$` in ASCII digits; anything else (a `+`, a space, a
+    point, an exponent, a non-ASCII digit, an empty value, more than 18 digits) is
+    INVALID_INTEGER. A well formed integer outside the bounds is OUT_OF_RANGE. The value
+    is built by arithmetic, so no other digit than `0` to `9` can ever count.
     """
-    if _NEGATIVE.fullmatch(text):
-        return Issue.OUT_OF_RANGE
-    if not _UNSIGNED.fullmatch(text):
+    negative = text.startswith("-")
+    digits = text[1:] if negative else text
+    if not 1 <= len(digits) <= MAX_DIGITS or any(char not in _DIGITS for char in digits):
         return Issue.INVALID_INTEGER
-    number = int(text)
+    number = 0
+    for char in digits:
+        number = number * 10 + _DIGITS.index(char)
+    number = -number if negative else number
     if not minimum <= number <= maximum:
         return Issue.OUT_OF_RANGE
     return number
@@ -110,7 +117,10 @@ class QueryParameters:
 
 
 class JsonFields:
-    """A JSON object body with named fields, checked by type and bounds (used by the test controls)."""
+    """A JSON object body with named fields, checked by type and bounds (used by the test controls).
+
+    An absent field is REQUIRED when the body must have it; a present `null` is INVALID_TYPE.
+    """
 
     def __init__(self, document: object, required: Collection[str], optional: Collection[str] = ()) -> None:
         self.details: list[ErrorDetail] = []
@@ -128,9 +138,9 @@ class JsonFields:
 
     def integer(self, name: str, minimum: int, maximum: int) -> int | None:
         """A JSON integer (not a float, not a boolean) inside its bounds."""
-        value = self._document.get(name)
-        if value is None:
+        if name not in self._document:
             return None
+        value = self._document[name]
         if not isinstance(value, int) or isinstance(value, bool):
             self.details.append(ErrorDetail(name, Issue.INVALID_TYPE))
             return None
@@ -141,9 +151,9 @@ class JsonFields:
 
     def choice(self, name: str, values: Collection[str]) -> str | None:
         """A JSON string from an enumeration."""
-        value = self._document.get(name)
-        if value is None:
+        if name not in self._document:
             return None
+        value = self._document[name]
         if not isinstance(value, str):
             self.details.append(ErrorDetail(name, Issue.INVALID_TYPE))
             return None
@@ -154,9 +164,9 @@ class JsonFields:
 
     def string(self, name: str) -> str | None:
         """A JSON string."""
-        value = self._document.get(name)
-        if value is None:
+        if name not in self._document:
             return None
+        value = self._document[name]
         if not isinstance(value, str):
             self.details.append(ErrorDetail(name, Issue.INVALID_TYPE))
             return None

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Collection
 from dataclasses import dataclass
@@ -22,9 +21,8 @@ from onepledge_contract_fakes.registry.model import CaseStatus
 from onepledge_contract_fakes.registry.wire import CasePositionRequestModel, SubmissionRequestModel
 from onepledge_contract_fakes.validation import MAX_OFFSET, Issue, QueryParameters
 from onepledge_contract_fakes.web import (
-    RequestContextMiddleware,
-    install_error_handlers,
-    parse_model_json,
+    new_service_app,
+    parse_request_model,
     route_template,
 )
 
@@ -92,11 +90,9 @@ def create_registry_app(
     double = RegistryDouble(config, clock or SystemClock(), ids or RandomIds())
     controls = ControlState() if config.test_controls else None
     guard = _Guard(double, controls)
-    app = FastAPI(title="OnePledge registry TEST DOUBLE", docs_url=None, redoc_url=None, openapi_url=None)
+    app = new_service_app("OnePledge registry TEST DOUBLE")
     app.state.double = double
     app.state.controls = controls
-    install_error_handlers(app)
-    app.add_middleware(RequestContextMiddleware)
     _mount_submissions(app, double, guard)
     _mount_reads(app, double, guard)
     if controls is not None and config.test_control_key is not None:
@@ -108,12 +104,16 @@ def _mount_submissions(app: FastAPI, double: RegistryDouble, guard: _Guard) -> N
     @app.post("/v1/submissions")
     async def create_submission(request: Request) -> Response:
         entry = await guard.enter(request)
-        key = request.headers.get("idempotency-key", "")
+        key = request.headers.get("idempotency-key")
+        if key is None:
+            raise ValidationFailedError(details=(ErrorDetail("Idempotency-Key", Issue.REQUIRED),))
         if not _IDEMPOTENCY_KEY.fullmatch(key):
             raise ValidationFailedError(details=(ErrorDetail("Idempotency-Key", Issue.PATTERN_MISMATCH),))
-        model = parse_model_json(SubmissionRequestModel, entry.body)
-        # The strict model refuses every float, so the body hashed here is canonical JSON input.
-        body_hash = canonical_sha256(json.loads(entry.body))
+        model, document = parse_request_model(
+            SubmissionRequestModel, entry.body, request.headers.get("content-type")
+        )
+        # The strict model refuses every float, so the parsed document is canonical JSON input.
+        body_hash = canonical_sha256(document)
         outcome = double.submit(entry.caller, key, model.to_submission(), body_hash)
         guard.after_commit()
         headers = {"Idempotent-Replay": "true"} if outcome.replay else {}
@@ -127,7 +127,9 @@ def _mount_submissions(app: FastAPI, double: RegistryDouble, guard: _Guard) -> N
     @app.post("/v1/cases/{case_id}/resolution")
     async def post_case_position(case_id: str, request: Request) -> JSONResponse:
         entry = await guard.enter(request)
-        model = parse_model_json(CasePositionRequestModel, entry.body)
+        model, _ = parse_request_model(
+            CasePositionRequestModel, entry.body, request.headers.get("content-type")
+        )
         return JSONResponse(double.record_position(entry.caller, case_id, model.to_position()))
 
     @app.post("/v1/outbox/{message_id}/ack", status_code=204)
@@ -175,6 +177,6 @@ def _mount_reads(app: FastAPI, double: RegistryDouble, guard: _Guard) -> None:
         return JSONResponse(double.latest_checkpoint())
 
     @app.get("/healthz")
-    async def healthz(request: Request) -> JSONResponse:
-        QueryParameters(request.query_params.multi_items(), ()).finish()
+    async def healthz() -> JSONResponse:
+        # Probes add cache busters: health ignores its query (SPEC_DECISIONS 41).
         return JSONResponse({"status": "ok", "service": "registry", "test_double": True})

@@ -15,7 +15,7 @@ from openapi_spec_validator import OpenAPIV31SpecValidator
 from onepledge_contract_fakes.cli_output import plural
 from onepledge_contract_fakes.contracts_check.cleaning_cases import check_cleaning_cases
 from onepledge_contract_fakes.contracts_check.documents import DocumentError, load_json, load_yaml_mapping
-from onepledge_contract_fakes.contracts_check.schemas import ContractSchemas
+from onepledge_contract_fakes.contracts_check.schemas import ContractSchemas, plain_problem
 from onepledge_contract_fakes.contracts_check.vectors import (
     check_key_holder_examples,
     check_signatures,
@@ -106,7 +106,7 @@ class ContractsChecker:
             if spec.get("openapi") != OPENAPI_VERSION:
                 outcome.problems.append(f"{name} does not declare openapi: {OPENAPI_VERSION}")
             outcome.problems.extend(
-                f"{name}: {issue.message}" for issue in OpenAPIV31SpecValidator(spec).iter_errors()
+                f"{name}: {plain_problem(issue)}" for issue in OpenAPIV31SpecValidator(spec).iter_errors()
             )
             specs[name] = spec
             outcomes.append(outcome)

@@ -12,17 +12,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from onepledge_contract_fakes.clock import Clock, SystemClock
 from onepledge_contract_fakes.controls import ControlState, FailureWhen, parse_failure_spec
 from onepledge_contract_fakes.errors import InjectedFailureError
+from onepledge_contract_fakes.json_body import parse_json_request
 from onepledge_contract_fakes.key_holder.config import KeyHolderConfig
 from onepledge_contract_fakes.key_holder.double import EvaluationRequest, KeyHolderDouble
 from onepledge_contract_fakes.validation import QueryParameters
 from onepledge_contract_fakes.web import (
-    TEST_CONTROL_HEADER,
-    RequestContextMiddleware,
-    check_test_control_key,
+    check_test_control,
     contract_routes,
-    install_error_handlers,
-    parse_json,
-    parse_model_json,
+    new_service_app,
+    parse_request_model,
     route_template,
 )
 
@@ -47,11 +45,9 @@ def create_key_holder_app(config: KeyHolderConfig, clock: Clock | None = None) -
     """Build the FastAPI app around a fresh in-memory double."""
     double = KeyHolderDouble(config, clock or SystemClock())
     controls = ControlState() if config.test_controls else None
-    app = FastAPI(title="OnePledge key holder TEST DOUBLE", docs_url=None, redoc_url=None, openapi_url=None)
+    app = new_service_app("OnePledge key holder TEST DOUBLE")
     app.state.double = double
     app.state.controls = controls
-    install_error_handlers(app)
-    app.add_middleware(RequestContextMiddleware)
 
     @app.post("/v1/evaluate")
     async def evaluate(request: Request) -> JSONResponse:
@@ -64,7 +60,7 @@ def create_key_holder_app(config: KeyHolderConfig, clock: Clock | None = None) -
                 raise InjectedFailureError(status)
         member_id = double.authenticate(api_key)
         QueryParameters(request.query_params.multi_items(), ()).finish()
-        model = parse_model_json(EvaluateRequestModel, body)
+        model, _ = parse_request_model(EvaluateRequestModel, body, request.headers.get("content-type"))
         command = EvaluationRequest(str(model.request_id), model.key_version, tuple(model.elements))
         result = double.evaluate(member_id, command)
         return JSONResponse(
@@ -77,8 +73,8 @@ def create_key_holder_app(config: KeyHolderConfig, clock: Clock | None = None) -
         )
 
     @app.get("/healthz")
-    async def healthz(request: Request) -> JSONResponse:
-        QueryParameters(request.query_params.multi_items(), ()).finish()
+    async def healthz() -> JSONResponse:
+        # Probes add cache busters: health ignores its query (SPEC_DECISIONS 41).
         return JSONResponse(
             {
                 "status": "ok",
@@ -97,19 +93,19 @@ def create_key_holder_app(config: KeyHolderConfig, clock: Clock | None = None) -
 def _mount_controls(app: FastAPI, double: KeyHolderDouble, controls: ControlState, key: str) -> None:
     @app.get("/_test/stats")
     async def stats(request: Request) -> JSONResponse:
-        check_test_control_key(request.headers.get(TEST_CONTROL_HEADER), key)
+        check_test_control(request, key)
         return JSONResponse(double.stats())
 
     @app.get("/_test/received")
     async def received(request: Request) -> JSONResponse:
-        check_test_control_key(request.headers.get(TEST_CONTROL_HEADER), key)
+        check_test_control(request, key)
         items = [{"path": r.path, "member_id": r.member_id, "body": r.body} for r in controls.received()]
         return JSONResponse({"requests": items})
 
     @app.post("/_test/fail-next")
     async def fail_next(request: Request) -> JSONResponse:
-        check_test_control_key(request.headers.get(TEST_CONTROL_HEADER), key)
-        document = parse_json(await request.body())
+        check_test_control(request, key)
+        document = parse_json_request(await request.body(), request.headers.get("content-type"))
         spec = parse_failure_spec(document, contract_routes(app), allow_after_commit=False)
         controls.arm(spec)
         return JSONResponse(

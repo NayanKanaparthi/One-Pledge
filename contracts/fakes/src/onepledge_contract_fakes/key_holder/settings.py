@@ -10,8 +10,12 @@ from pydantic import BaseModel, ConfigDict, SecretBytes, SecretStr
 from onepledge_contract_fakes.errors import ConfigurationError
 from onepledge_contract_fakes.key_holder.config import KeyHolderConfig
 from onepledge_contract_fakes.settings import EnvironmentReader, MemberCredential, read_environment
+from onepledge_contract_fakes.validation import MAX_INTEGER, Issue, parse_integer_text
 
 DEFAULT_DAILY_ELEMENT_CAP = 1_000_000
+_KEYS = "FAKE_KH_KEYS"
+# The order of the ristretto255 group (RFC 9496): scalars are taken modulo this number.
+RISTRETTO_ORDER = 2**252 + 27742317777372353535851937790883648493
 
 
 class KeyHolderSettings(BaseModel):
@@ -46,7 +50,7 @@ class KeyHolderSettings(BaseModel):
         control_key = env.test_control_key(controls)
         return cls(
             holder_id=holder,
-            bind_host=env.optional("BIND_HOST", "127.0.0.1"),
+            bind_host=env.bind_host(),
             port=env.port(),
             scalars={version: SecretBytes(value) for version, value in scalars.items()},
             active_version=active,
@@ -70,17 +74,23 @@ class KeyHolderSettings(BaseModel):
 
 
 def _scalars(env: EnvironmentReader) -> dict[int, bytes]:
-    document = env.json_value("FAKE_KH_KEYS")
+    """FAKE_KH_KEYS: positive versions to base64 scalars, none zero or one (SPEC_DECISIONS 43.13)."""
+    document = env.json_value(_KEYS)
     if not isinstance(document, dict) or not document:
-        raise ConfigurationError("FAKE_KH_KEYS", "must be a non-empty JSON object of versions to scalars")
+        raise ConfigurationError(_KEYS, "must be a non-empty JSON object of versions to scalars")
     scalars: dict[int, bytes] = {}
     for version_text, value in document.items():
-        if not version_text.isdigit() or int(version_text) < 1 or not isinstance(value, str):
-            raise ConfigurationError("FAKE_KH_KEYS", "must map positive integer versions to base64 strings")
-        scalar = EnvironmentReader({"FAKE_KH_KEYS": value}).secret_base64_32("FAKE_KH_KEYS")
-        if scalar == bytes(32):
-            raise ConfigurationError("FAKE_KH_KEYS", "must not contain a zero scalar")
-        scalars[int(version_text)] = scalar
+        version = parse_integer_text(version_text, 1, MAX_INTEGER)
+        if isinstance(version, Issue) or not isinstance(value, str):
+            raise ConfigurationError(_KEYS, "must map positive integer versions to base64 strings")
+        if version in scalars:
+            raise ConfigurationError(_KEYS, f"lists version {version} twice")
+        scalar = EnvironmentReader({_KEYS: value}).secret_base64_32(_KEYS)
+        # A scalar of 0 maps every element to the identity and 1 returns the input unchanged;
+        # a value equal to them modulo the group order is the same scalar.
+        if int.from_bytes(scalar, "little") % RISTRETTO_ORDER in (0, 1):
+            raise ConfigurationError(_KEYS, "must not contain a scalar of zero or one")
+        scalars[version] = scalar
     return scalars
 
 

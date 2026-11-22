@@ -11,7 +11,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
-import json
+import ipaddress
 import os
 import re
 import uuid
@@ -19,6 +19,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from onepledge_contract_fakes.errors import ConfigurationError
+from onepledge_contract_fakes.json_body import MalformedJsonError, parse_bounded_json
+from onepledge_contract_fakes.validation import MAX_INTEGER, Issue, parse_integer_text
 
 # SHA-256 of the raw bytes of every secret published in contracts/examples/vectors/.
 # A double refuses to start with any of them (SPEC 16.7). The values themselves are
@@ -35,6 +37,9 @@ PUBLISHED_TEST_VECTOR_SECRET_SHA256: frozenset[str] = frozenset(
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 MIN_TEST_CONTROL_KEY_LENGTH = 32
+DEFAULT_BIND_HOST = "127.0.0.1"
+# Settings are trimmed of ASCII whitespace only; any other space is part of the value and fails it.
+ASCII_WHITESPACE = " \t\r\n"
 SECRET_BYTES = 32  # ristretto255 scalars and Ed25519 seeds
 
 
@@ -59,39 +64,44 @@ class EnvironmentReader:
 
     def required(self, name: str) -> str:
         """A variable that must be present and not empty."""
-        value = self._environ.get(name, "").strip()
+        value = self._environ.get(name, "").strip(ASCII_WHITESPACE)
         if not value:
             raise ConfigurationError(name, "is required but not set")
         return value
 
     def optional(self, name: str, default: str) -> str:
         """A variable with a default used when it is absent or empty."""
-        value = self._environ.get(name, "").strip()
+        value = self._environ.get(name, "").strip(ASCII_WHITESPACE)
         return value or default
 
     def integer(
         self, name: str, default: int | None = None, minimum: int = 0, maximum: int | None = None
     ) -> int:
         """An integer variable inside a range."""
-        raw = self._environ.get(name, "").strip()
+        raw = self._environ.get(name, "").strip(ASCII_WHITESPACE)
         if not raw:
             if default is None:
                 raise ConfigurationError(name, "is required but not set")
             return default
-        if not re.fullmatch(r"-?[0-9]+", raw):
-            raise ConfigurationError(name, "must be an integer")
-        value = int(raw)
-        if value < minimum or (maximum is not None and value > maximum):
-            raise ConfigurationError(name, "is outside the allowed range")
-        return value
+        return parse_setting_integer(name, raw, minimum, MAX_INTEGER if maximum is None else maximum)
 
     def port(self, name: str = "PORT") -> int:
         """A TCP port number."""
         return self.integer(name, minimum=1, maximum=65535)
 
+    def bind_host(self, name: str = "BIND_HOST") -> str:
+        """An IPv4 or IPv6 address literal to listen on, default 127.0.0.1 (SPEC 3.1)."""
+        value = self.optional(name, DEFAULT_BIND_HOST)
+        try:
+            return str(ipaddress.ip_address(value))
+        except ValueError:
+            raise ConfigurationError(
+                name, "must be an IPv4 or IPv6 address such as 127.0.0.1 or 0.0.0.0"
+            ) from None
+
     def boolean(self, name: str, default: bool) -> bool:
         """A `true` or `false` variable."""
-        raw = self._environ.get(name, "").strip().lower()
+        raw = self._environ.get(name, "").strip(ASCII_WHITESPACE).lower()
         if not raw:
             return default
         if raw not in ("true", "false"):
@@ -109,9 +119,9 @@ class EnvironmentReader:
         """A required variable holding JSON."""
         raw = self.required(name)
         try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            raise ConfigurationError(name, "must be valid JSON") from None
+            return parse_bounded_json(raw)
+        except MalformedJsonError:
+            raise ConfigurationError(name, "must be valid JSON without duplicate keys") from None
 
     def sha256_hex(self, name: str) -> str:
         """A required lower case SHA-256 hex digest."""
@@ -149,6 +159,16 @@ class EnvironmentReader:
         if len({m.api_key_sha256 for m in members}) != len(members):
             raise ConfigurationError(name, "contains a duplicate api_key_sha256")
         return members
+
+
+def parse_setting_integer(name: str, text: str, minimum: int, maximum: int) -> int:
+    """An integer setting under the one integer rule of the package, naming the variable when it fails."""
+    parsed = parse_integer_text(text, minimum, maximum)
+    if parsed is Issue.INVALID_INTEGER:
+        raise ConfigurationError(name, "must be a whole number written with the digits 0 to 9")
+    if isinstance(parsed, Issue):
+        raise ConfigurationError(name, f"must be between {minimum:,} and {maximum:,}")
+    return parsed
 
 
 def _parse_member(name: str, entry: object) -> MemberCredential:

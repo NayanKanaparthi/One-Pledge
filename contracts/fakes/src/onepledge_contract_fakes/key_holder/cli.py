@@ -9,7 +9,7 @@ from onepledge_contract_fakes.cli_output import CliOutput, common_options, run_g
 from onepledge_contract_fakes.errors import ConfigurationError
 from onepledge_contract_fakes.key_holder.app import create_key_holder_app
 from onepledge_contract_fakes.key_holder.settings import load_settings
-from onepledge_contract_fakes.server import PortUnavailableError, run_server
+from onepledge_contract_fakes.server import BindError, run_server
 
 # The `service` value in log lines is the health value of the contract (SPEC_DECISIONS 22.6).
 SERVICE_NAME = "key_holder"
@@ -24,7 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
     commands.add_parser(
         "serve",
-        parents=[common_options(result=False)],
+        parents=[common_options(result=False, logs=True)],
         help="serve the key holder double over HTTP",
         description="Serve the key holder double on BIND_HOST:PORT. Configuration comes from the environment "
         "(HOLDER_ID, PORT, FAKE_KH_KEYS, FAKE_KH_ACTIVE_VERSION, FAKE_KH_MEMBERS, FAKE_KH_DAILY_ELEMENT_CAP, "
@@ -48,7 +48,7 @@ def _serve(out: CliOutput) -> int:
     except ConfigurationError as error:
         out.error(error.sentence())
         return 1
-    except PortUnavailableError as error:
-        out.error(f"Port {error.port} on {error.host} is already in use or not available; set another PORT.")
+    except BindError as error:
+        out.error(error.sentence)
         return 1
     return 0
