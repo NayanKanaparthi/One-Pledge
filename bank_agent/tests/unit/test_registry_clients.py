@@ -26,7 +26,7 @@ from onepledge_bank_agent.domain.dependency_errors import (
     RegistryRejectedError,
     RegistryUnavailableError,
 )
-from onepledge_bank_agent.domain.enums import BankPosition, CaseStatus, DependencyRefusal, TapeKind, TokenKind
+from onepledge_bank_agent.domain.enums import BankPosition, CaseStatus, FailureReason, TapeKind, TokenKind
 from onepledge_bank_agent.domain.errors import PipelineStageError, PositionAlreadyRecordedError
 from onepledge_bank_agent.domain.registry_records import RegistryItem, RegistrySubmission
 from onepledge_bank_agent.infrastructure.http.base import RetryingHttpCaller
@@ -86,31 +86,33 @@ def test_a_key_holder_answer_keeps_the_order_and_the_request_pins_no_key_version
     assert seen[0].headers["X-API-Key"] == "k" * 40 and seen[0].url.path == "/v1/evaluate"
 
 
-MALFORMED = DependencyRefusal.MALFORMED_RESPONSE
+MALFORMED = FailureReason.MALFORMED_RESPONSE
+VIOLATION = FailureReason.PROTOCOL_VIOLATION
 ZERO_POINT = base64.b64encode(bytes(32)).decode()
-KEY_HOLDER_FAILURES: list[tuple[Handler, type[PipelineStageError], int, DependencyRefusal | None]] = [
-    (lambda r: httpx.Response(503), KeyHolderUnavailableError, 503, None),
-    (lambda r: httpx.Response(429), KeyHolderUnavailableError, 429, None),
-    (lambda r: httpx.Response(401), KeyHolderRejectedError, 401, DependencyRefusal.UNAUTHENTICATED),
-    (lambda r: httpx.Response(422), KeyHolderRejectedError, 422, DependencyRefusal.REQUEST_REFUSED),
-    (lambda r: evaluated(r, elements=[POINT]), KeyHolderProtocolError, 200, MALFORMED),
-    (lambda r: evaluated(r, request_id=str(uuid.uuid4())), KeyHolderProtocolError, 200, MALFORMED),
-    (lambda r: evaluated(r, elements=[ZERO_POINT] * 2), KeyHolderProtocolError, 200, MALFORMED),
-    (lambda r: evaluated(r, key_version=1.0), KeyHolderProtocolError, 200, MALFORMED),
-    (lambda r: httpx.Response(200, content=b"not json"), KeyHolderProtocolError, 200, MALFORMED),
+KEY_HOLDER_FAILURES: list[tuple[Handler, type[PipelineStageError], int, FailureReason]] = [
+    (lambda r: httpx.Response(503), KeyHolderUnavailableError, 503, FailureReason.SERVER_ERROR),
+    (lambda r: httpx.Response(429), KeyHolderUnavailableError, 429, FailureReason.RATE_LIMITED),
+    (lambda r: httpx.Response(401), KeyHolderRejectedError, 401, FailureReason.UNAUTHENTICATED),
+    (lambda r: httpx.Response(422), KeyHolderRejectedError, 422, FailureReason.REQUEST_REFUSED),
+    (lambda r: evaluated(r, elements=[POINT]), KeyHolderProtocolError, 200, VIOLATION),
+    (lambda r: evaluated(r, request_id=str(uuid.uuid4())), KeyHolderProtocolError, 200, VIOLATION),
+    (lambda r: evaluated(r, elements=[ZERO_POINT] * 2), KeyHolderProtocolError, 200, VIOLATION),
+    (lambda r: evaluated(r, key_version=1.0), KeyHolderRejectedError, 200, MALFORMED),
+    (lambda r: httpx.Response(200, content=b"not json"), KeyHolderRejectedError, 200, MALFORMED),
 ]
 
 
 @pytest.mark.parametrize(("handler", "error", "status", "reason"), KEY_HOLDER_FAILURES)
 def test_key_holder_failures_are_named_with_dependency_status_and_reason(
-    handler: Handler, error: type[PipelineStageError], status: int, reason: DependencyRefusal | None
+    handler: Handler, error: type[PipelineStageError], status: int, reason: FailureReason
 ) -> None:
     with pytest.raises(error) as raised:
         holder(handler).evaluate([POINT, POINT])
-    assert raised.value.audit_detail() == {
+    assert type(raised.value) is error
+    assert raised.value.failure_facts() == {
         "dependency": "key_holder_2",
         "http_status": status,
-        **({"reason": reason.value} if reason is not None else {}),
+        "reason": reason.value,
     }
 
 
@@ -189,8 +191,8 @@ def refused(code: str) -> httpx.Response:
 SUBMISSION_FAILURES: list[tuple[Handler, type[Exception]]] = [
     (lambda r: decided(r, 200), RegistryProtocolError),
     (lambda r: decided(r, 201, replay=True), RegistryProtocolError),
-    (lambda r: decided(r, as_of_seq=9.0), RegistryProtocolError),
-    (lambda r: decided(r, results="LOCKED"), RegistryProtocolError),
+    (lambda r: decided(r, as_of_seq=9.0), RegistryRejectedError),
+    (lambda r: decided(r, results="LOCKED"), RegistryRejectedError),
     (lambda r: refused("KEY_VERSION_MISMATCH"), KeyVersionMismatchError),
     (lambda r: refused("IDEMPOTENCY_KEY_REUSED"), RegistryRejectedError),
     (lambda r: httpx.Response(413), RegistryRejectedError),

@@ -18,6 +18,7 @@ from types import FrameType, MappingProxyType
 from onepledge_bank_agent.application.advance_submission import StageRun
 from onepledge_bank_agent.application.run_pipeline_worker import WorkerReport
 from onepledge_bank_agent.application.seed_reference import UpsertCounts
+from onepledge_bank_agent.domain.canonical_json import JsonValue
 from onepledge_bank_agent.infrastructure.db.errors import database_errors_as_operator_errors
 from onepledge_bank_agent.infrastructure.logging import configure_logging
 from onepledge_bank_agent.infrastructure.settings import (
@@ -157,24 +158,33 @@ def _seed_reference(
     )
 
 
-def _run_row(run: StageRun) -> tuple[str, str, str, str, str]:
-    return (
-        str(run.submission_id),
-        run.started_at_status.value,
-        run.outcome.value,
-        run.status.value,
-        run.error_code or "",
-    )
+FAILURE_KEYS = ("stage", "failure_code", "attempts", "dependency", "http_status", "reason")
+
+
+def _run_document(run: StageRun) -> dict[str, JsonValue]:
+    """One stage run with the six failure facts of SPEC_DECISIONS 58 (null when it advanced)."""
+    failure = run.failure or {}
+    return {
+        "submission_id": str(run.submission_id),
+        "from": run.started_at_status.value,
+        "outcome": run.outcome.value,
+        "status": run.status.value,
+        **{key: failure.get(key) for key in FAILURE_KEYS},
+    }
+
+
+def _run_row(run: StageRun) -> tuple[str, ...]:
+    document = _run_document(run)
+    return tuple("" if document[key] is None else str(document[key]) for key in document)
 
 
 def _report(report: WorkerReport, output: Output) -> None:
     if output.as_json:
-        keys = ("submission_id", "from", "outcome", "status", "error_code")
-        output.success({"stages": [dict(zip(keys, _run_row(run), strict=True)) for run in report.runs]})
+        output.success({"stages": [_run_document(run) for run in report.runs]})
         return
     output.table(
         "Pipeline worker",
-        ("submission", "from", "outcome", "status", "error"),
+        ("submission", "from", "outcome", "status", *FAILURE_KEYS),
         [_run_row(run) for run in report.runs],
         ("stage run", "stages run"),
         "Nothing else is runnable now.",
@@ -186,6 +196,7 @@ def _worker(arguments: argparse.Namespace, output: Output, collaborators: Collab
     _route_logs(settings.require_bank_code(), settings.log_level, arguments.quiet)
     with database_errors_as_operator_errors(), RuntimeComposition(settings, collaborators) as composition:
         composition.schema().require_head()
+        composition.role_guard().require_least_privilege()
         composition.startup_record().run(WORKER_PROCESS)
         worker = composition.worker()
         if arguments.once:

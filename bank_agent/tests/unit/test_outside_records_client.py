@@ -11,7 +11,7 @@ import httpx
 import pytest
 
 from onepledge_bank_agent.domain import Vin
-from onepledge_bank_agent.domain.enums import DependencyRefusal, FailureCode
+from onepledge_bank_agent.domain.enums import FailureCode, FailureReason
 from onepledge_bank_agent.domain.errors import (
     OutsideRecordsProtocolError,
     OutsideRecordsRejectedError,
@@ -121,23 +121,23 @@ def test_not_found_means_no_record_only_with_the_agreed_code() -> None:
         client(lambda request: httpx.Response(404, text="<html>")).contracts(VIN)
 
 
-R = DependencyRefusal
-STATUS_MAPPING: list[tuple[int, type[PipelineStageError], FailureCode, DependencyRefusal | None]] = [
+R = FailureReason
+STATUS_MAPPING: list[tuple[int, type[PipelineStageError], FailureCode, FailureReason]] = [
     (401, OutsideRecordsRejectedError, FailureCode.OUTSIDE_RECORDS_REJECTED, R.UNAUTHENTICATED),
     (403, OutsideRecordsRejectedError, FailureCode.OUTSIDE_RECORDS_REJECTED, R.FORBIDDEN),
     (422, OutsideRecordsRejectedError, FailureCode.OUTSIDE_RECORDS_REJECTED, R.REQUEST_REFUSED),
     (400, OutsideRecordsRejectedError, FailureCode.OUTSIDE_RECORDS_REJECTED, R.REQUEST_REFUSED),
     (405, OutsideRecordsRejectedError, FailureCode.OUTSIDE_RECORDS_REJECTED, R.REQUEST_REFUSED),
     (409, OutsideRecordsRejectedError, FailureCode.OUTSIDE_RECORDS_REJECTED, R.REQUEST_REFUSED),
-    (302, OutsideRecordsProtocolError, FailureCode.OUTSIDE_RECORDS_REJECTED, R.MALFORMED_RESPONSE),
-    (429, OutsideRecordsUnavailableError, FailureCode.OUTSIDE_RECORDS_UNAVAILABLE, None),
-    (500, OutsideRecordsUnavailableError, FailureCode.OUTSIDE_RECORDS_UNAVAILABLE, None),
+    (302, OutsideRecordsRejectedError, FailureCode.OUTSIDE_RECORDS_REJECTED, R.MALFORMED_RESPONSE),
+    (429, OutsideRecordsUnavailableError, FailureCode.OUTSIDE_RECORDS_UNAVAILABLE, R.RATE_LIMITED),
+    (500, OutsideRecordsUnavailableError, FailureCode.OUTSIDE_RECORDS_UNAVAILABLE, R.SERVER_ERROR),
 ]
 
 
 @pytest.mark.parametrize(("status", "error_type", "failure", "reason"), STATUS_MAPPING)
 def test_status_codes_map_to_refusals_or_transient_errors(
-    status: int, error_type: type[PipelineStageError], failure: FailureCode, reason: DependencyRefusal | None
+    status: int, error_type: type[PipelineStageError], failure: FailureCode, reason: FailureReason
 ) -> None:
     calls: list[int] = []
 
@@ -154,16 +154,14 @@ def test_status_codes_map_to_refusals_or_transient_errors(
         status,
     )
     assert raised.value.transient is (failure is FailureCode.OUTSIDE_RECORDS_UNAVAILABLE)
-    expected = {"dependency": "outside_records", "http_status": status}
-    assert raised.value.audit_detail() == (
-        expected if reason is None else {**expected, "reason": reason.value}
-    )
+    expected = {"dependency": "outside_records", "http_status": status, "reason": reason.value}
+    assert raised.value.failure_facts() == expected
 
 
 def test_a_success_that_breaks_the_contract_is_a_malformed_response() -> None:
     with pytest.raises(OutsideRecordsProtocolError) as raised:
         client(answer(200, {"vin": VIN.value})).title(VIN)
-    assert raised.value.audit_detail() == {
+    assert raised.value.failure_facts() == {
         "dependency": "outside_records", "http_status": 200, "reason": "MALFORMED_RESPONSE",
     }  # fmt: skip
     with pytest.raises(OutsideRecordsProtocolError):
@@ -176,7 +174,9 @@ def test_an_unreachable_service_has_no_status() -> None:
 
     with pytest.raises(OutsideRecordsUnavailableError) as raised:
         client(down).title(VIN)
-    assert raised.value.audit_detail() == {"dependency": "outside_records", "http_status": None}
+    assert raised.value.failure_facts() == {
+        "dependency": "outside_records", "http_status": None, "reason": "CONNECTION_FAILED",
+    }  # fmt: skip
 
 
 @pytest.mark.parametrize("status", [502, 503, 504])

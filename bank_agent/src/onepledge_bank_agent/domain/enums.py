@@ -51,13 +51,26 @@ class FailureCode(StrEnum):
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
-class DependencyRefusal(StrEnum):
-    """Why a dependency refused a request or broke its contract (SPEC_DECISIONS 26)."""
+class FailureReason(StrEnum):
+    """Why a stage attempt failed: the one vocabulary of SPEC_DECISIONS 49 and 58.
 
+    The first eight classify an outbound HTTP failure; the rest name the bank's own
+    findings about what a service returned, and an error that is not a dependency's.
+    """
+
+    CONNECTION_FAILED = "CONNECTION_FAILED"
+    TIMEOUT = "TIMEOUT"
+    RATE_LIMITED = "RATE_LIMITED"
+    SERVER_ERROR = "SERVER_ERROR"
     UNAUTHENTICATED = "UNAUTHENTICATED"
     FORBIDDEN = "FORBIDDEN"
     REQUEST_REFUSED = "REQUEST_REFUSED"
     MALFORMED_RESPONSE = "MALFORMED_RESPONSE"
+    KEY_VERSION_MISMATCH = "KEY_VERSION_MISMATCH"
+    CERTIFICATE_INVALID = "CERTIFICATE_INVALID"
+    INTEGRITY_HALT = "INTEGRITY_HALT"
+    PROTOCOL_VIOLATION = "PROTOCOL_VIOLATION"
+    UNEXPECTED = "UNEXPECTED"
 
 
 class LoanState(StrEnum):

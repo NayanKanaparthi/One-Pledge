@@ -24,11 +24,10 @@ from pydantic import BaseModel, ValidationError
 
 from onepledge_bank_agent.domain.canonical_json import JsonValue
 from onepledge_bank_agent.domain.dependency_errors import (
+    REGISTRY,
     CaseAlreadyResolvedError,
     KeyVersionMismatchError,
     RegistryProtocolError,
-    RegistryRejectedError,
-    RegistryUnavailableError,
 )
 from onepledge_bank_agent.domain.enums import BankPosition
 from onepledge_bank_agent.domain.errors import PositionAlreadyRecordedError
@@ -43,15 +42,10 @@ from onepledge_bank_agent.domain.registry_records import (
     SignedCertificate,
 )
 from onepledge_bank_agent.domain.values import KeyVersion
-from onepledge_bank_agent.infrastructure.http.answers import (
-    DependencyErrors,
-    error_code,
-    failure,
-    json_object,
-    parse,
-    plain_json,
-)
+from onepledge_bank_agent.infrastructure.http import classification
+from onepledge_bank_agent.infrastructure.http.answers import error_code, json_object, parse, plain_json
 from onepledge_bank_agent.infrastructure.http.base import JsonBody, OutboundRequest, RetryingHttpCaller
+from onepledge_bank_agent.infrastructure.http.classification import failure
 from onepledge_bank_agent.infrastructure.http.registry_wire import (
     AlertMessageBody,
     CaseMessageBody,
@@ -72,7 +66,7 @@ EVENTS = "/v1/ledger/events"
 SCHEMA_VERSION = 1
 CONFLICT = 409
 REPLAY_HEADER = "Idempotent-Replay"
-ERRORS = DependencyErrors(RegistryUnavailableError, RegistryRejectedError, RegistryProtocolError)
+ERRORS = classification.ERRORS[REGISTRY]
 
 
 def submission_json(submission: RegistrySubmission) -> JsonBody:
@@ -128,11 +122,11 @@ class RegistryHttpClient:
             before_each=before_each,
         )  # fmt: skip
         response = self._caller.send(outbound)
-        conflict = response is not None and response.status_code == CONFLICT
-        if conflict and response is not None and error_code(response) == "KEY_VERSION_MISMATCH":
+        conflict = response.status_code == CONFLICT
+        if conflict and error_code(response) == "KEY_VERSION_MISMATCH":
             raise KeyVersionMismatchError(CONFLICT)
-        replay = response is not None and response.headers.get(REPLAY_HEADER) == "true"
-        if response is None or response.status_code not in (httpx.codes.CREATED, httpx.codes.OK):
+        replay = response.headers.get(REPLAY_HEADER) == "true"
+        if response.status_code not in (httpx.codes.CREATED, httpx.codes.OK):
             raise failure(response, ERRORS)
         if (response.status_code == httpx.codes.OK) != replay:
             raise RegistryProtocolError(response.status_code)
@@ -168,7 +162,7 @@ class RegistryHttpClient:
     def acknowledge(self, message_id: uuid.UUID) -> None:
         """`POST /v1/outbox/{message_id}/ack` (204, also for a message already acknowledged)."""
         response = self._caller.post(ACK, f"/v1/outbox/{message_id}/ack")
-        if response is None or response.status_code != httpx.codes.NO_CONTENT:
+        if response.status_code != httpx.codes.NO_CONTENT:
             raise failure(response, ERRORS)
 
     def record_position(self, case_id: uuid.UUID, position: BankPosition) -> CaseOutcome:
@@ -176,7 +170,7 @@ class RegistryHttpClient:
         response = self._caller.post(
             RESOLUTION, f"/v1/cases/{case_id}/resolution", {"position": position.value}
         )
-        if response is not None and response.status_code == CONFLICT:
+        if response.status_code == CONFLICT:
             code = error_code(response)
             if code == "CASE_ALREADY_RESOLVED":
                 raise CaseAlreadyResolvedError(CONFLICT)
@@ -192,8 +186,8 @@ class RegistryHttpClient:
         return body.page()
 
     @staticmethod
-    def _ok(response: httpx.Response | None) -> httpx.Response:
-        if response is None or response.status_code != httpx.codes.OK:
+    def _ok(response: httpx.Response) -> httpx.Response:
+        if response.status_code != httpx.codes.OK:
             raise failure(response, ERRORS)
         return response
 

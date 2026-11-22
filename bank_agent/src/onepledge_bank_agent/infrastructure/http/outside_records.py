@@ -2,27 +2,20 @@
 
 Responses are parsed into models that ignore unknown fields (additive evolution) and
 enforce the required ones. A 404 means "no record" only when the error code says so;
-any other answer outside the contract is a permanent protocol error. 401, 403, 422 and
-every other 4xx are permanent refusals; 429, 5xx and an unreachable service are
-transient (SPEC 11.4, SPEC_DECISIONS 26).
+every other failure is classified by `classification.py` (SPEC_DECISIONS 49), and an
+answer outside the contract or about another vehicle is MALFORMED_RESPONSE.
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import date
-from types import MappingProxyType
 from typing import Literal
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from onepledge_bank_agent.domain.enums import DependencyRefusal
-from onepledge_bank_agent.domain.errors import (
-    OutsideRecordsProtocolError,
-    OutsideRecordsRejectedError,
-    OutsideRecordsUnavailableError,
-)
+from onepledge_bank_agent.domain.errors import OutsideRecordsProtocolError
 from onepledge_bank_agent.domain.outside_records import (
     ContractRecord,
     PaymentRecord,
@@ -31,16 +24,13 @@ from onepledge_bank_agent.domain.outside_records import (
 )
 from onepledge_bank_agent.domain.vin import Vin
 from onepledge_bank_agent.infrastructure.http.base import RetryingHttpCaller
+from onepledge_bank_agent.infrastructure.http.classification import failure
 
 TITLE_ROUTE = "/v1/titles/{vin}"
 PAYMENTS_ROUTE = "/v1/payments"
 CONTRACTS_ROUTE = "/v1/contracts/{vin}"
 PAYMENTS_PAGE_LIMIT = 200
 VIN_PATTERN = r"^[A-HJ-NPR-Z0-9]{17}$"
-_REFUSALS = MappingProxyType({401: DependencyRefusal.UNAUTHENTICATED, 403: DependencyRefusal.FORBIDDEN})
-_CLIENT_ERRORS_FROM = 400
-_TRANSIENT_FLOOR = 500
-_RATE_LIMITED = 429
 
 
 class _Lenient(BaseModel):
@@ -89,20 +79,6 @@ class _ErrorBody(_Lenient):
     error: _ErrorCode
 
 
-def _fail(response: httpx.Response | None) -> Exception:
-    """The error for an answer that is not a success and not an agreed "no record" (SPEC_DECISIONS 26)."""
-    if response is None:
-        return OutsideRecordsUnavailableError()
-    status = response.status_code
-    if status == _RATE_LIMITED or status >= _TRANSIENT_FLOOR:
-        return OutsideRecordsUnavailableError(status)
-    if status in _REFUSALS:
-        return OutsideRecordsRejectedError(status, _REFUSALS[status])
-    if _CLIENT_ERRORS_FROM <= status < _TRANSIENT_FLOOR and status != httpx.codes.NOT_FOUND:
-        return OutsideRecordsRejectedError(status, DependencyRefusal.REQUEST_REFUSED)
-    return OutsideRecordsProtocolError(status)
-
-
 def _not_found(response: httpx.Response, code: str) -> bool:
     if response.status_code != httpx.codes.NOT_FOUND:
         return False
@@ -125,13 +101,19 @@ class OutsideRecordsClient:
     def __init__(self, caller: RetryingHttpCaller) -> None:
         self._caller = caller
 
+    def _failure(self, response: httpx.Response) -> Exception:
+        """A 404 that is not an agreed "no record" means the call was about something else: malformed."""
+        if response.status_code == httpx.codes.NOT_FOUND:
+            return OutsideRecordsProtocolError(response.status_code)
+        return failure(response, self._caller.errors)
+
     def title(self, vin: Vin) -> TitleRecord | None:
         """`GET /v1/titles/{vin}`: the record, or None for 404 TITLE_NOT_FOUND."""
         response = self._caller.get(TITLE_ROUTE, f"/v1/titles/{vin.value}")
-        if response is not None and _not_found(response, "TITLE_NOT_FOUND"):
+        if _not_found(response, "TITLE_NOT_FOUND"):
             return None
-        if response is None or response.status_code != httpx.codes.OK:
-            raise _fail(response)
+        if response.status_code != httpx.codes.OK:
+            raise self._failure(response)
         body = _parse(_TitleBody, response)
         if body.vin != vin.value:
             raise OutsideRecordsProtocolError(response.status_code)
@@ -146,8 +128,8 @@ class OutsideRecordsClient:
             "limit": PAYMENTS_PAGE_LIMIT,
         }
         response = self._caller.get(PAYMENTS_ROUTE, "/v1/payments", params)
-        if response is None or response.status_code != httpx.codes.OK:
-            raise _fail(response)
+        if response.status_code != httpx.codes.OK:
+            raise self._failure(response)
         body = _parse(_PaymentPageBody, response)
         if any(item.vin != vin.value for item in body.items):
             raise OutsideRecordsProtocolError(response.status_code)
@@ -160,10 +142,10 @@ class OutsideRecordsClient:
     def contracts(self, vin: Vin) -> tuple[ContractRecord, ...]:
         """`GET /v1/contracts/{vin}`: every contract, or none for 404 CONTRACT_NOT_FOUND."""
         response = self._caller.get(CONTRACTS_ROUTE, f"/v1/contracts/{vin.value}")
-        if response is not None and _not_found(response, "CONTRACT_NOT_FOUND"):
+        if _not_found(response, "CONTRACT_NOT_FOUND"):
             return ()
-        if response is None or response.status_code != httpx.codes.OK:
-            raise _fail(response)
+        if response.status_code != httpx.codes.OK:
+            raise self._failure(response)
         body = _parse(_ContractListBody, response)
         if body.vin != vin.value or any(item.vin != vin.value for item in body.contracts):
             raise OutsideRecordsProtocolError(response.status_code)

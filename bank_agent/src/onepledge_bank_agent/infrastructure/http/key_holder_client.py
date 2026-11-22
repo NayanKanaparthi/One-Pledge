@@ -2,9 +2,10 @@
 
 The request carries a fresh request id and the blinded elements, and pins no key
 version. The answer must hold exactly as many elements as were sent, each 44 base64
-characters decoding to 32 bytes that are not all zero, and one key version; anything
-else is a permanent protocol error (KEY_HOLDER_REJECTED). An unreachable holder, 429 and
-5xx are transient; 401, 409, 413, 422 and every other 4xx are permanent refusals.
+characters decoding to 32 bytes that are not all zero, and one key version. A wrong
+count or an invalid element is PROTOCOL_VIOLATION and a body outside the schema is
+MALFORMED_RESPONSE (both KEY_HOLDER_REJECTED); every other failure is classified by
+`classification.py` (SPEC_DECISIONS 49).
 """
 
 from __future__ import annotations
@@ -17,15 +18,12 @@ import httpx
 from pydantic import Field
 
 from onepledge_bank_agent.application.ports import IdGenerator
-from onepledge_bank_agent.domain.dependency_errors import (
-    KeyHolderProtocolError,
-    KeyHolderRejectedError,
-    KeyHolderUnavailableError,
-)
+from onepledge_bank_agent.domain.dependency_errors import KeyHolderProtocolError
 from onepledge_bank_agent.domain.registry_records import Evaluation
 from onepledge_bank_agent.infrastructure.crypto.blinder import decode_point
-from onepledge_bank_agent.infrastructure.http.answers import DependencyErrors, Strict, failure, parse
+from onepledge_bank_agent.infrastructure.http.answers import Strict, parse
 from onepledge_bank_agent.infrastructure.http.base import RetryingHttpCaller
+from onepledge_bank_agent.infrastructure.http.classification import failure
 
 EVALUATE_ROUTE = "/v1/evaluate"
 ELEMENT = r"^[A-Za-z0-9+/]{43}=$"
@@ -47,11 +45,7 @@ class KeyHolderHttpClient:
         self._caller = caller
         self._dependency = dependency
         self._ids = ids
-        self._errors = DependencyErrors(
-            unavailable=lambda status: KeyHolderUnavailableError(dependency, status),
-            rejected=lambda status, reason: KeyHolderRejectedError(dependency, status, reason),
-            protocol=lambda status: KeyHolderProtocolError(dependency, status),
-        )
+        self._errors = caller.errors
 
     @property
     def dependency(self) -> str:
@@ -63,7 +57,7 @@ class KeyHolderHttpClient:
         request_id = self._ids.new_id()
         body = {"request_id": str(request_id), "key_version": None, "elements": list(elements)}
         response = self._caller.post(EVALUATE_ROUTE, EVALUATE_ROUTE, body)
-        if response is None or response.status_code != httpx.codes.OK:
+        if response.status_code != httpx.codes.OK:
             raise failure(response, self._errors)
         answer, _ = parse(EvaluateAnswer, response, self._errors)
         valid = all(decode_point(element) is not None for element in answer.elements)

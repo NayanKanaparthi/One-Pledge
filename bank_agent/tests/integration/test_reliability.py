@@ -302,10 +302,13 @@ def test_a_key_holder_2_fault_after_key_holder_1_answered_stores_no_token_until_
         ]
         assert pairs(bank.database, "SELECT 'tokens', count(*)::text FROM loan_tokens") == {"tokens": "0"}
         failed = (
-            "SELECT detail->>'stage', detail->>'error_code' FROM audit_log "
+            "SELECT detail->>'stage', concat_ws(' ', detail->>'failure_code', detail->>'dependency', "
+            "detail->>'http_status', detail->>'reason') FROM audit_log "
             "WHERE action = 'TAPE_STAGE_ATTEMPT_FAILED'"
         )
-        assert pairs(bank.database, failed) == {"TOKENIZED": "KEY_HOLDER_UNAVAILABLE"}
+        assert pairs(bank.database, failed) == {
+            "TOKENIZED": "KEY_HOLDER_UNAVAILABLE key_holder_2 503 SERVER_ERROR"
+        }
         clock.advance(LATER)
         harness.run_worker()
     assert lab.state(bank) == clean_run

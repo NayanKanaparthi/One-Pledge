@@ -11,9 +11,9 @@ from onepledge_bank_agent.domain.enums import (
     AuditAction,
     AuditObjectType,
     AuditOutcome,
-    FailureCode,
     TapeStatus,
 )
+from onepledge_bank_agent.domain.errors import PipelineStageError
 from onepledge_bank_agent.domain.loan import StateChange
 
 
@@ -51,37 +51,36 @@ def stage_advanced(
     )
 
 
-def stage_attempt_failed(submission_id: uuid.UUID, stage: TapeStatus, code: str, attempts: int) -> AuditDraft:
-    """`TAPE_STAGE_ATTEMPT_FAILED` with the stage attempted, the error code and the attempt count."""
+type FailureDetail = dict[str, str | int | None]
+
+
+def failure_detail(stage: TapeStatus, error: PipelineStageError, attempts: int) -> FailureDetail:
+    """The six facts of a stage failure, always all present (SPEC_DECISIONS 58)."""
+    return {"stage": stage.value, "failure_code": error.failure_code.value, "attempts": attempts,
+            **error.failure_facts()}  # fmt: skip
+
+
+def stage_attempt_failed(submission_id: uuid.UUID, detail: FailureDetail) -> AuditDraft:
+    """`TAPE_STAGE_ATTEMPT_FAILED` with the six failure facts."""
     return AuditDraft(
         AuditAction.TAPE_STAGE_ATTEMPT_FAILED,
         Actor.system(),
         AuditObjectType.TAPE_SUBMISSION,
         submission_id,
         AuditOutcome.FAILURE,
-        {"stage": stage.value, "error_code": code, "attempts": attempts},
+        dict(detail),
     )
 
 
 def tape_failed(
-    submission_id: uuid.UUID,
-    stage: TapeStatus,
-    resume_status: TapeStatus,
-    code: FailureCode,
-    dependency: Mapping[str, str | int | None],
+    submission_id: uuid.UUID, detail: Mapping[str, JsonValue], resume_status: TapeStatus
 ) -> AuditDraft:
-    """`TAPE_FAILED` with the stage attempted, the status to resume from, the failure code and, when a
-    dependency failed, `dependency`, `http_status` and (for a refusal) `reason` (SPEC_DECISIONS 26)."""
+    """`TAPE_FAILED` with the six failure facts and the status to resume from."""
     return AuditDraft(
         AuditAction.TAPE_FAILED,
         Actor.system(),
         AuditObjectType.TAPE_SUBMISSION,
         submission_id,
         AuditOutcome.FAILURE,
-        {
-            "stage": stage.value,
-            "resume_status": resume_status.value,
-            "failure_code": code.value,
-            **dependency,
-        },
+        {**detail, "resume_status": resume_status.value},
     )

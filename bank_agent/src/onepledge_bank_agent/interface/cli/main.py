@@ -13,6 +13,7 @@ import traceback
 from collections.abc import Sequence
 from pathlib import Path
 
+from onepledge_bank_agent.domain.dependency_errors import RegistryIntegrityBrokenError
 from onepledge_bank_agent.domain.errors import MESSAGES, DomainError, PipelineStageError, ReferenceDataError
 from onepledge_bank_agent.infrastructure.operator_errors import OperatorError
 from onepledge_bank_agent.interface.cli.commands import run_command
@@ -22,8 +23,7 @@ from onepledge_bank_agent.interface.composition import Collaborators
 UNEXPECTED = "Unexpected error. Run with --debug for details."
 UNEXPECTED_CODE = "INTERNAL_ERROR"
 DEPENDENCY_UNAVAILABLE = "DEPENDENCY_UNAVAILABLE"
-DEPENDENCY_REFUSED = "DEPENDENCY_REFUSED"
-REFUSED = "A service this command depends on refused the request; check its URL and key, then run it again."
+DEPENDENCY_REJECTED = "DEPENDENCY_REJECTED"
 
 
 def _common_flags(parser: argparse.ArgumentParser) -> None:
@@ -129,10 +129,11 @@ def _sentence(error: DomainError) -> tuple[str, str]:
     """The code and the one sentence of a business error on the command line."""
     if isinstance(error, ReferenceDataError):
         return error.code, error.sentence
+    if isinstance(error, RegistryIntegrityBrokenError):
+        return error.code, MESSAGES[error.code]
     if isinstance(error, PipelineStageError):
-        if error.transient:
-            return DEPENDENCY_UNAVAILABLE, MESSAGES[DEPENDENCY_UNAVAILABLE]
-        return DEPENDENCY_REFUSED, REFUSED
+        code = DEPENDENCY_UNAVAILABLE if error.transient else DEPENDENCY_REJECTED
+        return code, MESSAGES[code]
     return error.code, error.message
 
 
@@ -151,7 +152,17 @@ def main(
         return out.failure(error.code, error.sentence)
     except DomainError as error:
         return out.failure(*_sentence(error))
-    except Exception:  # the last resort of SPEC_DECISIONS 23 (d): one sentence, the traceback only on request
+    except Exception as error:  # the last resort of SPEC_DECISIONS 23 (d): one sentence, frames on request
         if arguments.debug:
-            out.detail(traceback.format_exc())
+            out.detail(frames_only(error))
         return out.failure(UNEXPECTED_CODE, UNEXPECTED)
+
+
+def frames_only(error: BaseException) -> str:
+    """The exception type and its frames (file, line, function): no message, no source line, no locals
+    (SPEC_DECISIONS 53.12), so the text is safe on any stream."""
+    frames = traceback.extract_tb(error.__traceback__)
+    lines = ["Traceback, frames only (most recent call last):"]
+    lines += [f"  {frame.filename}:{frame.lineno} {frame.name}" for frame in frames]
+    lines.append(type(error).__name__)
+    return "\n".join(lines) + "\n"

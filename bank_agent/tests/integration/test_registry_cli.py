@@ -121,3 +121,19 @@ def test_integrity_verify_without_the_registry_is_one_sentence_and_stores_nothin
     assert failed.code == 1
     assert failed.json()["error"]["code"] == "DEPENDENCY_UNAVAILABLE"
     assert pairs(bank_db, "SELECT 'runs', count(*)::text FROM integrity_runs") == {"runs": "0"}
+
+
+def test_a_registry_that_refuses_the_credentials_is_dependency_rejected(
+    cli: Cli, bank_db: BankDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A permanent dependency failure is DEPENDENCY_REJECTED with its fixed sentence (SPEC_DECISIONS 54)."""
+    monkeypatch.setenv("REGISTRY_API_KEY", "opk_" + "x" * 43)
+    sentence = (
+        "A service this action depends on refused the request. Nothing was changed. "
+        "Check the service credentials and configuration."
+    )
+    refused = cli("registry", "sync", "--json")
+    assert refused.code == 1
+    assert refused.json() == {"ok": False, "error": {"code": "DEPENDENCY_REJECTED", "message": sentence}}
+    plain = cli("registry", "sync")
+    assert (plain.code, plain.out, plain.err.splitlines()[-1]) == (1, "", sentence)

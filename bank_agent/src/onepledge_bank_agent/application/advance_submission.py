@@ -19,7 +19,12 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Protocol
 
-from onepledge_bank_agent.application.audit_entries import stage_attempt_failed, tape_failed
+from onepledge_bank_agent.application.audit_entries import (
+    FailureDetail,
+    failure_detail,
+    stage_attempt_failed,
+    tape_failed,
+)
 from onepledge_bank_agent.application.events import LogEvent
 from onepledge_bank_agent.application.ports import UnitOfWorkFactory
 from onepledge_bank_agent.application.runtime import Runtime
@@ -62,7 +67,7 @@ class StageRun:
     started_at_status: TapeStatus
     outcome: StageOutcome
     status: TapeStatus
-    error_code: str | None = None
+    failure: FailureDetail | None = None
 
 
 class AdvanceSubmission:
@@ -113,26 +118,32 @@ class AdvanceSubmission:
     def _stage_failed(
         self, submission_id: uuid.UUID, before: TapeStatus, error: PipelineStageError
     ) -> StageRun:
-        """Back off or fail; an error that is not a dependency's fails the tape with INTERNAL_ERROR."""
-        code, error_code, now = error.failure_code, error.code, self._clock.now()
+        """Back off or fail; an error that is not a dependency's fails the tape with INTERNAL_ERROR.
+
+        The audit entry, the log record and the returned run carry the same six facts
+        (SPEC_DECISIONS 58).
+        """
+        code, now = error.failure_code, self._clock.now()
         with self._units() as unit:
             tape = unit.tapes.get(submission_id, for_update=True)
             if tape is None or tape.status is not before or tape.next_stage is None:
-                return StageRun(submission_id, before, StageOutcome.NOTHING_TO_DO, before, error_code)
+                return StageRun(submission_id, before, StageOutcome.NOTHING_TO_DO, before)
             stage = tape.next_stage
             if error.transient:
                 failed = tape.record_failed_attempt(code, now, self._max_attempts)
-                unit.record(stage_attempt_failed(submission_id, stage, error_code, tape.progress.attempts))
             else:
                 tape.fail(code, now)
                 failed = True
+            detail = failure_detail(stage, error, tape.progress.attempts)
+            if error.transient:
+                unit.record(stage_attempt_failed(submission_id, detail))
             if failed:
-                unit.record(tape_failed(submission_id, stage, before, code, error.audit_detail()))
+                unit.record(tape_failed(submission_id, detail, before))
             unit.tapes.save(tape)
             unit.commit()
-        fields = {"submission_id": str(submission_id), "stage": stage.value, "error_code": error_code}
+        fields = {"submission_id": str(submission_id), **detail}
         if failed:
-            self._log.warning(LogEvent.TAPE_FAILED, failure_code=code.value, **fields)
-            return StageRun(submission_id, before, StageOutcome.FAILED, TapeStatus.FAILED, error_code)
-        self._log.warning(LogEvent.TAPE_STAGE_ATTEMPT_FAILED, attempts=tape.progress.attempts, **fields)
-        return StageRun(submission_id, before, StageOutcome.RETRY_SCHEDULED, before, error_code)
+            self._log.warning(LogEvent.TAPE_FAILED, **fields)
+            return StageRun(submission_id, before, StageOutcome.FAILED, TapeStatus.FAILED, detail)
+        self._log.warning(LogEvent.TAPE_STAGE_ATTEMPT_FAILED, **fields)
+        return StageRun(submission_id, before, StageOutcome.RETRY_SCHEDULED, before, detail)

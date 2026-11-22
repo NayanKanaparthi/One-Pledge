@@ -1,13 +1,14 @@
 """Named errors of the two shared services and of the bank's checks on what they return (SPEC 9.4, 13).
 
 Each is a `PipelineStageError`: `transient` decides whether the stage is retried with
-backoff; `failure_code` is what a FAILED submission records; `dependency`,
-`http_status` and `reason` go into the `TAPE_FAILED` audit entry (SPEC_DECISIONS 26).
+backoff; `code` and `failure_code` are the one failure code a FAILED submission records;
+`dependency`, `http_status` and `reason` are the facts of SPEC_DECISIONS 58, with
+`reason` from the classification of SPEC_DECISIONS 49 or one of the bank's own findings.
 """
 
 from __future__ import annotations
 
-from onepledge_bank_agent.domain.enums import DependencyRefusal, FailureCode
+from onepledge_bank_agent.domain.enums import FailureCode, FailureReason
 from onepledge_bank_agent.domain.errors import PipelineStageError
 
 KEY_HOLDER_1 = "key_holder_1"
@@ -16,44 +17,46 @@ REGISTRY = "registry"
 
 
 class KeyHolderUnavailableError(PipelineStageError):
-    """A key holder could not be reached or answered 429 or 5xx after the client's retries."""
+    """A key holder could not be reached, timed out, or answered 429 or 5xx (a transient class)."""
 
-    code = "KEY_HOLDER_UNAVAILABLE"
+    code = FailureCode.KEY_HOLDER_UNAVAILABLE.value
     transient = True
     failure_code = FailureCode.KEY_HOLDER_UNAVAILABLE
+    default_reason = FailureReason.CONNECTION_FAILED
 
-    def __init__(self, dependency: str, http_status: int | None = None) -> None:
-        super().__init__(http_status)
-        self.dependency = dependency
-
-
-class KeyHolderRejectedError(PipelineStageError):
-    """A key holder refused the request (401, 409, 413, 422 or another 4xx)."""
-
-    code = "KEY_HOLDER_REJECTED"
-    failure_code = FailureCode.KEY_HOLDER_REJECTED
-
-    def __init__(self, dependency: str, http_status: int, reason: DependencyRefusal) -> None:
+    def __init__(
+        self, dependency: str, http_status: int | None = None, reason: FailureReason | None = None
+    ) -> None:
         super().__init__(http_status, reason)
         self.dependency = dependency
 
 
-class KeyHolderProtocolError(PipelineStageError):
-    """A key holder answered outside the contract: a wrong count, or a malformed or invalid element."""
+class KeyHolderRejectedError(PipelineStageError):
+    """A key holder refused the request or answered outside the contract (a permanent class)."""
 
-    code = "KEY_HOLDER_PROTOCOL"
+    code = FailureCode.KEY_HOLDER_REJECTED.value
     failure_code = FailureCode.KEY_HOLDER_REJECTED
+    default_reason = FailureReason.MALFORMED_RESPONSE
+
+    def __init__(self, dependency: str, http_status: int | None, reason: FailureReason | None = None) -> None:
+        super().__init__(http_status, reason)
+        self.dependency = dependency
+
+
+class KeyHolderProtocolError(KeyHolderRejectedError):
+    """A key holder's elements break SPEC 9.3 step 4: a wrong count, an element that is not a valid point,
+    or an unblinded result that is the identity (PROTOCOL_VIOLATION)."""
 
     def __init__(self, dependency: str, http_status: int | None) -> None:
-        super().__init__(http_status, DependencyRefusal.MALFORMED_RESPONSE)
-        self.dependency = dependency
+        super().__init__(dependency, http_status, FailureReason.PROTOCOL_VIOLATION)
 
 
 class KeyVersionChangedError(PipelineStageError):
     """A tokenise round reported a key version pair other than the one this submission's tokens use."""
 
-    code = "KEY_VERSION_CHANGED"
+    code = FailureCode.KEY_VERSION_MISMATCH.value
     failure_code = FailureCode.KEY_VERSION_MISMATCH
+    default_reason = FailureReason.KEY_VERSION_MISMATCH
 
     def __init__(self, dependency: str) -> None:
         super().__init__()
@@ -61,70 +64,64 @@ class KeyVersionChangedError(PipelineStageError):
 
 
 class RegistryUnavailableError(PipelineStageError):
-    """The registry could not be reached or answered 429, 500, 502, 503 or 504 after the client's retries."""
+    """The registry could not be reached, timed out, or answered 429 or 5xx (a transient class)."""
 
-    code = "REGISTRY_UNAVAILABLE"
+    code = FailureCode.REGISTRY_UNAVAILABLE.value
     transient = True
     failure_code = FailureCode.REGISTRY_UNAVAILABLE
     dependency = REGISTRY
-
-    def __init__(self, http_status: int | None = None) -> None:
-        super().__init__(http_status)
+    default_reason = FailureReason.CONNECTION_FAILED
 
 
 class RegistryRejectedError(PipelineStageError):
-    """The registry refused the request: 401, 409 IDEMPOTENCY_KEY_REUSED, 413, 422 or another 4xx."""
+    """The registry refused the request or answered outside the contract (a permanent class)."""
 
-    code = "REGISTRY_REJECTED_REQUEST"
+    code = FailureCode.REGISTRY_REJECTED_REQUEST.value
     failure_code = FailureCode.REGISTRY_REJECTED_REQUEST
     dependency = REGISTRY
-
-    def __init__(self, http_status: int, reason: DependencyRefusal) -> None:
-        super().__init__(http_status, reason)
+    default_reason = FailureReason.MALFORMED_RESPONSE
 
 
-class RegistryProtocolError(PipelineStageError):
+class RegistryProtocolError(RegistryRejectedError):
     """The registry answered outside the contract, or with results that do not match what was sent."""
 
-    code = "REGISTRY_PROTOCOL"
-    failure_code = FailureCode.REGISTRY_REJECTED_REQUEST
-    dependency = REGISTRY
-
     def __init__(self, http_status: int | None) -> None:
-        super().__init__(http_status, DependencyRefusal.MALFORMED_RESPONSE)
+        super().__init__(http_status, FailureReason.MALFORMED_RESPONSE)
 
 
 class KeyVersionMismatchError(PipelineStageError):
     """The registry refused the key version of the codes (409 KEY_VERSION_MISMATCH). Not retryable."""
 
-    code = "KEY_VERSION_MISMATCH"
+    code = FailureCode.KEY_VERSION_MISMATCH.value
     failure_code = FailureCode.KEY_VERSION_MISMATCH
     dependency = REGISTRY
-
-    def __init__(self, http_status: int) -> None:
-        super().__init__(http_status, DependencyRefusal.REQUEST_REFUSED)
+    default_reason = FailureReason.KEY_VERSION_MISMATCH
 
 
 class CaseAlreadyResolvedError(PipelineStageError):
-    """The registry already resolved the case (409 CASE_ALREADY_RESOLVED)."""
+    """The registry already resolved the case (409 CASE_ALREADY_RESOLVED); a review then syncs instead."""
 
     code = "CASE_ALREADY_RESOLVED"
     failure_code = FailureCode.REGISTRY_REJECTED_REQUEST
     dependency = REGISTRY
-
-    def __init__(self, http_status: int) -> None:
-        super().__init__(http_status, DependencyRefusal.REQUEST_REFUSED)
+    default_reason = FailureReason.REQUEST_REFUSED
 
 
 class CertificateInvalidError(PipelineStageError):
-    """A certificate of the submission failed the bank's own verification (SPEC 13.6). Not retryable."""
+    """A certificate of the submission failed the bank's own verification (SPEC 13.6, SPEC_DECISIONS 61)."""
 
-    code = "CERTIFICATE_INVALID"
+    code = FailureCode.CERTIFICATE_INVALID.value
     failure_code = FailureCode.CERTIFICATE_INVALID
+    dependency = REGISTRY
+    default_reason = FailureReason.CERTIFICATE_INVALID
 
 
 class RegistryIntegrityBrokenError(PipelineStageError):
-    """A received checkpoint failed verification and the halt rule is on: nothing is sent (SPEC 15.4)."""
+    """The halt rule is active: nothing state changing is sent to the registry (SPEC 15.4, SPEC_DECISIONS 56).
 
-    code = "REGISTRY_INTEGRITY_BROKEN"
+    No service was called, so `dependency` and `http_status` are None.
+    """
+
+    code = FailureCode.REGISTRY_INTEGRITY_BROKEN.value
     failure_code = FailureCode.REGISTRY_INTEGRITY_BROKEN
+    default_reason = FailureReason.INTEGRITY_HALT

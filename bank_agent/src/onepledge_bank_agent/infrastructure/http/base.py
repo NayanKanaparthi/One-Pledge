@@ -1,8 +1,10 @@
 """The shared outbound HTTP client: timeouts, no redirects, pooling, bounded retries (SPEC 16.6).
 
 Each call is retried up to two more times (after 0.2 s and 0.4 s) on a transport error,
-a timeout, 502, 503 or 504. Every call the bank agent makes is idempotent by design: a
-key holder evaluation is a pure function, a registry submission carries its
+a timeout, 502, 503 or 504. Every failure is named by the one classification of
+`classification.py` (SPEC_DECISIONS 49): nothing the HTTP library raises reaches a stage
+as an unexpected error, and redirects are never followed. Every call the bank agent makes
+is idempotent by design: a key holder evaluation is a pure function, a registry submission carries its
 idempotency key, an acknowledgement and a repeated case position change nothing.
 Only route templates are logged, never a path or a query string, because outside
 records carry the VIN in both.
@@ -17,10 +19,17 @@ import httpx
 
 from onepledge_bank_agent.application.events import LogEvent
 from onepledge_bank_agent.application.ports import OperationalLog
+from onepledge_bank_agent.infrastructure.http.classification import (
+    ERRORS,
+    Classified,
+    classify_exception,
+    classify_status,
+)
 from onepledge_bank_agent.infrastructure.request_context import current_request_id
 
 RETRY_DELAYS_SECONDS = (0.2, 0.4)
 RETRY_STATUSES = frozenset({502, 503, 504})
+LIBRARY_ERRORS = (httpx.HTTPError, httpx.StreamError, httpx.InvalidURL)
 
 
 type JsonBody = Mapping[str, object]
@@ -76,32 +85,33 @@ class RetryingHttpCaller:
         self._client = client
         self._api_key = api_key
         self._dependency = dependency
+        self.errors = ERRORS[dependency]
         self._log = log
         self._sleep = sleep
 
-    def get(
-        self, route: str, path: str, params: Mapping[str, str | int] | None = None
-    ) -> httpx.Response | None:
-        """GET `path`, logged as `route`; the last response, or None when the service stayed unreachable."""
+    def get(self, route: str, path: str, params: Mapping[str, str | int] | None = None) -> httpx.Response:
+        """GET `path`, logged as `route`; the answer, or the dependency's named error (see `send`)."""
         return self.send(OutboundRequest("GET", route, path, params=params))
 
     def post(
         self, route: str, path: str, body: JsonBody | None = None, headers: Mapping[str, str] | None = None
-    ) -> httpx.Response | None:
+    ) -> httpx.Response:
         """POST a JSON body to `path`, logged as `route`; as `get`."""
         return self.send(OutboundRequest("POST", route, path, body=body, headers=headers))
 
-    def send(self, outbound: OutboundRequest) -> httpx.Response | None:
-        """Send with the retry rule; the last response, or None when every attempt failed in transport."""
+    def send(self, outbound: OutboundRequest) -> httpx.Response:
+        """Send with the retry rule. Returns the answer when it is not a retryable failure; raises the
+        dependency's named error (SPEC_DECISIONS 49) when retries ran out or the library failed."""
         headers = {"X-API-Key": self._api_key, "Accept": "application/json", **dict(outbound.headers or {})}
         request_id = current_request_id()
         if request_id is not None:
             headers["X-Request-ID"] = request_id
-        attempts = 1 + len(RETRY_DELAYS_SECONDS)
-        for attempt in range(1, attempts + 1):
-            response: httpx.Response | None
+        attempts, attempt = 1 + len(RETRY_DELAYS_SECONDS), 0
+        while True:
+            attempt += 1
             if outbound.before_each is not None:
                 outbound.before_each()
+            status: int | None = None
             try:
                 response = self._client.request(
                     outbound.method,
@@ -110,21 +120,19 @@ class RetryingHttpCaller:
                     json=outbound.body,
                     headers=headers,
                 )
-            except httpx.TransportError:
-                response = None
-            if response is not None and response.status_code not in RETRY_STATUSES:
-                return response
-            status = response.status_code if response is not None else None
+            except LIBRARY_ERRORS as error:
+                classified = classify_exception(error)
+                if not classified.transient:
+                    self._log_unavailable(outbound, attempt, status, classified)
+                    raise self.errors.of(None, classified) from None
+            else:
+                if response.status_code not in RETRY_STATUSES:
+                    return response
+                status = response.status_code
+                classified = classify_status(status)
             if attempt == attempts:
-                self._log.warning(
-                    LogEvent.DEPENDENCY_UNAVAILABLE,
-                    dependency=self._dependency,
-                    method=outbound.method,
-                    route=outbound.route,
-                    attempts=attempt,
-                    http_status=status,
-                )
-                return response
+                self._log_unavailable(outbound, attempt, status, classified)
+                raise self.errors.of(status, classified)
             self._log.info(
                 LogEvent.DEPENDENCY_RETRY,
                 dependency=self._dependency,
@@ -132,9 +140,22 @@ class RetryingHttpCaller:
                 route=outbound.route,
                 attempts=attempt,
                 http_status=status,
+                reason=classified.reason.value,
             )
             self._sleep(RETRY_DELAYS_SECONDS[attempt - 1])
-        return None
+
+    def _log_unavailable(
+        self, outbound: OutboundRequest, attempt: int, status: int | None, classified: Classified
+    ) -> None:
+        self._log.warning(
+            LogEvent.DEPENDENCY_UNAVAILABLE,
+            dependency=self._dependency,
+            method=outbound.method,
+            route=outbound.route,
+            attempts=attempt,
+            http_status=status,
+            reason=classified.reason.value,
+        )
 
     def close(self) -> None:
         """Close the pooled connections."""

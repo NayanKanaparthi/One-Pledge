@@ -3,31 +3,20 @@
 Every body is parsed twice from the same bytes: once by a pydantic model in strict JSON
 mode (wrong types, missing fields and out of range values are refused; unknown fields
 are ignored, for additive evolution), and once as plain JSON with floats refused, which
-is the form a signature is checked over. A status that is not a success is turned into
-the dependency's named error: transport failures, 429 and 5xx are transient; 401, 403
-and every other 4xx are refusals; anything outside the contract is a protocol error.
+is the form a signature is checked over. A body that does not parse is MALFORMED_RESPONSE
+(SPEC_DECISIONS 49); a status that is not a success is classified in `classification.py`.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from types import MappingProxyType
+from collections.abc import Mapping
 
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from onepledge_bank_agent.domain.canonical_json import JsonValue
-from onepledge_bank_agent.domain.enums import DependencyRefusal
-from onepledge_bank_agent.domain.errors import PipelineStageError
-
-RATE_LIMITED = 429
-CLIENT_ERRORS = range(400, 500)
-SERVER_ERRORS = range(500, 600)
-REFUSALS: Mapping[int, DependencyRefusal] = MappingProxyType(
-    {401: DependencyRefusal.UNAUTHENTICATED, 403: DependencyRefusal.FORBIDDEN}
-)
+from onepledge_bank_agent.infrastructure.http.classification import DependencyErrors
 
 
 class Strict(BaseModel):
@@ -48,15 +37,6 @@ class ErrorBody(Strict):
     error: ErrorCode
 
 
-@dataclass(frozen=True)
-class DependencyErrors:
-    """How one dependency's failures are named."""
-
-    unavailable: Callable[[int | None], PipelineStageError]
-    rejected: Callable[[int, DependencyRefusal], PipelineStageError]
-    protocol: Callable[[int | None], PipelineStageError]
-
-
 def _refuse_float(text: str) -> float:
     raise ValueError(text[:0])
 
@@ -74,18 +54,6 @@ def error_code(response: httpx.Response) -> str | None:
         return None
 
 
-def failure(response: httpx.Response | None, errors: DependencyErrors) -> PipelineStageError:
-    """The named error of an answer that is not the expected success."""
-    if response is None:
-        return errors.unavailable(None)
-    status = response.status_code
-    if status == RATE_LIMITED or status in SERVER_ERRORS:
-        return errors.unavailable(status)
-    if status in CLIENT_ERRORS:
-        return errors.rejected(status, REFUSALS.get(status, DependencyRefusal.REQUEST_REFUSED))
-    return errors.protocol(status)
-
-
 def parse[M: BaseModel](
     model: type[M], response: httpx.Response, errors: DependencyErrors
 ) -> tuple[M, Mapping[str, JsonValue]]:
@@ -94,9 +62,9 @@ def parse[M: BaseModel](
         parsed = model.model_validate_json(response.content)
         document = plain_json(response)
     except (ValidationError, ValueError):
-        raise errors.protocol(response.status_code) from None
+        raise errors.malformed(response.status_code) from None
     if not isinstance(document, dict):
-        raise errors.protocol(response.status_code)
+        raise errors.malformed(response.status_code)
     return parsed, document
 
 

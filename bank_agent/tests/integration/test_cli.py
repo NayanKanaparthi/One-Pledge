@@ -16,6 +16,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from psycopg import sql
 
 from bank_testkit.audit_chain import first_broken_seq
 from bank_testkit.data import seed_reference
@@ -25,7 +26,8 @@ from bank_testkit.outside import InProcessOutsideRecords, ScriptedOutsideRecords
 from bank_testkit.pipeline import BankAgentHarness, Services
 from bank_testkit.programs import run_program
 from onepledge_bank_agent.domain.enums import TapeKind
-from onepledge_bank_agent.infrastructure.db.migrations import MigrationRunner, SchemaInspector, head_revision
+from onepledge_bank_agent.infrastructure.db.migrations import MigrationRunner, head_revision
+from onepledge_bank_agent.infrastructure.http.base import HttpTimeouts
 from onepledge_bank_agent.interface.cli.main import main
 from onepledge_bank_agent.interface.cli.output import Output
 from onepledge_bank_agent.interface.composition import Collaborators
@@ -238,7 +240,8 @@ def test_worker_once_runs_every_runnable_stage_and_reports_it(
         report = cli("worker", "--once", "--json", collaborators=harness.collaborators)
         idle = cli("worker", "--once", "--quiet", collaborators=harness.collaborators)
     assert report.code == 0, report.err
-    stage = {"submission_id": str(submission.submission_id), "outcome": "ADVANCED", "error_code": ""}
+    no_failure = dict.fromkeys(("stage", "failure_code", "attempts", "dependency", "http_status", "reason"))
+    stage = {"submission_id": str(submission.submission_id), "outcome": "ADVANCED", **no_failure}
     assert report.json() == {
         "ok": True,
         "stages": [
@@ -348,6 +351,45 @@ def test_the_worker_never_needs_an_owner_credential(
     assert json.loads(finished.stdout) == {"ok": True, "stages": []}
 
 
+ROLE_SENTENCE = (
+    "DATABASE_URL connects as a role that could change or remove history (a superuser, an owner, or a role "
+    "with update, delete, truncate or create rights it must not have); use the app role."
+)
+
+
+def test_the_worker_refuses_to_start_as_the_owner_role(
+    bank_db: BankDatabase, doubles: InProcessDoubles
+) -> None:
+    """SPEC_DECISIONS 43.4: as the owner, the worker exits 1 with one line naming DATABASE_URL."""
+    as_owner = {"DATABASE_URL": bank_db.owner_url, "BANK_CODE": "HARBOR", **unreachable_services(doubles)}
+    finished = run_program("onepledge-bank", ["worker", "--once", "--json"], as_owner)
+    assert finished.returncode == 1
+    assert json.loads(finished.stdout) == {
+        "ok": False,
+        "error": {"code": "ROLE_NOT_LEAST_PRIVILEGE", "message": ROLE_SENTENCE},
+    }
+    assert log_lines_and_sentences(finished.stderr)[1] == [ROLE_SENTENCE]
+    assert pairs(bank_db, "SELECT 'audit', count(*)::text FROM audit_log") == {"audit": "0"}
+
+
+@pytest.mark.parametrize(
+    "grant",
+    [
+        "GRANT UPDATE ON audit_log TO {role}",
+        "GRANT DELETE ON alerts TO {role}",
+        "GRANT TRUNCATE ON loans TO {role}",
+        "GRANT CREATE ON SCHEMA public TO {role}",
+    ],
+)
+def test_the_worker_refuses_an_app_role_with_a_forbidden_privilege(
+    bank_db: BankDatabase, doubles: InProcessDoubles, monkeypatch: pytest.MonkeyPatch, grant: str
+) -> None:
+    with bank_db.connect("owner") as connection:
+        connection.execute(sql.SQL(grant).format(role=sql.Identifier(bank_db.app_role)))
+    cli = cli_for(monkeypatch, {**bank_db.environment(), **unreachable_services(doubles)})
+    assert cli("worker", "--once") == Run(1, "", ROLE_SENTENCE + "\n")
+
+
 def test_an_unreachable_database_is_one_sentence_without_the_url(bank_db: BankDatabase) -> None:
     unreachable_url = "postgresql://someone:hunter2-secret@127.0.0.1:9/nowhere"
     finished = run_program(
@@ -366,21 +408,27 @@ def test_an_unreachable_database_is_one_sentence_without_the_url(bank_db: BankDa
 
 
 def test_an_unexpected_error_is_one_sentence_and_the_traceback_needs_debug(
-    bank_db: BankDatabase, monkeypatch: pytest.MonkeyPatch
+    bank_db: BankDatabase, doubles: InProcessDoubles, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def broken(self: object) -> None:
+    """A defect reaches the last resort handler through an injected collaborator, with no patching."""
+
+    def exploding_factory(base_url: str, timeouts: HttpTimeouts) -> httpx.Client:
         raise RuntimeError("1HGCM82633A004352 must never be printed")
 
-    monkeypatch.setattr(SchemaInspector, "status", broken)
-    cli = cli_for(monkeypatch, bank_db.environment())
-    plain = cli("db", "status", "--json")
+    broken = Collaborators(http_client_factory=exploding_factory)
+    cli = cli_for(monkeypatch, {**bank_db.environment(), **unreachable_services(doubles)})
+    plain = cli("registry", "sync", "--json", collaborators=broken)
     sentence = "Unexpected error. Run with --debug for details."
     assert plain.code == 1 and plain.err == sentence + "\n" and "1HGCM82633A004352" not in plain.out
     assert plain.json() == {"ok": False, "error": {"code": "INTERNAL_ERROR", "message": sentence}}
-    debug = cli("db", "status", "--debug")
-    assert (
-        debug.code == 1 and "Traceback" in debug.err and debug.err.endswith("Run with --debug for details.\n")
-    )
+    debug = cli("registry", "sync", "--debug", collaborators=broken)
+    assert debug.code == 1 and debug.err.endswith("Run with --debug for details.\n")
+    trace = debug.err.splitlines()
+    assert trace[0] == "Traceback, frames only (most recent call last):"
+    assert any(line.endswith(" exploding_factory") for line in trace), "the frames: file, line, function"
+    assert "RuntimeError" in trace, "the exception type on a line of its own"
+    assert "1HGCM82633A004352" not in debug.err and "must never be printed" not in debug.err
+    assert "raise RuntimeError" not in debug.err, "no source line (SPEC_DECISIONS 53.12)"
 
 
 def test_a_usage_error_exits_2(bank_db: BankDatabase) -> None:
