@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from onepledge_outside_records.infrastructure.db.role_check import GRANT_MATRIX
 from onepledge_testtools.repository_rules import (
     markdown_files,
     markdown_problems,
@@ -205,3 +206,14 @@ def test_every_markdown_file_of_the_package_renders_its_tables_whole() -> None:
 def test_no_source_line_is_vin_shaped() -> None:
     """CODE-03 is literal: the reviewers' grep for 17 VIN alphabet characters prints nothing."""
     assert vin_shaped_lines(SOURCE) == []
+
+
+def test_the_grant_matrix_is_spec_6_1_select_on_the_four_tables_and_nothing_else() -> None:
+    select = frozenset({"SELECT"})
+    assert dict(GRANT_MATRIX) == {
+        "title_records": select,
+        "payments": select,
+        "contracts": select,
+        "api_clients": select,
+        "alembic_version": frozenset(),
+    }

@@ -23,11 +23,25 @@ from onepledge_outside_records.domain.records import (
     TitleRecord,
     VinText,
 )
+from onepledge_outside_records.infrastructure.db.failures import (
+    INSUFFICIENT_PRIVILEGE,
+    UNDEFINED_TABLE,
+    connection_failed,
+    privilege_missing,
+    sqlstate,
+    tables_missing,
+)
 from onepledge_outside_records.infrastructure.db.models import (
     ApiClientRow,
     ContractRow,
     PaymentRow,
     TitleRecordRow,
+)
+from onepledge_outside_records.infrastructure.db.role_check import (
+    GRANT_MATRIX,
+    inspect_role,
+    owner_problem,
+    refusal,
 )
 
 COPY_TITLES = "COPY title_records (vin, state, title_status, lienholder_name, lien_recorded_on) FROM STDIN"
@@ -48,19 +62,23 @@ def _connection(engine: Engine) -> Iterator[Connection]:
 
 @contextmanager
 def _owner_transaction(engine: Engine) -> Iterator[Connection]:
-    """One transaction as the owner role; database errors become one sentence, without values."""
+    """One transaction as the owner role, after the owner check; failures become one sentence each."""
     try:
         with engine.begin() as connection:
+            problem = owner_problem(connection)
+            if problem is not None:
+                raise problem
             yield connection
-    except OperationalError:
-        raise OperatorError(
-            "PostgreSQL refused the owner connection at MIGRATION_DATABASE_URL; run db provision first.",
-            "DATABASE_UNAVAILABLE",
-        ) from None
-    except ProgrammingError:
-        raise OperatorError(
-            "The outside records tables are missing; run db migrate first.", "NOT_MIGRATED"
-        ) from None
+    except OperationalError as error:
+        raise connection_failed(error, "MIGRATION_DATABASE_URL") from None
+    except ProgrammingError as error:
+        if sqlstate(error) == UNDEFINED_TABLE:
+            raise tables_missing() from None
+        if sqlstate(error) == INSUFFICIENT_PRIVILEGE:
+            raise privilege_missing(
+                "MIGRATION_DATABASE_URL", "use the owner role created by db provision"
+            ) from None
+        raise
     except (DBAPIError, psycopg.Error):
         raise OperatorError(
             "The database rejected the records because a constraint failed; nothing was changed.",
@@ -68,30 +86,10 @@ def _owner_transaction(engine: Engine) -> Iterator[Connection]:
         ) from None
 
 
-# What the connected role is: superuser, owner of a table, holder of a write privilege. Every
-# schema of the database is checked, not only current_schema(): a search path is a session
-# setting and must not hide a table the role could write (SPEC_DECISIONS 68.11).
-_ROLE_PRIVILEGES = """
-SELECT
-    (SELECT rolsuper FROM pg_roles WHERE rolname = current_user),
-    EXISTS (
-        SELECT 1 FROM pg_tables
-        WHERE schemaname NOT IN ('pg_catalog', 'information_schema') AND tableowner = current_user
-    ),
-    EXISTS (
-        SELECT 1 FROM pg_tables AS t, unnest(ARRAY['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE']) AS p(privilege)
-        WHERE t.schemaname NOT IN ('pg_catalog', 'information_schema')
-          AND has_table_privilege(current_user, quote_ident(t.schemaname) || '.' || quote_ident(t.tablename),
-                                  p.privilege)
-    )
-"""
-
-
-def _unsafe_role(problem: str) -> OperatorError:
-    return OperatorError(
-        f"The role of DATABASE_URL {problem}; serve must connect as the read-only app role.",
-        "UNSAFE_DATABASE_ROLE",
-    )
+_MISSING_TABLES = text(
+    "SELECT count(*) FROM unnest(CAST(:tables AS text[])) AS t(name) "
+    "WHERE to_regclass('public.' || t.name) IS NULL"
+)
 
 
 class SqlRecordsReader:
@@ -101,31 +99,28 @@ class SqlRecordsReader:
         self._engine = engine
 
     def ensure_readable(self) -> None:
-        """Check before serving that the role can read the migrated tables, or say what to run."""
+        """Check before serving that the database is reachable and migrated, or say what to do."""
         try:
             with self._engine.connect() as connection:
-                connection.execute(select(ApiClientRow.client_id).limit(1))
-        except DBAPIError:
-            raise OperatorError(
-                "The database at DATABASE_URL cannot be read; run db provision and db migrate first.",
-                "NOT_MIGRATED",
-            ) from None
+                missing: int = connection.execute(
+                    _MISSING_TABLES, {"tables": sorted(GRANT_MATRIX)}
+                ).scalar_one()
+        except OperationalError as error:
+            raise connection_failed(error, "DATABASE_URL") from None
+        if missing:
+            raise tables_missing()
 
     def ensure_read_only(self) -> None:
-        """Refuse to serve as a role that could write (SPEC 6.1, SPEC_DECISIONS 43.4).
+        """Refuse to serve as a role that is not least-privilege (SPEC 6.1, SPEC_DECISIONS 72).
 
-        The serving role must not be a superuser, must own no table of the schema, and must
-        hold none of INSERT, UPDATE, DELETE or TRUNCATE on any table, so "cannot write even if
-        the code tried" is a property checked at startup, not only of the deployment.
+        `inspect_role` compares the role with the grant matrix on all six points, so "cannot
+        write even if the code tried" is a property checked at startup, not only of the
+        deployment.
         """
         with _connection(self._engine) as connection:
-            superuser, owner, writer = connection.execute(text(_ROLE_PRIVILEGES)).one()
-        if superuser:
-            raise _unsafe_role("is a superuser")
-        if owner:
-            raise _unsafe_role("owns tables of the outside records schema")
-        if writer:
-            raise _unsafe_role("may insert, update, delete or truncate rows")
+            violations = inspect_role(connection)
+        if violations:
+            raise refusal(violations)
 
     def title(self, vin: VinText) -> TitleRecord | None:
         """The title record of a VIN."""

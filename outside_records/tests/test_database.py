@@ -115,8 +115,12 @@ def test_migrating_needs_an_existing_app_role(provisioned_database: Database) ->
 
 
 def test_migrating_an_unprovisioned_database_says_what_to_run(fresh_database: Database) -> None:
-    with pytest.raises(OperatorError, match="run db provision first"):
+    with pytest.raises(OperatorError) as raised:
         MigrationRunner(fresh_database.owner_url, fresh_database.app_role).upgrade()
+    assert raised.value.sentence == (
+        "PostgreSQL refused the connection of MIGRATION_DATABASE_URL: its role, password or database "
+        "is not set up; run db provision, or fix the URL."
+    )
 
 
 def test_provisioning_needs_a_reachable_server(fresh_database: Database) -> None:
@@ -193,8 +197,11 @@ def test_seeding_before_migrating_says_what_to_run(provisioned_database: Databas
 
 def test_seeding_an_unreachable_server_says_what_to_run(example_dir: Path) -> None:
     engine = make_engine(UNREACHABLE)
-    with pytest.raises(OperatorError, match="run db provision first"):
+    with pytest.raises(OperatorError) as raised:
         SeedRecords(CsvRecordsSource(), SqlRecordsWriter(engine)).run(example_dir)
+    assert raised.value.sentence == (
+        "PostgreSQL is not reachable at MIGRATION_DATABASE_URL; start it or fix the URL."
+    )
 
 
 def test_clients_are_stored_by_hash_and_a_new_key_replaces_the_old(

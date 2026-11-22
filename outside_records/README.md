@@ -9,11 +9,19 @@ synthetic and comes from `onepledge-datagen`.
   `GET /v1/payments?vin=...`, `GET /v1/contracts/{vin}`. `GET /healthz` needs no key.
 - The API process connects as `{db}_app`, which has `SELECT` on the four tables and
   nothing else, so it cannot write even if the code tried. `serve` checks this at startup
-  and refuses to start, with one line naming `DATABASE_URL`, when the role is a superuser,
-  owns a table, or holds INSERT, UPDATE, DELETE or TRUNCATE on any table of any schema of
-  the database, whether granted directly, through a role membership or a predefined role;
-  the check reads the role's attributes and privileges, never the URL, and does not depend
-  on the search path.
+  with `inspect_role()` (SPEC_DECISIONS 72) and refuses to start, with one line naming
+  `DATABASE_URL` and the first violation code, unless all six points hold: no superuser,
+  `CREATEDB`, `CREATEROLE`, `REPLICATION` or `BYPASSRLS`; membership of no role, the
+  predefined `pg_` roles included; ownership of nothing in the database; `CONNECT` only on
+  the database, `USAGE` only on `public` and nothing on any other schema; on every table of
+  `public` exactly the privileges of the grant matrix, counting grants to the role and to
+  `PUBLIC` at table and at column level, with no table outside the matrix; and no
+  privilege on any sequence. The grant matrix (`role_check.GRANT_MATRIX`) is the one table
+  the grants migration and the check both read. The check reads the role's attributes and
+  privileges, never the URL, and does not depend on the search path.
+- `db migrate`, `seed` and `clients add` refuse to run when the role of
+  `MIGRATION_DATABASE_URL` does not own the outside records tables (on a database with no
+  table yet, the database itself).
 - Client keys are stored only as SHA-256 hashes of 256 bit random keys. A request's key is
   hashed and looked up by indexed equality on that hash; nothing is compared in memory.
 - A VIN that does not match `^[A-HJ-NPR-Z0-9]{17}$` gets 422 `VALIDATION_ERROR` with
@@ -27,10 +35,14 @@ synthetic and comes from `onepledge-datagen`.
   `outside_records`, the health value, and every 500 writes exactly one `error` record
   carrying the response's `request_id` (a 503 for a database outage writes one `warning`).
   Every record of a 5xx response, the access record included, carries `error_code`,
-  `http_status`, `request_id` and `exception_type` (SPEC_DECISIONS 66). A failed migration
-  writes `schema_migration_failed` with `exception_type` and the `revision` being applied,
-  prints one fixed sentence, and `--debug` shows the frames of the failure. Records of libraries (uvicorn, SQLAlchemy,
-  Alembic) below WARNING are dropped; above it they keep only `logger`, `level` and
+  `http_status`, `request_id` and `exception_type` (SPEC_DECISIONS 66). Every exception
+  while `db migrate` runs (a statement PostgreSQL refuses, a missing privilege, any
+  SQLAlchemy or Alembic error) writes `schema_migration_failed` with `exception_type` and
+  the `revision` being applied, prints "The migration to REVISION failed and was rolled
+  back. Fix the database state named in the log and run db migrate again." and exits 1
+  (SPEC_DECISIONS 79); a database that cannot be reached says so instead, and `--debug`
+  shows the frames of the failure. Records of libraries (uvicorn, SQLAlchemy, Alembic)
+  below WARNING are dropped; above it they keep only `logger`, `level` and
   `exception_type`. `db migrate` writes one `schema_migration_applied` record per applied
   revision.
 - No response is a redirect: a path with a trailing slash is an unknown route, 404
@@ -79,7 +91,7 @@ onepledge-outside serve                 serve the API on BIND_HOST:PORT as the a
 `seed` runs in one transaction as the owner role, prints the row count per table and is
 idempotent (the same input gives the same table contents). Every command exits 0 on
 success and 1 with one sentence on stderr when something is wrong (PostgreSQL not
-reachable, database not migrated, port in use, a variable missing or malformed, a
+reachable, a connection refused, tables missing, a privilege missing, port in use, a variable missing or malformed, a
 `PG_ADMIN_URL` that is not a superuser, a data file cell that is not in its format, named
 by file, line and column), and 2 on a usage error (an empty `--data-dir` is one). An
 unexpected error prints `Unexpected error. Run with --debug for details.`; `--debug` adds
@@ -157,9 +169,12 @@ uniquely named database and role pair through the same provisioning code, migrat
 drops it afterwards. The names have the form `optest_<UTC time>_<pid>_<8 hex>_outside`; a
 run stopped by SIGTERM still tears its fixtures down, every session first drops `optest_`
 databases and roles more than two hours old, and `make test-sweep` drops all of them. Every
-test stops after 120 seconds, and the tests that expect `serve` to refuse after 60. They cover provisioning twice, migrations up, down and up, agreement
-of the models with the migrated schema, seeding and its idempotence, the app role being
-refused every write, client keys stored only as hashes, every endpoint against the
-contract's schemas, ordering and paging of payments, 401, 404 and 422 without echo,
-trailing slashes and 405 `Allow` on every route, `serve` refused as owner, superuser or
-with a write privilege, and log records that hold no VIN, path or query string.
+test stops after 120 seconds, and the tests that expect `serve` to refuse after 60.
+
+They cover provisioning twice, migrations up, down and up, agreement of the models with
+the migrated schema, seeding and its idempotence, the app role being refused every write,
+client keys stored only as hashes, every endpoint against the contract's schemas, ordering
+and paging of payments, 401, 404 and 422 without echo, trailing slashes and 405 `Allow` on
+every route, `serve` refused for a hand-made violation of each of the six points
+(`test_role_check.py`, column-level grants included), the administrative commands refused
+for a role that is not the owner, and log records that hold no VIN, path or query string.

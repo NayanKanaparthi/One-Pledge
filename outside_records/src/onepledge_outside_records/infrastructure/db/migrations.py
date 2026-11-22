@@ -8,13 +8,16 @@ from importlib import resources
 
 from alembic import command
 from alembic.config import Config
-from alembic.runtime.migration import MigrationInfo
+from alembic.runtime.migration import MigrationContext, MigrationInfo
 from alembic.script import ScriptDirectory
+from alembic.script.revision import RevisionError
 from alembic.util import CommandError
 from sqlalchemy.exc import OperationalError
 
 from onepledge_outside_records.domain.errors import OperatorError
-from onepledge_outside_records.infrastructure.db.engines import sqlalchemy_url
+from onepledge_outside_records.infrastructure.db.engines import make_engine, sqlalchemy_url
+from onepledge_outside_records.infrastructure.db.failures import connection_failed
+from onepledge_outside_records.infrastructure.db.role_check import owner_problem
 from onepledge_outside_records.infrastructure.logging_setup import LogEvent, get_logger
 
 _log = get_logger(__name__)
@@ -48,11 +51,19 @@ class MigrationRunner:
     """Upgrades or downgrades the outside records schema."""
 
     def __init__(self, migration_url: str, app_role: str) -> None:
+        self._migration_url = migration_url
         self._config = alembic_config(migration_url, app_role)
+        # The revision the database was at when this runner last connected, None at base; and
+        # whether it connected at all, since an unreachable database has no known revision.
+        self._current: str | None = None
+        self._reached = False
 
     def upgrade(self, revision: str = "head") -> None:
-        """Migrate up to `revision`."""
-        self._guarded(lambda: command.upgrade(self._config, revision), revision)
+        """Migrate up to `revision`, as the owner of the schema only."""
+        self._guarded(
+            lambda: self._as_owner(lambda: command.upgrade(self._config, revision)),
+            lambda: self._first_pending(revision) or revision,
+        )
 
     def head_revision(self) -> str:
         """The newest revision of the packaged migrations."""
@@ -62,18 +73,51 @@ class MigrationRunner:
         return head
 
     def downgrade(self, revision: str = "base") -> None:
-        """Migrate down to `revision`."""
-        self._guarded(lambda: command.downgrade(self._config, revision), revision)
+        """Migrate down to `revision`, as the owner of the schema only."""
+        self._guarded(
+            lambda: self._as_owner(lambda: command.downgrade(self._config, revision)),
+            lambda: self._current or revision,
+        )
+
+    def _first_pending(self, target: str) -> str | None:
+        """The first revision an upgrade from the database's revision towards `target` applies."""
+        if not self._reached:
+            return None
+        try:
+            pending = list(ScriptDirectory.from_config(self._config).iterate_revisions(target, self._current))
+        except (CommandError, RevisionError):
+            return None
+        return pending[-1].revision if pending else None
+
+    def _as_owner(self, action: Callable[[], None]) -> None:
+        """Run `action` only when MIGRATION_DATABASE_URL connects as the owner (SPEC_DECISIONS 72)."""
+        engine = make_engine(self._migration_url)
+        try:
+            with engine.connect() as connection:
+                problem = owner_problem(connection)
+                if problem is not None:
+                    raise problem
+                self._current = MigrationContext.configure(connection).get_current_revision()
+                self._reached = True
+        finally:
+            engine.dispose()
+        action()
 
     @staticmethod
-    def _guarded(action: Callable[[], None], target: str) -> None:
+    def _guarded(action: Callable[[], None], applying: Callable[[], str]) -> None:
+        """Every exception while migrating is a migration failure, not the last resort (decision 79).
+
+        The revision named is the one whose script was running, or else the one that was next.
+        """
         try:
             action()
-        except (OperationalError, CommandError) as error:
+        except OperatorError:
+            raise
+        except Exception as error:  # Every failure of a migration ends here (SPEC_DECISIONS 79).
             # One record with the type, the frames and the revision being applied (SPEC_DECISIONS 66).
-            revision = _revision_being_applied(error) or target
+            revision = _revision_being_applied(error) or applying()
             _log.error(LogEvent.SCHEMA_MIGRATION_FAILED, exc_info=error, revision=revision)
-            raise _operator_error(error) from None
+            raise _operator_error(error, revision) from None
 
 
 def _revision_being_applied(error: BaseException) -> str | None:
@@ -86,18 +130,26 @@ def _revision_being_applied(error: BaseException) -> str | None:
     return found
 
 
-def _operator_error(error: BaseException) -> OperatorError:
-    """The fixed sentence for a failed migration, keeping the exception for `--debug`."""
-    if isinstance(error, OperationalError):
-        return OperatorError(
-            "PostgreSQL refused the owner connection; run db provision first.", "DATABASE_UNAVAILABLE", error
-        )
-    # The migrations raise plain sentences of their own (DB_APP_ROLE); Alembic's own
-    # messages quote revision ids, so those become one fixed sentence (SPEC_DECISIONS 43.11).
-    sentence = str(error)
-    if any(mark in sentence for mark in _REPR_MARKS):
-        sentence = (
-            "Alembic could not run the migrations: the revision recorded in the database or the "
-            "one asked for is not one of the packaged migrations."
-        )
-    return OperatorError(sentence, "CONFIGURATION_ERROR", error)
+def _operator_error(error: BaseException, revision: str) -> OperatorError:
+    """The sentence for a failed migration, keeping the exception for `--debug`.
+
+    A connection that never opened names its cause. The sentences the migrations raise
+    themselves (about DB_APP_ROLE) and an unknown revision keep theirs; every other failure,
+    a statement PostgreSQL refused, a missing privilege or any other error, is one fixed sentence.
+    """
+    if isinstance(error, OperationalError) and _revision_being_applied(error) is None:
+        return connection_failed(error, "MIGRATION_DATABASE_URL")
+    if isinstance(error, CommandError):
+        sentence = str(error)
+        if any(mark in sentence for mark in _REPR_MARKS):
+            sentence = (
+                "Alembic could not run the migrations: the revision recorded in the database or the "
+                "one asked for is not one of the packaged migrations."
+            )
+        return OperatorError(sentence, "CONFIGURATION_ERROR", error)
+    return OperatorError(
+        f"The migration to {revision} failed and was rolled back. "
+        "Fix the database state named in the log and run db migrate again.",
+        "OPERATION_FAILED",
+        error,
+    )
