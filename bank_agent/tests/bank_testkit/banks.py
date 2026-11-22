@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import date
@@ -23,6 +23,7 @@ from bank_testkit.doubles import BANKS, InProcessDoubles
 from bank_testkit.outside import OutsideService
 from bank_testkit.pipeline import BankAgentHarness, Services
 from onepledge_bank_agent.application.faults import FaultInjector
+from onepledge_bank_agent.application.ports import Clock
 from onepledge_bank_agent.domain.enums import Role, TapeKind
 
 
@@ -106,11 +107,19 @@ class ThreeBanks:
             self._run_together([step.bank_code for step in batch])
         self.sync_all()
 
-    def agent_with(self, code: str, faults: FaultInjector) -> BankAgentHarness:
-        """A second bank agent process for one bank, with a fault injector (use as a context manager)."""
-        database = self.databases[code]
+    def agent_with(
+        self,
+        code: str,
+        faults: FaultInjector | None = None,
+        clock: Clock | None = None,
+        environment: Mapping[str, str] | None = None,
+    ) -> BankAgentHarness:
+        """A second bank agent process for one bank (use as a context manager)."""
         services = Services(self._outside, self.doubles)
-        return BankAgentHarness(database, services, faults=faults, environment={"BANK_CODE": code})
+        variables = {"BANK_CODE": code, **dict(environment or {})}
+        return BankAgentHarness(
+            self.databases[code], services, faults=faults, clock=clock, environment=variables
+        )
 
     def sync_all(self) -> None:
         """Pull every pending registry message at every bank."""
