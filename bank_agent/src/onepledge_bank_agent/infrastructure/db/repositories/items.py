@@ -10,7 +10,11 @@ from sqlalchemy.orm import Session
 
 from onepledge_bank_agent.application.ports import AcceptedItem, IdGenerator, NewItem
 from onepledge_bank_agent.domain.enums import RowDisposition
-from onepledge_bank_agent.infrastructure.db.models import CleaningIssueRow, SubmissionItemRow
+from onepledge_bank_agent.infrastructure.db.models import (
+    CleaningIssueRow,
+    SubmissionItemRow,
+    TapeSubmissionRow,
+)
 
 CHECKED_DISPOSITIONS = (RowDisposition.ACCEPTED_NEW.value, RowDisposition.ACCEPTED_REPRESENTED.value)
 
@@ -69,3 +73,31 @@ class SqlSubmissionItemRepository:
             for row in self._session.execute(statement)
             if row.loan_id is not None
         ]
+
+    def release_requested(self, submission_id: uuid.UUID) -> list[AcceptedItem]:
+        """Items to release with their loans, in row number order."""
+        statement = (
+            select(SubmissionItemRow.row_number, SubmissionItemRow.loan_id)
+            .where(
+                SubmissionItemRow.submission_id == submission_id,
+                SubmissionItemRow.disposition == RowDisposition.RELEASE_REQUESTED.value,
+            )
+            .order_by(SubmissionItemRow.row_number)
+        )
+        return [
+            AcceptedItem(row.row_number, row.loan_id)
+            for row in self._session.execute(statement)
+            if row.loan_id is not None
+        ]
+
+    def latest_submission_of(self, loan_id: uuid.UUID) -> uuid.UUID | None:
+        """The most recently uploaded submission with an item for this loan."""
+        statement = (
+            select(SubmissionItemRow.submission_id)
+            .join(TapeSubmissionRow, TapeSubmissionRow.submission_id == SubmissionItemRow.submission_id)
+            .where(SubmissionItemRow.loan_id == loan_id)
+            .order_by(TapeSubmissionRow.uploaded_at.desc(), TapeSubmissionRow.submission_id.desc())
+            .limit(1)
+        )
+        found: uuid.UUID | None = self._session.execute(statement).scalar_one_or_none()
+        return found

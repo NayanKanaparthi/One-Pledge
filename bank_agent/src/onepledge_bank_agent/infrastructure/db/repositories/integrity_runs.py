@@ -1,0 +1,41 @@
+"""`SqlIntegrityRunRepository`: `integrity_runs` (insert-only)."""
+
+from __future__ import annotations
+
+from sqlalchemy import insert, select
+from sqlalchemy.orm import Session
+
+from onepledge_bank_agent.application.evidence_ports import IntegrityRun
+from onepledge_bank_agent.domain.enums import IntegrityRunStatus
+from onepledge_bank_agent.infrastructure.db.models import IntegrityRunRow
+
+
+class SqlIntegrityRunRepository:
+    """A record of every deep verification."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, run: IntegrityRun) -> None:
+        """Insert one run with its report."""
+        self._session.execute(
+            insert(IntegrityRunRow).values(
+                run_id=run.run_id,
+                ran_at=run.ran_at,
+                triggered_by=run.triggered_by,
+                status=run.status.value,
+                report=dict(run.report),
+            )
+        )
+
+    def latest(self) -> IntegrityRun | None:
+        """The most recent run."""
+        statement = (
+            select(IntegrityRunRow).order_by(IntegrityRunRow.ran_at.desc(), IntegrityRunRow.run_id).limit(1)
+        )
+        row = self._session.execute(statement).scalar_one_or_none()
+        if row is None:
+            return None
+        return IntegrityRun(
+            row.run_id, row.ran_at, row.triggered_by, IntegrityRunStatus(row.status), row.report
+        )

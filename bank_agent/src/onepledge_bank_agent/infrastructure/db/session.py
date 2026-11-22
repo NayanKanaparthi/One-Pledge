@@ -11,11 +11,17 @@ from sqlalchemy.orm import Session
 from onepledge_bank_agent.application.ports import IdGenerator
 from onepledge_bank_agent.domain.audit import AuditDraft
 from onepledge_bank_agent.infrastructure.audit import HashChainedAuditWriter
+from onepledge_bank_agent.infrastructure.db.repositories.alerts import SqlAlertRepository
+from onepledge_bank_agent.infrastructure.db.repositories.certificates import SqlCertificateRepository
+from onepledge_bank_agent.infrastructure.db.repositories.checkpoints import SqlCheckpointRepository
 from onepledge_bank_agent.infrastructure.db.repositories.checks import SqlCheckRepository
+from onepledge_bank_agent.infrastructure.db.repositories.evidence import SqlEvidenceReader
 from onepledge_bank_agent.infrastructure.db.repositories.facilities import SqlFacilityRepository
+from onepledge_bank_agent.infrastructure.db.repositories.integrity_runs import SqlIntegrityRunRepository
 from onepledge_bank_agent.infrastructure.db.repositories.items import SqlSubmissionItemRepository
 from onepledge_bank_agent.infrastructure.db.repositories.loans import SqlLoanRepository
 from onepledge_bank_agent.infrastructure.db.repositories.raw_rows import SqlRawRowRepository
+from onepledge_bank_agent.infrastructure.db.repositories.requests import SqlRegistryRequestRepository
 from onepledge_bank_agent.infrastructure.db.repositories.tapes import SqlTapeRepository
 from onepledge_bank_agent.infrastructure.db.repositories.tokens import SqlTokenRepository
 
@@ -30,6 +36,12 @@ class SqlUnitOfWork:
     checks: SqlCheckRepository
     tokens: SqlTokenRepository
     facilities: SqlFacilityRepository
+    requests: SqlRegistryRequestRepository
+    certificates: SqlCertificateRepository
+    alerts: SqlAlertRepository
+    checkpoints: SqlCheckpointRepository
+    integrity_runs: SqlIntegrityRunRepository
+    evidence: SqlEvidenceReader
 
     def __init__(self, engine: Engine, writer: HashChainedAuditWriter, ids: IdGenerator) -> None:
         self._engine = engine
@@ -49,6 +61,12 @@ class SqlUnitOfWork:
         self.checks = SqlCheckRepository(session, self._ids)
         self.tokens = SqlTokenRepository(session)
         self.facilities = SqlFacilityRepository(session)
+        self.requests = SqlRegistryRequestRepository(session)
+        self.certificates = SqlCertificateRepository(session)
+        self.alerts = SqlAlertRepository(session)
+        self.checkpoints = SqlCheckpointRepository(session)
+        self.integrity_runs = SqlIntegrityRunRepository(session)
+        self.evidence = SqlEvidenceReader(session)
         return self
 
     def __exit__(

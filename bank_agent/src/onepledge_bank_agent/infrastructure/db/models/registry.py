@@ -137,6 +137,7 @@ class CheckpointSeenRow(Base):
     verified_at: Mapped[datetime] = timestamp()
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     first_bad_event_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    body: Mapped[dict[str, Any]] = mapped_column(JSONB)
 
 
 class AlertRow(Base):
