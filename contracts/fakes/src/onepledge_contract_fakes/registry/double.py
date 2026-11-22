@@ -24,7 +24,13 @@ from onepledge_contract_fakes.members import MemberDirectory, key_matches
 from onepledge_contract_fakes.registry.config import RegistryConfig
 from onepledge_contract_fakes.registry.idempotency import IdempotencyStore, StoredResponse
 from onepledge_contract_fakes.registry.inspection import RegistryInspector, TamperMode, TamperRequest
-from onepledge_contract_fakes.registry.model import CaseStatus, EventType, Position, Submission
+from onepledge_contract_fakes.registry.model import (
+    CaseStatus,
+    EventType,
+    Position,
+    Submission,
+    SubmissionKind,
+)
 from onepledge_contract_fakes.registry.publisher import Publisher
 from onepledge_contract_fakes.registry.signing import RegistrySigner
 from onepledge_contract_fakes.registry.stores import RegistryStores
@@ -33,6 +39,10 @@ from onepledge_contract_fakes.registry.submissions import (
     SubmissionRecord,
     validate_submission,
 )
+
+# The per member daily item cap counts BACK_BOOK and PLEDGE items only; a RELEASE is never
+# refused for the cap, so a member can always give up a lock (SPEC_DECISIONS 81.10).
+CAPPED_KINDS = frozenset({SubmissionKind.BACK_BOOK, SubmissionKind.PLEDGE})
 
 
 @dataclass(frozen=True)
@@ -152,7 +162,8 @@ class RegistryDouble:
             validate_submission(submission)
             if submission.key_version != self._config.key_version:
                 raise KeyVersionMismatchError
-            self._cap.consume(member_id, len(submission.items))
+            if submission.kind in CAPPED_KINDS:
+                self._cap.consume(member_id, len(submission.items))
             record = self._processor.process(member_id, submission)
             body = json.dumps(record.result, separators=(",", ":")).encode("utf-8")
             self._submissions[record.submission_id] = record

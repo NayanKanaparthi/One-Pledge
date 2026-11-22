@@ -115,6 +115,34 @@ def test_daily_item_cap() -> None:
     assert registry.submit(ids[1], code("k3"), pledge(item("c"), item("d")), code("b3")).status == 201
 
 
+def release(name: str) -> Submission:
+    return Submission(
+        SubmissionKind.RELEASE, "1.1", (SubmissionItem(str(uuid.uuid4()), code("asset" + name), None),)
+    )
+
+
+def test_a_release_is_never_refused_for_the_daily_item_cap_and_does_not_count() -> None:
+    """SPEC_DECISIONS 81.10: a member must always be able to give up a lock."""
+    registry, ids = double(cap=3)
+    registry.submit(ids[0], code("k1"), pledge(item("a"), item("b"), item("c")), code("b1"))
+    with pytest.raises(RateLimitedError):
+        registry.submit(ids[0], code("k2"), pledge(item("d")), code("b2"))
+    released = registry.submit(ids[0], code("k3"), release("a"), code("b3"))
+    assert released.status == 201
+    assert json.loads(released.body)["results"][0]["result"] == "RELEASED"
+    with pytest.raises(RateLimitedError):
+        registry.submit(ids[0], code("k4"), pledge(item("d")), code("b4"))
+
+
+def test_back_book_items_count_toward_the_daily_item_cap() -> None:
+    registry, ids = double(cap=2)
+    registry.submit(
+        ids[0], code("k1"), pledge(item("a"), item("b"), kind=SubmissionKind.BACK_BOOK), code("b1")
+    )
+    with pytest.raises(RateLimitedError):
+        registry.submit(ids[0], code("k2"), pledge(item("c")), code("b2"))
+
+
 def race_once(round_number: int) -> tuple[list[str], RegistryDouble]:
     """Two members submit the same asset code, released together by a barrier."""
     registry, ids = double()
