@@ -237,3 +237,11 @@ def test_the_roles_of_one_database_cannot_connect_to_another(
         foreign = own_url.rsplit("/", 1)[0] + "/" + database.target.database
         with pytest.raises(psycopg.OperationalError, match="permission denied"):
             psycopg.connect(foreign).close()
+
+
+def test_an_unknown_revision_is_one_plain_sentence(provisioned_database: Database) -> None:
+    runner = MigrationRunner(provisioned_database.owner_url, provisioned_database.app_role)
+    with pytest.raises(OperatorError) as raised:
+        runner.upgrade("9999_unknown")
+    assert raised.value.sentence.startswith("Alembic could not run the migrations")
+    assert not any(mark in raised.value.sentence for mark in ("'", "[", "("))

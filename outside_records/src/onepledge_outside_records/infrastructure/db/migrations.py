@@ -19,6 +19,7 @@ from onepledge_outside_records.infrastructure.logging_setup import LogEvent, get
 _log = get_logger(__name__)
 
 MIGRATIONS_PACKAGE = "onepledge_outside_records_migrations"
+_REPR_MARKS = ("'", '"', "[", "(")
 
 
 def _log_applied_step(*, step: MigrationInfo, **_: object) -> None:
@@ -72,4 +73,12 @@ class MigrationRunner:
                 "PostgreSQL refused the owner connection; run db provision first.", "DATABASE_UNAVAILABLE"
             ) from None
         except CommandError as error:
-            raise OperatorError(str(error), "CONFIGURATION_ERROR") from None
+            # The migrations raise plain sentences of their own (DB_APP_ROLE); Alembic's own
+            # messages quote revision ids, so those become one fixed sentence (SPEC_DECISIONS 43.11).
+            sentence = str(error)
+            if any(mark in sentence for mark in _REPR_MARKS):
+                sentence = (
+                    "Alembic could not run the migrations: the revision recorded in the database or the "
+                    "one asked for is not one of the packaged migrations."
+                )
+            raise OperatorError(sentence, "CONFIGURATION_ERROR") from None

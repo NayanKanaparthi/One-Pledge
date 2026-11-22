@@ -63,7 +63,8 @@ def _owner_transaction(engine: Engine) -> Iterator[Connection]:
         ) from None
     except (DBAPIError, psycopg.Error):
         raise OperatorError(
-            "The database rejected the records (a constraint failed); nothing was changed.", "INVALID_INPUT"
+            "The database rejected the records because a constraint failed; nothing was changed.",
+            "INVALID_INPUT",
         ) from None
 
 
