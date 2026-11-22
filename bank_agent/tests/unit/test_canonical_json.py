@@ -25,13 +25,13 @@ def test_floats_are_refused_anywhere(value: object) -> None:
     with pytest.raises(TypeError) as raised:
         canonical_json(value)
     assert isinstance(raised.value, NonCanonicalValueError) and isinstance(raised.value, DomainError)
-    assert (raised.value.field, raised.value.issue) == ("canonical_json", "FLOAT")
+    assert (raised.value.field, raised.value.issue) == ("canonical_json", "INVALID_TYPE")
 
 
 def test_non_string_keys_are_refused() -> None:
     with pytest.raises(NonCanonicalValueError) as raised:
         canonical_json({1: "a"})
-    assert raised.value.issue == "NON_STRING_KEY"
+    assert raised.value.issue == "INVALID_TYPE"
 
 
 JSON = st.recursive(

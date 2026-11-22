@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ast
 import uuid
 from dataclasses import replace
 from datetime import UTC, date, datetime
+from pathlib import Path
 
 import pytest
 
@@ -30,6 +32,7 @@ from onepledge_bank_agent.domain.errors import (
     DomainError,
     IllegalTransitionError,
     InvalidValueError,
+    InvalidVinError,
     TapeDuplicateError,
 )
 
@@ -96,3 +99,32 @@ def test_errors_carry_codes_and_fixed_messages_but_no_values() -> None:
     assert IllegalTransitionError("loan", "LOCKED", "PENDING").message == MESSAGES["INTERNAL_ERROR"]
     assert DomainError().code == "INTERNAL_ERROR"
     assert all(message.endswith(".") and "{" not in message for message in MESSAGES.values())
+
+
+VOCABULARY = frozenset(
+    {
+        "REQUIRED", "INVALID_TYPE", "INVALID_INTEGER", "OUT_OF_RANGE", "PATTERN_MISMATCH", "INVALID_VALUE",
+        "INVALID_DATE", "TOO_LONG", "TOO_SHORT", "TOO_MANY_ITEMS", "TOO_FEW_ITEMS", "DUPLICATE",
+        "UNKNOWN_FIELD", "UNKNOWN_PARAMETER",
+    }
+)  # fmt: skip
+
+
+def test_every_issue_code_the_domain_raises_is_in_the_shared_vocabulary() -> None:
+    """SPEC_DECISIONS 22 finding 7: one vocabulary for `details[].issue`, read from the source itself."""
+    source = Path(__file__).resolve().parents[2] / "src" / "onepledge_bank_agent"
+    raised: set[str] = set()
+    for path in source.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in {"InvalidValueError", "NonCanonicalValueError", "ErrorDetail"}
+                and len(node.args) == 2
+                and isinstance(node.args[1], ast.Constant)
+            ):
+                raised.add(str(node.args[1].value))
+    assert raised and raised <= VOCABULARY, raised - VOCABULARY
+    assert [d.issue for d in InvalidVinError("CHECK_DIGIT").details] == ["INVALID_VALUE"]
+    assert [d.issue for d in InvalidVinError("LENGTH").details] == ["PATTERN_MISMATCH"]
+    assert InvalidVinError("LENGTH").reason == "LENGTH"

@@ -102,7 +102,7 @@ class IngestTape:
                     AuditObjectType.ROUTE,
                     None,
                     AuditOutcome.DENIED,
-                    {"method": route.method, "route": route.template, "operation": operation.value},
+                    {"method": route.method, "route": route.template, "operation": route.operation_id},
                     command.request_id,
                 )
             )

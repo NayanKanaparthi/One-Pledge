@@ -67,13 +67,14 @@ def yaml_roles(document: dict[str, Any]) -> dict[Route, frozenset[Role]]:
         for method, operation in item.items():
             roles = operation["x-roles"]
             if roles != [PUBLIC]:
-                found[Route(method.upper(), template)] = frozenset(Role(role) for role in roles)
+                route = Route(method.upper(), template, operation["operationId"])
+                found[route] = frozenset(Role(role) for role in roles)
     return found
 
 
 def public_routes(document: dict[str, Any]) -> set[Route]:
     return {
-        Route(method.upper(), template)
+        Route(method.upper(), template, operation["operationId"])
         for template, item in document["paths"].items()
         for method, operation in item.items()
         if operation["x-roles"] == [PUBLIC]
@@ -92,9 +93,9 @@ def test_every_operation_has_x_roles_and_public_ones_are_the_three_of_the_spec(
             roles = operation["x-roles"]
             assert roles and (roles == [PUBLIC] or PUBLIC not in roles)
     assert public_routes(document) == {
-        Route("POST", "/v1/auth/login"),
-        Route("GET", "/healthz"),
-        Route("GET", "/readyz"),
+        Route("POST", "/v1/auth/login", "login"),
+        Route("GET", "/healthz", "liveness"),
+        Route("GET", "/readyz", "readiness"),
     }
 
 

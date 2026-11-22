@@ -46,7 +46,7 @@ class Money:
     def __post_init__(self) -> None:
         """Refuse a non integer or an amount out of range."""
         if isinstance(self.cents, bool) or not isinstance(self.cents, int):
-            raise InvalidValueError("money", "NOT_INTEGER_CENTS")
+            raise InvalidValueError("money", "INVALID_TYPE")
         if not 0 <= self.cents <= MAX_CENTS:
             raise InvalidValueError("money", "OUT_OF_RANGE")
 
@@ -55,7 +55,7 @@ class Money:
         """Parse `123` or `123.4` or `123.45` with `Decimal`; at most two fraction digits."""
         match = _DECIMAL_AMOUNT.fullmatch(text)
         if match is None:
-            raise InvalidValueError("money", "NOT_A_DECIMAL_AMOUNT")
+            raise InvalidValueError("money", "PATTERN_MISMATCH")
         cents = Decimal(text) * 100
         return cls(int(cents))
 
@@ -121,7 +121,7 @@ class Lei:
         if not _LEI.fullmatch(self.value):
             raise InvalidValueError("lei", "PATTERN_MISMATCH")
         if lei_checksum(self.value) != 1:
-            raise InvalidValueError("lei", "CHECK_DIGITS_INVALID")
+            raise InvalidValueError("lei", "INVALID_VALUE")
 
 
 @dataclass(frozen=True)
@@ -234,7 +234,7 @@ class CheckResult:
     def __post_init__(self) -> None:
         """Only the combinations of SPEC 11.1 exist."""
         if (self.outcome, self.reason) not in ALLOWED_CHECK_RESULTS[self.check_type]:
-            raise InvalidValueError("check_result", "COMBINATION_NOT_ALLOWED")
+            raise InvalidValueError("check_result", "INVALID_VALUE")
 
 
 @dataclass(frozen=True, order=True)

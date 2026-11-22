@@ -16,16 +16,27 @@ What a reviewer can check, and where:
   outside the table of SPEC 8.3 fail with `OP002`; a loan's identity, and the terms of
   a tokenised loan, are immutable (`OP003`); the facts of an upload and illegal tape
   status changes fail with `OP004`; an audit entry that does not extend the chain fails
-  with `OP005` (`migrations/versions/0002_guards.py`).
+  with `OP005` (`migrations/versions/0002_guards.py`). `TRUNCATE loans_raw` by the
+  owner fails with `0A000` first, because other tables reference it by foreign key, and
+  `TRUNCATE loans_raw CASCADE` fails with `OP001` (SPEC_DECISIONS 24).
+- **What the lender sent can be rebuilt byte for byte.** Each upload keeps its BOM
+  flag, its verbatim header record and trailing text, and every record's verbatim text
+  and cells (SPEC_DECISIONS 25). Intake refuses a file whose stored forms would not
+  rebuild it, `row_sha256` is the hash of the record's text and the database checks it,
+  and a test rebuilds every tape of the `full` data set from the database alone.
 - **The program cannot even try.** The API and the worker connect as `{db}_app`, which
   has `SELECT, INSERT` on those tables (and `login_attempts`), `SELECT, INSERT, UPDATE`
   on six working tables, `SELECT` on reference data, and nothing else: no `UPDATE`,
-  `DELETE`, `TRUNCATE` or DDL (`migrations/versions/0003_grants.py`).
+  `DELETE`, `TRUNCATE` or DDL (`migrations/versions/0003_grants.py`). The worker's
+  settings object has no field for an owner or superuser URL, so it cannot hold one.
 - **Every change is audited in a hash chain.** Each unit of work appends its audit
   entries just before commit, under one advisory lock, each entry hashing the previous
-  one (SPEC 17). A rolled back transaction writes no entry. `tests/bank_testkit/audit_chain.py`
-  recomputes the chain independently of the product code.
-- **Raw loan values never reach a log.** Logs are JSON lines on stdout; a
+  one (SPEC 17). A rolled back transaction writes no entry. Administrative acts are
+  audited too: `seed-reference` writes `REFERENCE_DATA_SEEDED` and `db migrate` writes
+  `SCHEMA_MIGRATED` (SPEC_DECISIONS 30). `tests/bank_testkit/audit_chain.py` recomputes
+  the chain independently of the product code.
+- **Raw loan values never reach a log.** Logs are JSON lines (on stderr for every
+  command of this package, SPEC_DECISIONS 27); a
   `RedactionProcessor` keeps only the keys of SPEC 16.5, refuses unsafe value shapes and
   scrubs VIN shaped text. Events carry ids, codes and counts, never values; exceptions
   are logged as their type and frame locations only. A canary test runs known values
@@ -76,24 +87,49 @@ onepledge-bank worker [--once]            advance submissions through the regist
                                           --once stops when nothing is runnable, otherwise SIGTERM or SIGINT
 ```
 
-Every command prints aligned text, or JSON with `--json`. It exits 0 on success, 1 with
-one sentence on stderr for an expected failure (a variable missing, PostgreSQL not
-reachable, the schema not at the latest revision), and 2 for a usage error. It never
-prints a traceback, a URL with a password or a key. The worker refuses to start against
-a schema that is not at the latest revision.
+Every command takes `--json`, `--quiet` and `--debug`.
+
+- stdout carries only the result: aligned text, or with `--json` exactly one JSON
+  document, `{"ok": true, ...}` with the facts the text shows, or on failure
+  `{"ok": false, "error": {"code": "...", "message": "..."}}` (SPEC_DECISIONS 20).
+- stderr carries the JSON log lines (`LOG_LEVEL`, or WARNING with `--quiet`) and, on
+  failure, one plain sentence.
+- Exit 0 on success, 1 for a failure (a variable missing, PostgreSQL not reachable, the
+  schema not at the latest revision, an unusable reference file), 2 for a usage error.
+  An unexpected error prints `Unexpected error. Run with --debug for details.`; only
+  `--debug` adds the traceback. No output holds a URL with a password or a key.
+- `worker` without `--once` runs until stopped and prints no result, so `--json`
+  without `--once` is a usage error. The worker refuses a schema that is not at the
+  latest revision.
+- `db migrate` audits an upgrade that changed the revision (`from_revision`, null on a
+  new database, and `to_revision`). A downgrade is a development operation and writes no
+  entry; after `downgrade base` the audit table no longer exists.
+- `seed-reference` reports, and audits in the same transaction, how many lenders and
+  facilities were inserted, updated or unchanged, with the SHA-256 of `reference.json`;
+  a run that changes nothing is audited too.
 
 ## Pipeline (WP2 stages)
 
 | Stage | Use case | Does |
 |---|---|---|
-| RECEIVED | `IngestTape` | Authorises the role, validates the whole file (size, UTF-8, CSV shape, header, row count), refuses a duplicate file for the same facility and kind, and stores the submission and every raw row exactly as sent in one transaction. A refused upload stores nothing but one audit entry. |
-| CLEANED | `CleanTape` | Cleans every row (SPEC 10.2 and 10.3), records each fix or rejection as a cleaning issue, opens or updates loans and records one disposition per row, in one transaction. |
+| RECEIVED | `IngestTape` | Authorises the role, validates the whole file (size, UTF-8, CSV shape, header, row count), checks that the verbatim forms rebuild the file, refuses a duplicate file for the same facility and kind, and stores the submission and every raw row in one transaction. A refused upload stores nothing but one audit entry. |
+| CLEANED | `CleanTape` | Cleans every row from `header_cells` and `raw_cells` (SPEC 10.4, SPEC_DECISIONS 13 and 25), records each fix or rejection as a cleaning issue, opens or updates loans and records one disposition per row, in one transaction. |
 | CHECKED | `RunLocalChecks` | Looks up each accepted loan's title, payments and contracts, evaluates the four local checks (SPEC 11), stores the results per loan and holds failing loans locally, in chunks of `CHECK_CHUNK_LOANS` that each commit. |
 
-`AdvanceSubmission` dispatches to the next registered stage. A dependency outage is
-retried with backoff (`min(2^attempts, 60)` seconds) up to `PIPELINE_MAX_ATTEMPTS`, then
-the tape is FAILED with the dependency's code and can be resumed; any other error fails
-the tape with `INTERNAL_ERROR` (SPEC 13.7). Tapes of one facility run in upload order.
+`AdvanceSubmission` dispatches to the next registered stage. Tapes of one facility run
+in upload order. Failures (SPEC 13.7, SPEC_DECISIONS 26):
+
+| Situation | Handling | Failure code |
+|---|---|---|
+| Outside records unreachable, timed out, 429 or 5xx after the client's two retries | Stage retried with backoff `min(2^attempts, 60)` seconds | `OUTSIDE_RECORDS_UNAVAILABLE` after `PIPELINE_MAX_ATTEMPTS` |
+| 401, 403, 422, any other 4xx except an agreed 404, or an answer outside the contract | FAILED at once | `OUTSIDE_RECORDS_REJECTED` |
+| 404 `TITLE_NOT_FOUND` or `CONTRACT_NOT_FOUND` | A check result, not an error | none |
+| Any other error | FAILED at once | `INTERNAL_ERROR` |
+
+`TAPE_FAILED` records `dependency` and `http_status` (null when the service was not
+reached) for a dependency failure, and for a refusal also `reason`: `UNAUTHENTICATED`,
+`FORBIDDEN`, `REQUEST_REFUSED` or `MALFORMED_RESPONSE`. Every failure code except
+`KEY_VERSION_MISMATCH` and `CERTIFICATE_INVALID` can be resumed by a retry.
 
 ## Configuration
 
@@ -174,17 +210,53 @@ provisioning and migrations, and drops it afterwards. Data sets come from the
   of the outside records client against `outside_records.yaml`; `AccessPolicy` against
   the `x-roles` of `bank_agent.yaml`; error codes and enumerations against the YAML.
 
-## Decisions and limits recorded here
+## Additions to SPEC 12.1
 
-- `raw_payload` is `jsonb`, which does not keep key order, and SPEC 12.1 has no header
-  column. The "first cell" rule for non data rows uses the loan number cell (the VIN
-  cell when the tape has no loan number column); column count checks use the union of
-  stored keys. A file in which every row lacks the same optional trailing column cannot
-  be told apart from a file without that column.
-- PostgreSQL checks foreign keys before triggers, so `TRUNCATE loans_raw` by the owner
-  fails with SQLSTATE `0A000` (referenced by `cleaning_issues` and `submission_items`)
-  rather than `OP001`. Either way the rows stay; the test records this.
-- `seed-reference` writes no audit entry because SPEC 17 has no action for it.
-- A refusal by outside records (401, 422) or an answer outside its contract fails the
-  tape at once with `OUTSIDE_RECORDS_UNAVAILABLE`, the only outside records code of the
-  failure code list; the log record names the precise error code.
+Everything SPEC 12.1 and SPEC_DECISIONS require is in the schema; these are the
+constraints and indexes added beyond them, each with its reason (SPEC_DECISIONS 29).
+None rejects a state SPEC allows, and `tests/integration/test_schema.py` checks that the
+models equal the migrated schema, so every one of them is covered by the drift test.
+
+Required by SPEC_DECISIONS 25 (not additions, listed so the table is complete):
+`tape_submissions.has_bom`, `header_text`, `header_cells`, `trailer_text`;
+`loans_raw.raw_text`, `raw_cells` with `ck_loans_raw_raw_cells` (an array); the four
+tape columns are immutable under the tape guard. Required by SPEC_DECISIONS 26 and 30:
+`OUTSIDE_RECORDS_REJECTED` in `ck_tape_submissions_failure_code`, and
+`REFERENCE_DATA_SEEDED`, `SCHEMA_MIGRATED`, `REFERENCE_DATA`, `SCHEMA` in the audit
+action and object type checks.
+
+| Table | Constraint or index | Reason |
+|---|---|---|
+| tape_submissions, loans_raw, loan_tokens, registry_requests, certificates, checkpoints_seen, audit_log, login_attempts | `ck_<table>_<column>` on every hash or token column (`file_sha256`, `rows_sha256`, `row_sha256`, `token`, `idempotency_key`, `body_hash`, `head_hash`, `prev_hash`, `entry_hash`, `email_sha256`): `^[0-9a-f]{64}$` | A digest column holds exactly a lower case SHA-256 hex digest, so a truncated or upper case value cannot be compared wrongly. |
+| loans_raw | `ck_loans_raw_row_sha256_text`: `row_sha256 = sha256(raw_text)` | The row hash is a fact of the row, enforced where it is stored, not only at intake. |
+| tape_submissions | `ck_tape_submissions_header_cells`: an array | The header is an ordered list of cells (SPEC_DECISIONS 25 rule 4). |
+| loans_raw, local_checks, registry_requests, certificates, audit_log, integrity_runs | `ck_<table>_<column>`: `jsonb_typeof = 'object'` on `raw_payload`, `evidence`, `response_body` (or null), `body`, `detail`, `report` | Readers index these documents by key; a scalar or array would break them silently. |
+| tape_submissions | `ck_tape_submissions_resume_status`, `ck_tape_submissions_failed_stage`, `ck_tape_submissions_failure_code`: value lists | SPEC 12.1 names the columns; the lists are the statuses, stages and failure codes of SPEC 8.3 and 13.7. |
+| tape_submissions | `ck_tape_submissions_failed_has_stage`: `(status = 'FAILED') = (failed_stage IS NOT NULL)` | The pair of the two SPEC checks for the third failure field. |
+| tape_submissions | `ck_tape_submissions_attempts`: `>= 0` | A count of attempts. |
+| tape_submissions | `ix_tape_submissions_facility_uploaded_at` | The worker's "one facility's tapes in upload order" query. |
+| facilities | `ck_facilities_code`: `^[A-Z0-9-]{3,40}$` | The stable human key used by the manifest and seeding. |
+| users | `ck_users_token_version`: `>= 0` | A counter. |
+| loans | `ck_loans_lender_loan_number`: `^[A-Za-z0-9][A-Za-z0-9_/-]{0,39}$` | The shape the cleaning rules accept (SPEC 10.4). |
+| cleaning_issues | `ck_cleaning_issues_field`: `row` and the six canonical fields | The field names cleaning writes (SPEC 10.4). |
+| submission_items | `ck_submission_items_row_number`: `>= 1` | Same rule as `loans_raw.row_number`. |
+| local_checks | `ck_local_checks_combination`: the allowed (check type, result, reason) triples | Every answer names a rule that can produce it (SPEC 11.1). |
+| registry_requests | `ck_registry_requests_attempts`, `ck_registry_requests_batch_index`: `>= 0`; `ck_registry_requests_key_version`: `^[1-9][0-9]*\.[1-9][0-9]*$` | Counters, and the key version format of `loan_tokens`. |
+| registry_request_items | `ck_registry_request_items_position`: `>= 0`; value lists on `match_kind`, `match_basis` (or null); `ck_registry_request_items_kinds_matched`: a subset of the eight token kinds | The values the registry contract defines. |
+| certificates | `ck_certificates_as_of_seq`: `>= 1`; `ck_certificates_kind`: the three kinds | A sequence number and the tape kinds. |
+| checkpoints_seen | `ck_checkpoints_seen_checkpoint_seq`: `>= 1`; `ck_checkpoints_seen_last_event_seq`: `>= 0` | Sequence numbers. |
+| checkpoints_seen | `ck_checkpoints_seen_verified`: `verified = (failure_reason IS NULL)` | The same rule SPEC 12.1 states for certificates; a checkpoint is stored once, after verification (SPEC 15.3). |
+| alerts | `ck_alerts_kinds_matched`, `ck_alerts_kinds_not_matched`: subsets of the eight token kinds | The values the registry contract defines. |
+| alerts | `ix_alerts_loan_id` | Lineage and loan pages list a loan's alerts (SPEC 14). |
+| audit_log | `ck_audit_log_seq`: `>= 1`; `ck_audit_log_actor_user`: `(actor_type = 'USER') = (actor_user_id IS NOT NULL)`; `ck_audit_log_request_id`: at most 64 characters; value lists on `action` and `object_type` | The chain starts at 1; a user entry names its user and a system entry names none; request ids are bounded; actions and object types are those of SPEC 17.2 and SPEC_DECISIONS 30. |
+
+## Decisions recorded here
+
+- A blank line before the header record is kept in `header_text`, so the
+  reconstruction of SPEC_DECISIONS 25 rule 1 also holds for such a file; re-parsing
+  `header_text` with blank lines dropped yields `header_cells`.
+- `TAPE_FAILED` for an outage that reached the attempt limit records `dependency` and
+  `http_status` but no `reason`: the closed set of reasons describes refusals.
+- `details[].issue` codes raised by the domain come from the shared vocabulary of
+  SPEC_DECISIONS 22 (a test reads them from the source). The duplicate upload detail
+  carries the existing submission id in `issue`, as `contracts/examples` shows.

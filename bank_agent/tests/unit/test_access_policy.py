@@ -83,12 +83,12 @@ def test_public_operations_and_upload_by_kind() -> None:
     assert POLICY.upload_operation(TapeKind.RELEASE) is Operation.UPLOAD_RELEASE_TAPE
     assert POLICY.upload_operation(TapeKind.PLEDGE) is Operation.UPLOAD_TAPE
     assert POLICY.upload_operation(TapeKind.BACK_BOOK) is Operation.UPLOAD_TAPE
-    assert POLICY.route(Operation.UPLOAD_RELEASE_TAPE) == Route("POST", "/v1/tapes")
+    assert POLICY.route(Operation.UPLOAD_RELEASE_TAPE) == Route("POST", "/v1/tapes", "uploadTape")
     assert POLICY.roles(Operation.SUBMIT_ALERT_POSITION) == frozenset({CO})
 
 
 def test_a_route_serving_two_rows_allows_the_union_of_their_roles() -> None:
     roles = POLICY.route_roles()
-    assert roles[Route("POST", "/v1/tapes")] == {AN, CO}
-    assert roles[Route("POST", "/v1/alerts/{alert_id}/review")] == {AN, CO}
-    assert Route("POST", "/v1/auth/login") not in roles
+    assert roles[Route("POST", "/v1/tapes", "uploadTape")] == {AN, CO}
+    assert roles[Route("POST", "/v1/alerts/{alert_id}/review", "reviewAlert")] == {AN, CO}
+    assert Route("POST", "/v1/auth/login", "login") not in roles

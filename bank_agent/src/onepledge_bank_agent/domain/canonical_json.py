@@ -20,11 +20,11 @@ ZERO_HASH = "0" * 64
 
 def _refuse_floats(value: object) -> None:
     if isinstance(value, float):
-        raise NonCanonicalValueError("canonical_json", "FLOAT")
+        raise NonCanonicalValueError("canonical_json", "INVALID_TYPE")
     if isinstance(value, Mapping):
         for key, item in value.items():
             if not isinstance(key, str):
-                raise NonCanonicalValueError("canonical_json", "NON_STRING_KEY")
+                raise NonCanonicalValueError("canonical_json", "INVALID_TYPE")
             _refuse_floats(item)
     elif isinstance(value, list | tuple):
         for item in value:

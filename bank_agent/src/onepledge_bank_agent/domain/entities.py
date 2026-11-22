@@ -36,7 +36,7 @@ class Lender:
     def __post_init__(self) -> None:
         """A lender has a non-empty legal name."""
         if not self.legal_name.strip():
-            raise InvalidValueError("legal_name", "EMPTY")
+            raise InvalidValueError("legal_name", "REQUIRED")
 
 
 @dataclass(frozen=True)
@@ -84,7 +84,7 @@ class User:
     def __post_init__(self) -> None:
         """Emails are stored lower case."""
         if self.email != self.email.lower():
-            raise InvalidValueError("email", "NOT_LOWER_CASE")
+            raise InvalidValueError("email", "PATTERN_MISMATCH")
 
     def __repr__(self) -> str:
         """Identifier and role only."""

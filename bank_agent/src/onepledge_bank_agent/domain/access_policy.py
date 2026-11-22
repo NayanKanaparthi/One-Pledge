@@ -54,10 +54,11 @@ class Operation(StrEnum):
 
 @dataclass(frozen=True)
 class Route:
-    """An HTTP method and a route template of `bank_agent.yaml`."""
+    """An HTTP method, a route template and its `operationId` in `bank_agent.yaml`."""
 
     method: str
     template: str
+    operation_id: str
 
 
 _A, _C, _D = Role.ANALYST, Role.CREDIT_OFFICER, Role.ADMIN
@@ -70,36 +71,51 @@ _ADMIN = frozenset({_D})
 
 _MATRIX: Mapping[Operation, tuple[Route, frozenset[Role]]] = MappingProxyType(
     {
-        Operation.LOGIN: (Route("POST", "/v1/auth/login"), _PUBLIC),
-        Operation.LIVENESS: (Route("GET", "/healthz"), _PUBLIC),
-        Operation.READINESS: (Route("GET", "/readyz"), _PUBLIC),
-        Operation.GET_CURRENT_USER: (Route("GET", "/v1/auth/me"), _EVERYONE),
-        Operation.LIST_FACILITIES: (Route("GET", "/v1/facilities"), _READERS),
-        Operation.UPLOAD_TAPE: (Route("POST", "/v1/tapes"), _READERS),
-        Operation.UPLOAD_RELEASE_TAPE: (Route("POST", "/v1/tapes"), _OFFICER),
-        Operation.LIST_TAPES: (Route("GET", "/v1/tapes"), _READERS),
-        Operation.GET_TAPE: (Route("GET", "/v1/tapes/{submission_id}"), _READERS),
-        Operation.LIST_TAPE_ITEMS: (Route("GET", "/v1/tapes/{submission_id}/items"), _READERS),
-        Operation.RETRY_TAPE: (Route("POST", "/v1/tapes/{submission_id}/retry"), _OFFICER),
-        Operation.CREATE_RELEASE: (Route("POST", "/v1/releases"), _OFFICER),
-        Operation.LIST_LOANS: (Route("GET", "/v1/loans"), _READERS),
-        Operation.SEARCH_LOANS: (Route("POST", "/v1/loans/search"), _READERS),
-        Operation.GET_LOAN: (Route("GET", "/v1/loans/{loan_id}"), _READERS),
-        Operation.GET_LOAN_LINEAGE: (Route("GET", "/v1/loans/{loan_id}/lineage"), _READERS),
-        Operation.RESUBMIT_LOAN: (Route("POST", "/v1/loans/{loan_id}/resubmit"), _OFFICER),
-        Operation.LIST_ALERTS: (Route("GET", "/v1/alerts"), _READERS),
-        Operation.GET_ALERT: (Route("GET", "/v1/alerts/{alert_id}"), _READERS),
-        Operation.START_ALERT_REVIEW: (Route("POST", "/v1/alerts/{alert_id}/review"), _READERS),
-        Operation.SUBMIT_ALERT_POSITION: (Route("POST", "/v1/alerts/{alert_id}/review"), _OFFICER),
-        Operation.LIST_CERTIFICATES: (Route("GET", "/v1/certificates"), _READERS),
-        Operation.GET_CERTIFICATE: (Route("GET", "/v1/certificates/{certificate_id}"), _READERS),
-        Operation.GET_INTEGRITY: (Route("GET", "/v1/integrity"), _EVERYONE),
-        Operation.RUN_DEEP_VERIFICATION: (Route("POST", "/v1/integrity/verify"), _OVERSIGHT),
-        Operation.SYNC_REGISTRY: (Route("POST", "/v1/registry/sync"), _OVERSIGHT),
-        Operation.LIST_AUDIT_LOG: (Route("GET", "/v1/audit-log"), _OVERSIGHT),
-        Operation.LIST_USERS: (Route("GET", "/v1/users"), _ADMIN),
-        Operation.CREATE_USER: (Route("POST", "/v1/users"), _ADMIN),
-        Operation.UPDATE_USER: (Route("PATCH", "/v1/users/{user_id}"), _ADMIN),
+        Operation.LOGIN: (Route("POST", "/v1/auth/login", "login"), _PUBLIC),
+        Operation.LIVENESS: (Route("GET", "/healthz", "liveness"), _PUBLIC),
+        Operation.READINESS: (Route("GET", "/readyz", "readiness"), _PUBLIC),
+        Operation.GET_CURRENT_USER: (Route("GET", "/v1/auth/me", "getCurrentUser"), _EVERYONE),
+        Operation.LIST_FACILITIES: (Route("GET", "/v1/facilities", "listFacilities"), _READERS),
+        Operation.UPLOAD_TAPE: (Route("POST", "/v1/tapes", "uploadTape"), _READERS),
+        Operation.UPLOAD_RELEASE_TAPE: (Route("POST", "/v1/tapes", "uploadTape"), _OFFICER),
+        Operation.LIST_TAPES: (Route("GET", "/v1/tapes", "listTapes"), _READERS),
+        Operation.GET_TAPE: (Route("GET", "/v1/tapes/{submission_id}", "getTape"), _READERS),
+        Operation.LIST_TAPE_ITEMS: (
+            Route("GET", "/v1/tapes/{submission_id}/items", "listTapeItems"),
+            _READERS,
+        ),
+        Operation.RETRY_TAPE: (Route("POST", "/v1/tapes/{submission_id}/retry", "retryTape"), _OFFICER),
+        Operation.CREATE_RELEASE: (Route("POST", "/v1/releases", "createRelease"), _OFFICER),
+        Operation.LIST_LOANS: (Route("GET", "/v1/loans", "listLoans"), _READERS),
+        Operation.SEARCH_LOANS: (Route("POST", "/v1/loans/search", "searchLoans"), _READERS),
+        Operation.GET_LOAN: (Route("GET", "/v1/loans/{loan_id}", "getLoan"), _READERS),
+        Operation.GET_LOAN_LINEAGE: (Route("GET", "/v1/loans/{loan_id}/lineage", "getLoanLineage"), _READERS),
+        Operation.RESUBMIT_LOAN: (Route("POST", "/v1/loans/{loan_id}/resubmit", "resubmitLoan"), _OFFICER),
+        Operation.LIST_ALERTS: (Route("GET", "/v1/alerts", "listAlerts"), _READERS),
+        Operation.GET_ALERT: (Route("GET", "/v1/alerts/{alert_id}", "getAlert"), _READERS),
+        Operation.START_ALERT_REVIEW: (
+            Route("POST", "/v1/alerts/{alert_id}/review", "reviewAlert"),
+            _READERS,
+        ),
+        Operation.SUBMIT_ALERT_POSITION: (
+            Route("POST", "/v1/alerts/{alert_id}/review", "reviewAlert"),
+            _OFFICER,
+        ),
+        Operation.LIST_CERTIFICATES: (Route("GET", "/v1/certificates", "listCertificates"), _READERS),
+        Operation.GET_CERTIFICATE: (
+            Route("GET", "/v1/certificates/{certificate_id}", "getCertificate"),
+            _READERS,
+        ),
+        Operation.GET_INTEGRITY: (Route("GET", "/v1/integrity", "getIntegrity"), _EVERYONE),
+        Operation.RUN_DEEP_VERIFICATION: (
+            Route("POST", "/v1/integrity/verify", "runDeepVerification"),
+            _OVERSIGHT,
+        ),
+        Operation.SYNC_REGISTRY: (Route("POST", "/v1/registry/sync", "syncRegistry"), _OVERSIGHT),
+        Operation.LIST_AUDIT_LOG: (Route("GET", "/v1/audit-log", "listAuditLog"), _OVERSIGHT),
+        Operation.LIST_USERS: (Route("GET", "/v1/users", "listUsers"), _ADMIN),
+        Operation.CREATE_USER: (Route("POST", "/v1/users", "createUser"), _ADMIN),
+        Operation.UPDATE_USER: (Route("PATCH", "/v1/users/{user_id}", "updateUser"), _ADMIN),
     }
 )
 _PUBLIC_OPERATIONS = frozenset({Operation.LOGIN, Operation.LIVENESS, Operation.READINESS})

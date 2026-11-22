@@ -25,7 +25,7 @@ GENESIS_PREV_HASH = ZERO_HASH
 def render_audit_time(at: datetime) -> str:
     """`YYYY-MM-DDTHH:MM:SS.ffffffZ` in UTC, always six fraction digits."""
     if at.tzinfo is None:
-        raise InvalidValueError("at", "NOT_TIMEZONE_AWARE")
+        raise InvalidValueError("at", "INVALID_TYPE")
     return at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
@@ -41,7 +41,7 @@ class Actor:
         """A user actor names the user and the role; the system names neither."""
         is_user = self.actor_type is ActorType.USER
         if is_user != (self.user_id is not None) or is_user != (self.role is not None):
-            raise InvalidValueError("actor", "INCONSISTENT")
+            raise InvalidValueError("actor", "INVALID_VALUE")
 
     @classmethod
     def system(cls) -> Actor:

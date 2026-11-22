@@ -89,7 +89,7 @@ def test_a_release_tape_needs_a_credit_officer_and_a_refusal_is_audited(world: W
         run(world, release)
     (denied,) = world.audit()
     assert (denied.action, denied.outcome) == (AuditAction.ACCESS_DENIED, AuditOutcome.DENIED)
-    assert dict(denied.detail) == {"method": "POST", "route": "/v1/tapes", "operation": "UPLOAD_RELEASE_TAPE"}
+    assert dict(denied.detail) == {"method": "POST", "route": "/v1/tapes", "operation": "uploadTape"}
     assert not world.store.state.tapes
     assert world.log.events == [
         (

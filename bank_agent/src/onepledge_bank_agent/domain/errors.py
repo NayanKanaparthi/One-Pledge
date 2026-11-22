@@ -94,7 +94,10 @@ class PositionAlreadyRecordedError(DomainError):
 
 
 class InvalidValueError(DomainError):
-    """A value object was given a value outside its invariants. Names the field, never the value."""
+    """A value object was given a value outside its invariants. Names the field, never the value.
+
+    `issue` is one code of the shared vocabulary (SPEC_DECISIONS 22, finding 7).
+    """
 
     code = "INVALID_VALUE"
 
@@ -112,10 +115,15 @@ class NonCanonicalValueError(InvalidValueError, TypeError):
 
 
 class InvalidVinError(InvalidValueError):
-    """A VIN of the wrong length, with a character outside the alphabet, or a bad check digit."""
+    """A VIN of the wrong length, with a character outside the alphabet, or a bad check digit.
+
+    `reason` is the precise defect (`LENGTH`, `CHARACTER`, `CHECK_DIGIT`) the cleaning rules
+    use; the detail issue is the shared vocabulary of SPEC_DECISIONS 22: a wrong length or
+    character does not match the VIN pattern, a wrong check digit is an invalid value.
+    """
 
     def __init__(self, reason: str) -> None:
-        super().__init__("vin", reason)
+        super().__init__("vin", "INVALID_VALUE" if reason == "CHECK_DIGIT" else "PATTERN_MISMATCH")
         self.reason = reason
 
 
