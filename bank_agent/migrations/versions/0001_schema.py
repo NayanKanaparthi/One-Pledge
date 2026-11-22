@@ -3,7 +3,9 @@
 Every status or code column carries a named CHECK listing its values (the lists are
 written out here, so a later change of the code never rewrites this revision). Every
 hash column is checked to be 64 lower case hex characters. Foreign keys restrict
-deletion.
+deletion. `tape_submissions` and `loans_raw` hold the verbatim forms of SPEC_DECISIONS 25
+(BOM flag, header and trailer text, header cells; each record's text and cells), and a
+raw row's hash is checked to be the SHA-256 of its text.
 
 Revision ID: 0001_schema
 Revises:
@@ -29,9 +31,9 @@ TAPE_STATUSES = ("RECEIVED", "CLEANED", "CHECKED", "TOKENIZED", "SUBMITTED", "CO
 RESUMABLE = ("RECEIVED", "CLEANED", "CHECKED", "TOKENIZED", "SUBMITTED")
 STAGES = ("CLEANED", "CHECKED", "TOKENIZED", "SUBMITTED", "COMPLETED")
 FAILURE_CODES = (
-    "OUTSIDE_RECORDS_UNAVAILABLE", "KEY_HOLDER_UNAVAILABLE", "KEY_HOLDER_REJECTED", "KEY_VERSION_MISMATCH",
-    "REGISTRY_UNAVAILABLE", "REGISTRY_REJECTED_REQUEST", "CERTIFICATE_INVALID", "REGISTRY_INTEGRITY_BROKEN",
-    "INTERNAL_ERROR",
+    "OUTSIDE_RECORDS_UNAVAILABLE", "OUTSIDE_RECORDS_REJECTED", "KEY_HOLDER_UNAVAILABLE",
+    "KEY_HOLDER_REJECTED", "KEY_VERSION_MISMATCH", "REGISTRY_UNAVAILABLE", "REGISTRY_REJECTED_REQUEST",
+    "CERTIFICATE_INVALID", "REGISTRY_INTEGRITY_BROKEN", "INTERNAL_ERROR",
 )  # fmt: skip
 LOAN_STATES = ("PENDING", "HELD_LOCAL", "LOCKED", "CONFLICT", "RELEASED")
 DISPOSITIONS = ("ACCEPTED_NEW", "ACCEPTED_REPRESENTED", "ALREADY_LOCKED", "RELEASE_REQUESTED", "REJECTED")
@@ -91,10 +93,11 @@ AUDIT_ACTIONS = (
     "ALERT_POSITION_SUBMITTED", "ALERT_CASE_UPDATED", "LOAN_RESUBMITTED", "CHECKPOINT_VERIFIED",
     "CHECKPOINT_REJECTED", "REGISTRY_MESSAGE_IGNORED", "REGISTRY_SYNC_REQUESTED",
     "INTEGRITY_VERIFICATION_RUN", "LINEAGE_VIEWED", "AUDIT_LOG_VIEWED", "HALT_RULE_DISABLED",
+    "REFERENCE_DATA_SEEDED", "SCHEMA_MIGRATED",
 )  # fmt: skip
 AUDIT_OBJECT_TYPES = (
     "USER", "ROUTE", "TAPE_SUBMISSION", "LOAN", "REGISTRY_REQUEST", "CERTIFICATE", "ALERT", "CHECKPOINT",
-    "REGISTRY_MESSAGE", "REGISTRY", "INTEGRITY_RUN", "AUDIT_LOG", "CONFIG",
+    "REGISTRY_MESSAGE", "REGISTRY", "INTEGRITY_RUN", "AUDIT_LOG", "CONFIG", "REFERENCE_DATA", "SCHEMA",
 )  # fmt: skip
 HEX64 = "'^[0-9a-f]{64}$'"
 KEY_VERSION = "'^[1-9][0-9]*\\.[1-9][0-9]*$'"
@@ -137,6 +140,10 @@ def _hex(table: str, column: str) -> sa.CheckConstraint:
 def _kinds(table: str, column: str) -> sa.CheckConstraint:
     listed = ", ".join(f"'{value}'" for value in TOKEN_KINDS)
     return sa.CheckConstraint(f"{column} <@ ARRAY[{listed}]::text[]", name=f"ck_{table}_{column}")
+
+
+def _array(table: str, column: str) -> sa.CheckConstraint:
+    return sa.CheckConstraint(f"jsonb_typeof({column}) = 'array'", name=f"ck_{table}_{column}")
 
 
 def _object(table: str, column: str, *, nullable: bool = False) -> sa.CheckConstraint:
@@ -217,6 +224,10 @@ def _tape_submissions() -> None:
         _text("file_name"),
         _hash("file_sha256"),
         _hash("rows_sha256"),
+        sa.Column("has_bom", sa.Boolean(), nullable=False),
+        _text("header_text"),
+        sa.Column("header_cells", postgresql.JSONB(), nullable=False),
+        _text("trailer_text"),
         sa.Column("as_of_date", sa.Date(), nullable=False),
         sa.Column("row_count", sa.Integer(), nullable=False),
         _text("status"),
@@ -239,6 +250,7 @@ def _tape_submissions() -> None:
         _hex("tape_submissions", "file_sha256"),
         _hex("tape_submissions", "rows_sha256"),
         sa.CheckConstraint("row_count >= 1", name="ck_tape_submissions_row_count"),
+        _array("tape_submissions", "header_cells"),
         sa.CheckConstraint("attempts >= 0", name="ck_tape_submissions_attempts"),
         sa.CheckConstraint(
             "(status = 'FAILED') = (failure_code IS NOT NULL)", name="ck_tape_submissions_failed_has_code"
@@ -265,12 +277,19 @@ def _loans_raw() -> None:
         _uuid("raw_id", primary_key=True),
         _uuid("submission_id", _fk("tape_submissions.submission_id")),
         sa.Column("row_number", sa.Integer(), nullable=False),
+        _text("raw_text"),
+        sa.Column("raw_cells", postgresql.JSONB(), nullable=False),
         sa.Column("raw_payload", postgresql.JSONB(), nullable=False),
         _hash("row_sha256"),
         _time("received_at"),
         sa.UniqueConstraint("submission_id", "row_number", name="uq_loans_raw_submission_row"),
         sa.CheckConstraint("row_number >= 1", name="ck_loans_raw_row_number"),
         _hex("loans_raw", "row_sha256"),
+        sa.CheckConstraint(
+            "row_sha256 = encode(sha256(convert_to(raw_text, 'UTF8')), 'hex')",
+            name="ck_loans_raw_row_sha256_text",
+        ),
+        _array("loans_raw", "raw_cells"),
         _object("loans_raw", "raw_payload"),
     )
 

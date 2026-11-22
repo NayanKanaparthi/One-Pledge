@@ -21,7 +21,7 @@ from onepledge_bank_agent.domain.enums import LoanState, RowDisposition, TapeSta
 from onepledge_bank_agent.domain.errors import ConcurrentUploadError
 from onepledge_bank_agent.domain.loan import Loan
 from onepledge_bank_agent.domain.tape import UNFINISHED, TapeSubmission
-from onepledge_bank_agent.domain.tape_file import RawRow
+from onepledge_bank_agent.domain.tape_file import RawRow, TapeLayout
 from onepledge_bank_agent.domain.values import CheckResult
 
 
@@ -31,6 +31,7 @@ class MemoryState:
 
     tapes: dict[uuid.UUID, TapeSubmission] = field(default_factory=dict)
     raw_rows: dict[uuid.UUID, list[StoredRawRow]] = field(default_factory=dict)
+    layouts: dict[uuid.UUID, TapeLayout] = field(default_factory=dict)
     items: dict[uuid.UUID, list[NewItem]] = field(default_factory=dict)
     loans: dict[uuid.UUID, Loan] = field(default_factory=dict)
     checks: dict[tuple[uuid.UUID, uuid.UUID], list[CheckResult]] = field(default_factory=dict)
@@ -59,7 +60,7 @@ class _Tapes:
         self._state = state
         self._store = store
 
-    def add(self, tape: TapeSubmission) -> None:
+    def add(self, tape: TapeSubmission, layout: TapeLayout) -> None:
         if self._store.race_next_tape_insert:
             self._store.race_next_tape_insert = False
             winner = self._store.race_winner
@@ -67,6 +68,10 @@ class _Tapes:
                 self._store.state.tapes[winner.submission_id] = winner
             raise ConcurrentUploadError
         self._state.tapes[tape.submission_id] = copy.deepcopy(tape)
+        self._state.layouts[tape.submission_id] = layout
+
+    def layout(self, submission_id: uuid.UUID) -> TapeLayout | None:
+        return self._state.layouts.get(submission_id)
 
     def get(self, submission_id: uuid.UUID, *, for_update: bool = False) -> TapeSubmission | None:
         tape = self._state.tapes.get(submission_id)
@@ -104,7 +109,7 @@ class _RawRows:
         self._state = state
 
     def add_many(self, submission_id: uuid.UUID, rows: Sequence[RawRow], received_at: datetime) -> None:
-        stored = [StoredRawRow(uuid.uuid4(), r.row_number, dict(r.payload), r.row_sha256) for r in rows]
+        stored = [StoredRawRow(uuid.uuid4(), r.row_number, r.text, r.cells, r.row_sha256) for r in rows]
         self._state.raw_rows.setdefault(submission_id, []).extend(stored)
 
     def list_for(self, submission_id: uuid.UUID) -> list[StoredRawRow]:

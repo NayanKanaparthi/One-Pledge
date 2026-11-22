@@ -8,6 +8,7 @@ from datetime import date
 import pytest
 
 from bank_testkit.stages import FakeStage, raising
+from bank_testkit.tapes import SUMMIT_LAYOUT
 from bank_testkit.world import World
 from onepledge_bank_agent.application.advance_submission import AdvanceSubmission, StageOutcome
 from onepledge_bank_agent.domain.enums import AuditAction, FailureCode, TapeKind, TapeSource, TapeStatus
@@ -34,7 +35,7 @@ def received(world: World) -> uuid.UUID:
         "b" * 64, date(2026, 10, 15), 1, uuid.uuid4(), world.clock.now(),
     )  # fmt: skip
     with world.units() as unit:
-        unit.tapes.add(TapeSubmission.receive(facts))
+        unit.tapes.add(TapeSubmission.receive(facts), SUMMIT_LAYOUT)
         unit.commit()
     return submission
 

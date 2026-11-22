@@ -6,15 +6,15 @@
 3. Within a field: trim, empty, unsafe characters, then the field's own rules; the
    first REJECTED issue ends that field, FIXED issues found before it are kept.
 
-The raw payload is a mapping from header text to cell text. The stored payload keeps
-no column order, so the totals rule reads the loan number cell (the VIN cell on a tape
-without a loan number column) as the row's first cell.
+A row is its cells in file order, exactly as parsed (SPEC_DECISIONS 25 rule 4): the
+totals rule reads `cells[0]` and the count rule compares the number of cells with the
+number of header cells.
 """
 
 from __future__ import annotations
 
 import unicodedata
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Sequence
 from datetime import date
 
 from onepledge_bank_agent.domain.cleaning.amounts import balance_rules, clean_amount
@@ -28,8 +28,6 @@ from onepledge_bank_agent.domain.cleaning.header import (
     ROW,
     VIN,
     HeaderMap,
-    is_extra_key,
-    required_fields,
 )
 from onepledge_bank_agent.domain.cleaning.model import (
     CleanedRow,
@@ -68,18 +66,13 @@ def is_unsafe(raw: str, trimmed: str) -> bool:
     return any(unicodedata.category(char) == "Cc" for char in raw)
 
 
-def row_rule(payload: Mapping[str, str], header_map: HeaderMap, kind: TapeKind) -> CleaningIssue | None:
+def row_rule(cells: Sequence[str], header_map: HeaderMap) -> CleaningIssue | None:
     """The one row issue that rejects the whole row, if any."""
-    if not any(cell.strip() for cell in payload.values()):
+    if not any(cell.strip() for cell in cells):
         return rejected(ROW, CleaningProblem.NON_DATA_ROW)
-    lead_header = header_map.columns.get(header_map.lead_field)
-    lead = payload.get(lead_header, "") if lead_header is not None else ""
-    if " ".join(lead.split()).upper() in NON_DATA_MARKERS:
+    if " ".join(cells[0].split()).upper() in NON_DATA_MARKERS:
         return rejected(ROW, CleaningProblem.NON_DATA_ROW)
-    has_extra = any(is_extra_key(key) for key in payload)
-    missing = not header_map.names <= payload.keys()
-    unmapped = any(field not in header_map.columns for field in required_fields(kind))
-    if has_extra or missing or unmapped:
+    if len(cells) != header_map.width:
         return rejected(ROW, CleaningProblem.COLUMN_COUNT_MISMATCH)
     return None
 
@@ -101,15 +94,15 @@ def _sorted(issues: Iterable[CleaningIssue]) -> tuple[CleaningIssue, ...]:
 
 
 def clean_row(
-    raw_payload: Mapping[str, str], header_map: HeaderMap, kind: TapeKind, as_of_date: date
+    cells: Sequence[str], header_map: HeaderMap, kind: TapeKind, as_of_date: date
 ) -> CleanedRow | RejectedRow:
     """Every issue of one raw row, and its canonical values when nothing was rejected."""
-    row_issue = row_rule(raw_payload, header_map, kind)
+    row_issue = row_rule(cells, header_map)
     if row_issue is not None:
         return RejectedRow((row_issue,))
 
     def cell(field: str) -> str:
-        return raw_payload[header_map.columns[field]]
+        return cells[header_map.columns[field]]
 
     vin = clean_field(VIN, cell(VIN), clean_vin)
     if kind is TapeKind.RELEASE:

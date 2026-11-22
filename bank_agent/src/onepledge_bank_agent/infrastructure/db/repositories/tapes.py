@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, aliased
 from onepledge_bank_agent.domain.enums import TapeStatus
 from onepledge_bank_agent.domain.errors import ConcurrentUploadError
 from onepledge_bank_agent.domain.tape import UNFINISHED, TapeSubmission
+from onepledge_bank_agent.domain.tape_file import TapeLayout
 from onepledge_bank_agent.infrastructure.db.models import TapeSubmissionRow
 from onepledge_bank_agent.infrastructure.db.repositories.mapping import tape_from_row, tape_progress_values
 
@@ -25,10 +26,14 @@ class SqlTapeRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def add(self, tape: TapeSubmission) -> None:
+    def add(self, tape: TapeSubmission, layout: TapeLayout) -> None:
         """Insert a RECEIVED submission; the same file stored meanwhile raises `ConcurrentUploadError`."""
         facts = tape.facts
         values = {
+            "has_bom": layout.has_bom,
+            "header_text": layout.header_text,
+            "header_cells": list(layout.header_cells),
+            "trailer_text": layout.trailer_text,
             "submission_id": facts.submission_id,
             "facility_id": facts.facility_id,
             "kind": facts.kind.value,
@@ -56,6 +61,20 @@ class SqlTapeRepository:
             statement = statement.with_for_update()
         row = self._session.execute(statement).scalar_one_or_none()
         return tape_from_row(row) if row is not None else None
+
+    def layout(self, submission_id: uuid.UUID) -> TapeLayout | None:
+        """The verbatim header, BOM flag and trailer of a submission."""
+        statement = select(
+            TapeSubmissionRow.has_bom,
+            TapeSubmissionRow.header_text,
+            TapeSubmissionRow.header_cells,
+            TapeSubmissionRow.trailer_text,
+        ).where(TapeSubmissionRow.submission_id == submission_id)
+        row = self._session.execute(statement).first()
+        if row is None:
+            return None
+        has_bom, header_text, header_cells, trailer_text = row
+        return TapeLayout(has_bom, header_text, tuple(header_cells), trailer_text)
 
     def find_by_file(self, facility_id: uuid.UUID, kind: str, file_sha256: str) -> uuid.UUID | None:
         """The submission that already holds this file for this facility and kind."""

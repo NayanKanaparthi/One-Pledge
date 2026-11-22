@@ -103,8 +103,12 @@ def test_insert_only_tables_refuse_every_change_for_the_app_role_and_the_owner(
         assert sqlstate(filled, "app", statement) == "42501", verb
         owner = sqlstate(filled, "owner", statement)
         if verb == "TRUNCATE" and table in REFERENCED_BY_FOREIGN_KEYS:
-            # PostgreSQL refuses to truncate a table other tables reference before any trigger runs.
+            # PostgreSQL refuses to truncate a table other tables reference before any trigger runs;
+            # SPEC_DECISIONS 24 keeps the foreign keys and requires CASCADE to hit the trigger.
             assert owner == "0A000", verb
+            cascade = sql.SQL("TRUNCATE {} CASCADE").format(name)
+            assert sqlstate(filled, "owner", cascade) == "OP001", "TRUNCATE CASCADE"
+            assert sqlstate(filled, "app", cascade) == "42501", "TRUNCATE CASCADE"
         else:
             assert owner == "OP001", verb
     assert counts(filled) == before
@@ -185,6 +189,10 @@ def test_the_tape_guard_allows_only_the_spec_transitions_and_keeps_upload_facts(
         "row_count = row_count + 1",
         "kind = 'BACK_BOOK'",
         "uploaded_at = now()",
+        "has_bom = NOT has_bom",
+        "header_text = header_text || ' '",
+        "header_cells = '[]'::jsonb",
+        "trailer_text = trailer_text || chr(10)",
     ):
         assert sqlstate(filled, "owner", update.format(change), (tape,)) == "OP004", change
     fail = (
@@ -246,3 +254,19 @@ def test_the_app_role_has_least_privilege(
     other = new_database()
     with pytest.raises(psycopg.OperationalError):
         psycopg.connect(filled.app_url.rsplit("/", 1)[0] + "/" + other.name).close()
+
+
+def test_a_raw_row_hash_must_be_the_hash_of_its_verbatim_text(filled: BankDatabase) -> None:
+    copy = (
+        "INSERT INTO loans_raw (raw_id, submission_id, row_number, raw_text, raw_cells, raw_payload, "
+        "row_sha256, received_at) SELECT gen_random_uuid(), submission_id, 99, raw_text || ' ', raw_cells, "
+        "raw_payload, {}, now() FROM loans_raw WHERE row_number = 1"
+    )
+    stale = sql.SQL(copy).format(sql.SQL("row_sha256"))
+    fresh = sql.SQL(copy).format(sql.SQL("encode(sha256(convert_to(raw_text || ' ', 'UTF8')), 'hex')"))
+    not_array = sql.SQL(copy.replace("' ', raw_cells,", "' ', raw_payload,")).format(
+        sql.SQL("encode(sha256(convert_to(raw_text || ' ', 'UTF8')), 'hex')")
+    )
+    assert sqlstate(filled, "owner", stale) == "23514"
+    assert sqlstate(filled, "owner", not_array) == "23514"
+    assert sqlstate(filled, "owner", fresh) is None

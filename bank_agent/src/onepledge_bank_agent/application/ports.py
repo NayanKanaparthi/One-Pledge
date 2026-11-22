@@ -8,7 +8,7 @@ statements before commit (SPEC 17.1).
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -22,7 +22,7 @@ from onepledge_bank_agent.domain.enums import RowDisposition, TapeStatus
 from onepledge_bank_agent.domain.loan import Loan
 from onepledge_bank_agent.domain.outside_records import ContractRecord, PaymentWindow, TitleRecord
 from onepledge_bank_agent.domain.tape import TapeSubmission
-from onepledge_bank_agent.domain.tape_file import RawRow
+from onepledge_bank_agent.domain.tape_file import RawRow, TapeLayout
 from onepledge_bank_agent.domain.values import CheckResult, CleaningIssue
 from onepledge_bank_agent.domain.vin import Vin
 
@@ -45,11 +45,12 @@ class IdGenerator(Protocol):
 
 @dataclass(frozen=True)
 class StoredRawRow:
-    """A raw row as stored in `loans_raw`."""
+    """A raw row as stored in `loans_raw`: its verbatim text and its cells in file order."""
 
     raw_id: uuid.UUID
     row_number: int
-    payload: Mapping[str, str]
+    text: str
+    cells: tuple[str, ...]
     row_sha256: str
 
 
@@ -76,8 +77,12 @@ class AcceptedItem:
 class TapeRepository(Protocol):
     """`tape_submissions`."""
 
-    def add(self, tape: TapeSubmission) -> None:
+    def add(self, tape: TapeSubmission, layout: TapeLayout) -> None:
         """Insert a new submission; raises `ConcurrentUploadError` when the same file was stored meanwhile."""
+        ...
+
+    def layout(self, submission_id: uuid.UUID) -> TapeLayout | None:
+        """The verbatim header, BOM flag and trailer stored with a submission."""
         ...
 
     def get(self, submission_id: uuid.UUID, *, for_update: bool = False) -> TapeSubmission | None:

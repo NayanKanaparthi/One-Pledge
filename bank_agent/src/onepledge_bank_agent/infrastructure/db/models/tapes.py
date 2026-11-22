@@ -6,7 +6,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import Date, DateTime, Index, Integer, Text, UniqueConstraint, text
+from sqlalchemy import Boolean, Date, DateTime, Index, Integer, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -30,6 +30,10 @@ class TapeSubmissionRow(Base):
     file_name: Mapped[str] = mapped_column(Text)
     file_sha256: Mapped[str] = hash_column()
     rows_sha256: Mapped[str] = hash_column()
+    has_bom: Mapped[bool] = mapped_column(Boolean)
+    header_text: Mapped[str] = mapped_column(Text)
+    header_cells: Mapped[list[str]] = mapped_column(JSONB)
+    trailer_text: Mapped[str] = mapped_column(Text)
     as_of_date: Mapped[date] = mapped_column(Date)
     row_count: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(Text)
@@ -53,6 +57,8 @@ class RawRowRow(Base):
     raw_id: Mapped[uuid.UUID] = uuid_pk()
     submission_id: Mapped[uuid.UUID] = uuid_fk("tape_submissions.submission_id")
     row_number: Mapped[int] = mapped_column(Integer)
+    raw_text: Mapped[str] = mapped_column(Text)
+    raw_cells: Mapped[list[str]] = mapped_column(JSONB)
     raw_payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
     row_sha256: Mapped[str] = hash_column()
     received_at: Mapped[datetime] = timestamp()

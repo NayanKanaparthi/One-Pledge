@@ -15,7 +15,7 @@ from onepledge_bank_agent.infrastructure.db.models import RawRowRow
 
 
 class SqlRawRowRepository:
-    """Stores raw rows exactly as sent and reads them back in row order."""
+    """Stores raw rows verbatim (text, cells and the derived payload) and reads them back in row order."""
 
     def __init__(self, session: Session, ids: IdGenerator) -> None:
         self._session = session
@@ -32,6 +32,8 @@ class SqlRawRowRepository:
                     "raw_id": self._ids.new_id(),
                     "submission_id": submission_id,
                     "row_number": row.row_number,
+                    "raw_text": row.text,
+                    "raw_cells": list(row.cells),
                     "raw_payload": dict(row.payload),
                     "row_sha256": row.row_sha256,
                     "received_at": received_at,
@@ -43,11 +45,17 @@ class SqlRawRowRepository:
     def list_for(self, submission_id: uuid.UUID) -> list[StoredRawRow]:
         """Every raw row of a submission, in row number order."""
         statement = (
-            select(RawRowRow.raw_id, RawRowRow.row_number, RawRowRow.raw_payload, RawRowRow.row_sha256)
+            select(
+                RawRowRow.raw_id,
+                RawRowRow.row_number,
+                RawRowRow.raw_text,
+                RawRowRow.raw_cells,
+                RawRowRow.row_sha256,
+            )
             .where(RawRowRow.submission_id == submission_id)
             .order_by(RawRowRow.row_number)
         )
         return [
-            StoredRawRow(row.raw_id, row.row_number, row.raw_payload, row.row_sha256)
+            StoredRawRow(row.raw_id, row.row_number, row.raw_text, tuple(row.raw_cells), row.row_sha256)
             for row in self._session.execute(statement)
         ]

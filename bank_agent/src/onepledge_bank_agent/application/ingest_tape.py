@@ -147,7 +147,7 @@ class IngestTape:
                 self._refuse_duplicate(
                     unit.tapes.find_by_file(facts.facility_id, facts.kind, facts.file_sha256)
                 )
-                unit.tapes.add(tape)
+                unit.tapes.add(tape, parsed.layout)
                 unit.raw_rows.add_many(facts.submission_id, parsed.rows, now)
                 unit.record(self._uploaded(command, facts))
                 unit.commit()

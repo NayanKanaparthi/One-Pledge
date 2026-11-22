@@ -6,6 +6,8 @@ import csv
 import io
 from collections.abc import Sequence
 
+from onepledge_bank_agent.domain.tape_file import TapeLayout
+
 SUMMIT_HEADER = (
     "Loan #",
     "VIN",
@@ -74,3 +76,7 @@ def lakeside_row(**cells: str) -> list[str]:
     """One Lakeside data row."""
     values = {**LAKESIDE_DEFAULTS, **cells}
     return [values[name] for name in _ORDER] + _VEHICLE
+
+
+SUMMIT_LAYOUT = TapeLayout(True, ",".join(SUMMIT_HEADER) + "\r\n", SUMMIT_HEADER, "")
+"""The layout of a Summit file, for tests that store a submission without uploading a file."""

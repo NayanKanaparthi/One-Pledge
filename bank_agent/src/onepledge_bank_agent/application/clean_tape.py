@@ -26,15 +26,18 @@ from onepledge_bank_agent.domain.dispositions import (
     decide_rows,
 )
 from onepledge_bank_agent.domain.enums import CleaningAction, RowDisposition, TapeSource, TapeStatus
+from onepledge_bank_agent.domain.errors import MissingTapeLayoutError
 from onepledge_bank_agent.domain.loan import Loan, LoanDraft, StateChange
 from onepledge_bank_agent.domain.tape import TapeFacts
-
-INSTRUCTION_KEY = "loan_id"
+from onepledge_bank_agent.domain.tape_file import TapeLayout
 
 
 def _instruction_loan_id(row: StoredRawRow) -> uuid.UUID | None:
+    """The loan id of a release instruction row (one cell, SPEC_DECISIONS 25 rule 5)."""
+    if len(row.cells) != 1:
+        return None
     try:
-        return uuid.UUID(row.payload.get(INSTRUCTION_KEY, ""))
+        return uuid.UUID(row.cells[0])
     except ValueError:
         return None
 
@@ -57,7 +60,10 @@ class CleanTape:
             if tape is None or tape.status is not TapeStatus.RECEIVED:
                 return
             rows = unit.raw_rows.list_for(submission_id)
-            decisions = self._decide(unit, tape.facts, rows)
+            layout = unit.tapes.layout(submission_id)
+            if layout is None:
+                raise MissingTapeLayoutError
+            decisions = self._decide(unit, tape.facts, layout, rows)
             changes = self._apply(unit, tape.facts, decisions)
             now = self._clock.now()
             before = tape.mark_cleaned(now)
@@ -69,10 +75,12 @@ class CleanTape:
             unit.commit()
 
     @staticmethod
-    def _decide(unit: UnitOfWork, facts: TapeFacts, rows: Sequence[StoredRawRow]) -> list[RowDecision]:
+    def _decide(
+        unit: UnitOfWork, facts: TapeFacts, layout: TapeLayout, rows: Sequence[StoredRawRow]
+    ) -> list[RowDecision]:
         if facts.source is TapeSource.API_INSTRUCTION:
             return _decide_instruction(unit, facts, rows)
-        return _decide_file(unit, facts, rows)
+        return _decide_file(unit, facts, HeaderMap.from_header(layout.header_cells, facts.kind), rows)
 
     def _apply(
         self, unit: UnitOfWork, facts: TapeFacts, decisions: Sequence[RowDecision]
@@ -151,12 +159,13 @@ def _decide_instruction(
     return decisions
 
 
-def _decide_file(unit: UnitOfWork, facts: TapeFacts, rows: Sequence[StoredRawRow]) -> list[RowDecision]:
-    """Rows of an uploaded file: clean each, then the file and database rules."""
-    header_map = HeaderMap.from_stored_keys(key for row in rows for key in row.payload)
+def _decide_file(
+    unit: UnitOfWork, facts: TapeFacts, header_map: HeaderMap, rows: Sequence[StoredRawRow]
+) -> list[RowDecision]:
+    """Rows of an uploaded file: clean each from its cells, then the file and database rules."""
     lines = [
         CleanedLine(
-            row.row_number, row.raw_id, clean_row(row.payload, header_map, facts.kind, facts.as_of_date)
+            row.row_number, row.raw_id, clean_row(row.cells, header_map, facts.kind, facts.as_of_date)
         )
         for row in rows
     ]

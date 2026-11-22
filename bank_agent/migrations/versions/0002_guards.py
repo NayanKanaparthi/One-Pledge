@@ -86,7 +86,11 @@ BEGIN
        OR NEW.row_count IS DISTINCT FROM OLD.row_count
        OR NEW.as_of_date IS DISTINCT FROM OLD.as_of_date
        OR NEW.uploaded_by IS DISTINCT FROM OLD.uploaded_by
-       OR NEW.uploaded_at IS DISTINCT FROM OLD.uploaded_at THEN
+       OR NEW.uploaded_at IS DISTINCT FROM OLD.uploaded_at
+       OR NEW.has_bom IS DISTINCT FROM OLD.has_bom
+       OR NEW.header_text IS DISTINCT FROM OLD.header_text
+       OR NEW.header_cells IS DISTINCT FROM OLD.header_cells
+       OR NEW.trailer_text IS DISTINCT FROM OLD.trailer_text THEN
         RAISE EXCEPTION 'the facts of a tape upload are immutable' USING ERRCODE = 'OP004';
     END IF;
     IF NEW.status IS DISTINCT FROM OLD.status AND NOT (

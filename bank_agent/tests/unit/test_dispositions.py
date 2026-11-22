@@ -18,7 +18,6 @@ from onepledge_bank_agent.domain.dispositions import (
     decide_rows,
 )
 from onepledge_bank_agent.domain.enums import CleaningProblem, LoanState, RowDisposition, TapeKind
-from onepledge_bank_agent.domain.tape_file import raw_payload
 
 pytestmark = pytest.mark.unit
 
@@ -28,9 +27,7 @@ LOAN = uuid.uuid4()
 
 def line(number: int, kind: TapeKind = TapeKind.PLEDGE, **cells: str) -> CleanedLine:
     header = HeaderMap.from_header(SUMMIT_HEADER, kind)
-    return CleanedLine(
-        number, uuid.uuid4(), clean_row(raw_payload(SUMMIT_HEADER, summit_row(**cells)), header, kind, AS_OF)
-    )
+    return CleanedLine(number, uuid.uuid4(), clean_row(summit_row(**cells), header, kind, AS_OF))
 
 
 def existing(state: LoanState, *, tokens: bool, original: str = "$23,450.17") -> ExistingLoan:

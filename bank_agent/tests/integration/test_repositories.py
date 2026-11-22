@@ -16,6 +16,7 @@ from bank_testkit.audit_chain import first_broken_seq
 from bank_testkit.clocks import ManualClock
 from bank_testkit.data import seed_reference
 from bank_testkit.database import BankDatabase, insert_user, pairs
+from bank_testkit.tapes import SUMMIT_LAYOUT
 from onepledge_bank_agent.domain.audit import Actor, AuditDraft
 from onepledge_bank_agent.domain.entities import Facility, Lender
 from onepledge_bank_agent.domain.enums import (
@@ -93,7 +94,7 @@ def tape(
 def add(engine: Engine, *tapes: TapeSubmission) -> None:
     with units(engine)() as unit:
         for item in tapes:
-            unit.tapes.add(item)
+            unit.tapes.add(item, SUMMIT_LAYOUT)
         unit.commit()
 
 
@@ -129,13 +130,13 @@ def test_a_concurrent_insert_of_the_same_file_raises_concurrent_upload(
     first, second = tape(seeded, datetime.now(UTC), sha), tape(seeded, datetime.now(UTC), sha)
     holder = units(app_engine)()
     with holder as unit:
-        unit.tapes.add(first)
+        unit.tapes.add(first, SUMMIT_LAYOUT)
         outcome: list[BaseException | None] = []
 
         def compete() -> None:
             try:
                 with units(app_engine)() as other:
-                    other.tapes.add(second)
+                    other.tapes.add(second, SUMMIT_LAYOUT)
                     other.commit()
                 outcome.append(None)
             except BaseException as error:  # the waiting insert fails once the first commits

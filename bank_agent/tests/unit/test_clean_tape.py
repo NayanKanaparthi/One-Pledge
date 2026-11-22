@@ -16,7 +16,6 @@ from onepledge_bank_agent.application.ingest_tape import IngestCommand, IngestTa
 from onepledge_bank_agent.application.ports import StoredRawRow
 from onepledge_bank_agent.domain.access_policy import AccessPolicy
 from onepledge_bank_agent.domain.audit import Actor
-from onepledge_bank_agent.domain.canonical_json import canonical_sha256
 from onepledge_bank_agent.domain.enums import (
     AuditAction,
     CleaningProblem,
@@ -29,7 +28,7 @@ from onepledge_bank_agent.domain.enums import (
 )
 from onepledge_bank_agent.domain.loan import Loan
 from onepledge_bank_agent.domain.tape import TapeFacts, TapeSubmission
-from onepledge_bank_agent.domain.tape_file import TapeFileReader
+from onepledge_bank_agent.domain.tape_file import TapeFileReader, TapeLayout, row_sha256
 
 pytestmark = pytest.mark.unit
 
@@ -204,20 +203,17 @@ def test_a_release_instruction_is_resolved_by_loan_id_within_the_facility(world:
         replace(foreign.record, facility_id=world.other_facility.facility_id)
     )
     submission = uuid.uuid4()
-    payloads = [
-        {"loan_id": str(locked.loan_id)},
-        {"loan_id": str(foreign.loan_id)},
-        {"loan_id": "not-a-uuid"},
-    ]
+    loan_ids = [str(locked.loan_id), str(foreign.loan_id), "not-a-uuid"]
     facts = TapeFacts(
         submission, world.facility.facility_id, TapeKind.RELEASE, TapeSource.API_INSTRUCTION,
         "release-instruction.json", "a" * 64, "b" * 64, date(2026, 11, 12), 3, uuid.uuid4(),
         world.clock.now(),
     )  # fmt: skip
     world.store.state.tapes[submission] = TapeSubmission.receive(facts)
+    world.store.state.layouts[submission] = TapeLayout(False, "loan_id\n", ("loan_id",), "")
     world.store.state.raw_rows[submission] = [
-        StoredRawRow(uuid.uuid4(), number, payload, canonical_sha256(payload))
-        for number, payload in enumerate(payloads, start=1)
+        StoredRawRow(uuid.uuid4(), number, f"{loan_id}\n", (loan_id,), row_sha256(f"{loan_id}\n"))
+        for number, loan_id in enumerate(loan_ids, start=1)
     ]
     clean(world, submission)
     assert dispositions(world, submission) == [

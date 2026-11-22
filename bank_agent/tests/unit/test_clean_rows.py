@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Sequence
 from datetime import date
 
 import pytest
@@ -12,7 +12,6 @@ from hypothesis import strategies as st
 from bank_testkit.tapes import LAKESIDE_HEADER, SUMMIT_HEADER, lakeside_row, summit_row
 from onepledge_bank_agent.domain.cleaning import CleanedRow, HeaderMap, RejectedRow, clean_row
 from onepledge_bank_agent.domain.enums import CleaningAction, CleaningProblem, TapeKind
-from onepledge_bank_agent.domain.tape_file import raw_payload
 
 pytestmark = pytest.mark.unit
 
@@ -22,8 +21,8 @@ LAKESIDE = HeaderMap.from_header(LAKESIDE_HEADER, TapeKind.PLEDGE)
 P = CleaningProblem
 
 
-def summit(**cells: str) -> Mapping[str, str]:
-    return raw_payload(SUMMIT_HEADER, summit_row(**cells))
+def summit(**cells: str) -> list[str]:
+    return summit_row(**cells)
 
 
 def issues(result: CleanedRow | RejectedRow) -> set[tuple[str, CleaningProblem, CleaningAction]]:
@@ -39,12 +38,12 @@ def rejected(field: str, problem: CleaningProblem) -> tuple[str, CleaningProblem
 
 
 def clean(
-    payload: Mapping[str, str], header: HeaderMap = SUMMIT, kind: TapeKind = TapeKind.PLEDGE
+    payload: Sequence[str], header: HeaderMap = SUMMIT, kind: TapeKind = TapeKind.PLEDGE
 ) -> CleanedRow | RejectedRow:
     return clean_row(payload, header, kind, AS_OF)
 
 
-def accepted(payload: Mapping[str, str], header: HeaderMap = SUMMIT) -> CleanedRow:
+def accepted(payload: Sequence[str], header: HeaderMap = SUMMIT) -> CleanedRow:
     result = clean(payload, header)
     assert isinstance(result, CleanedRow), result.issues
     return result
@@ -65,7 +64,7 @@ def test_a_clean_summit_row_is_accepted_with_canonical_values_and_no_issue() -> 
 
 
 def test_a_lakeside_row_carries_only_its_inherent_borrower_fix() -> None:
-    result = accepted(raw_payload(LAKESIDE_HEADER, lakeside_row()), LAKESIDE)
+    result = accepted((lakeside_row()), LAKESIDE)
     assert issues(result) == {fixed("borrower_ref", P.BORROWER_REF_NORMALISED)}
     assert result.loan is not None and result.loan.terms.borrower_ref.value == "LK123456"
 
@@ -90,21 +89,21 @@ def test_a_blank_after_trimming_keeps_the_trim_and_is_missing() -> None:
 
 
 def test_a_row_of_empty_cells_is_a_non_data_row() -> None:
-    payload = dict.fromkeys(SUMMIT_HEADER, " ")
-    assert issues(clean(payload)) == {rejected("row", P.NON_DATA_ROW)}
+    assert issues(clean([" "] * len(SUMMIT_HEADER))) == {rejected("row", P.NON_DATA_ROW)}
+    assert issues(clean([""])) == {rejected("row", P.NON_DATA_ROW)}
 
 
 @pytest.mark.parametrize("marker", ["TOTAL", "Totals", "grand total", "SubTotal", " TOTAL "])
 def test_a_totals_row_is_a_non_data_row_even_when_short(marker: str) -> None:
-    full = raw_payload(SUMMIT_HEADER, [marker, "", "", "", "", "$1.00", "", "", "", "", "", ""])
-    short = raw_payload(SUMMIT_HEADER, [marker, "", "", "", "", "$1.00"])
+    full = [marker, "", "", "", "", "$1.00", "", "", "", "", "", ""]
+    short = [marker, "", "", "", "", "$1.00"]
     assert issues(clean(full)) == {rejected("row", P.NON_DATA_ROW)}
     assert issues(clean(short)) == {rejected("row", P.NON_DATA_ROW)}
 
 
 @pytest.mark.parametrize("cells", [summit_row()[:-1], [*summit_row(), "extra"]])
 def test_a_row_with_another_cell_count_is_a_column_count_mismatch(cells: list[str]) -> None:
-    assert issues(clean(raw_payload(SUMMIT_HEADER, cells))) == {rejected("row", P.COLUMN_COUNT_MISMATCH)}
+    assert issues(clean(cells)) == {rejected("row", P.COLUMN_COUNT_MISMATCH)}
 
 
 @pytest.mark.parametrize("cell", ["=1+1", "+12", "@SUM(1+1)", "\tSAF-1", " =1", "SAF\x01-1", "SAF-1\r"])
@@ -310,25 +309,34 @@ def test_every_field_is_evaluated_so_the_review_list_shows_everything() -> None:
 
 def test_a_release_row_needs_only_a_valid_vin() -> None:
     header = HeaderMap.from_header(SUMMIT_HEADER, TapeKind.RELEASE)
-    row = raw_payload(SUMMIT_HEADER, ["SAF-1", "1hgcm82633a004352", "", "", "", "", "", "", "", "", "", ""])
+    row = ["SAF-1", "1hgcm82633a004352", "", "", "", "", "", "", "", "", "", ""]
     result = clean(row, header, TapeKind.RELEASE)
     assert isinstance(result, CleanedRow) and result.loan is None
     assert issues(result) == {fixed("vin", P.VIN_CASE_NORMALISED)}
-    bad = raw_payload(SUMMIT_HEADER, ["SAF-1", "1HGCM82633A004353", "", "", "", "", "", "", "", "", "", ""])
+    bad = ["SAF-1", "1HGCM82633A004353", "", "", "", "", "", "", "", "", "", ""]
     assert issues(clean(bad, header, TapeKind.RELEASE)) == {rejected("vin", P.VIN_CHECK_DIGIT_INVALID)}
 
 
-def test_a_header_rebuilt_from_stored_keys_maps_the_same_columns() -> None:
-    rebuilt = HeaderMap.from_stored_keys([*summit().keys(), "__extra_1"])
-    assert rebuilt.columns == SUMMIT.columns and rebuilt.names == SUMMIT.names
-    assert rebuilt.lead_field == "lender_loan_number"
-    assert HeaderMap.from_stored_keys(["VIN"]).lead_field == "vin"
+def test_the_header_maps_each_field_to_its_column_position() -> None:
+    assert dict(SUMMIT.columns) == {
+        "lender_loan_number": 0, "vin": 1, "borrower_ref": 2, "origination_date": 3, "original_amount": 4,
+        "current_balance": 5,
+    }  # fmt: skip
+    assert SUMMIT.width == len(SUMMIT_HEADER) and LAKESIDE.columns["vin"] == 1
 
 
-def test_a_stored_tape_without_a_required_column_rejects_every_row_as_a_count_mismatch() -> None:
-    short = HeaderMap.from_stored_keys(name for name in SUMMIT_HEADER if name != "Curr Bal")
-    payload = {name: cell for name, cell in summit().items() if name in short.names}
-    assert issues(clean(payload, short)) == {rejected("row", P.COLUMN_COUNT_MISMATCH)}
+def test_the_totals_rule_reads_the_first_cell_whatever_its_column_holds() -> None:
+    lakeside_total = ["TOTAL", *lakeside_row()[1:]]
+    assert issues(clean(lakeside_total, LAKESIDE)) == {rejected("row", P.NON_DATA_ROW)}
+    moved = HeaderMap.from_header((SUMMIT_HEADER[1], SUMMIT_HEADER[0], *SUMMIT_HEADER[2:]), TapeKind.PLEDGE)
+    total_in_second = [summit_row()[1], "TOTAL", *summit_row()[2:]]
+    assert issues(clean(total_in_second, moved)) != {rejected("row", P.NON_DATA_ROW)}
+    assert issues(clean(["TOTAL", *summit_row()[1:]], moved)) == {rejected("row", P.NON_DATA_ROW)}
+
+
+def test_a_row_missing_its_trailing_optional_column_is_a_count_mismatch() -> None:
+    assert issues(clean(summit_row()[:-1])) == {rejected("row", P.COLUMN_COUNT_MISMATCH)}
+    assert issues(clean(lakeside_row()[:-1], LAKESIDE)) == {rejected("row", P.COLUMN_COUNT_MISMATCH)}
 
 
 VIN_CELLS = st.sampled_from(

@@ -1,12 +1,13 @@
 """Header mapping of SPEC 10.3: which column holds which canonical field.
 
 Header names are compared after trimming, lower casing and collapsing inner
-whitespace. All other columns are kept in the raw payload and ignored.
+whitespace. A field is read from its column position in each row's cells; all other
+columns are stored verbatim and ignored.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 
@@ -56,45 +57,27 @@ def is_extra_key(key: str) -> bool:
 
 @dataclass(frozen=True)
 class HeaderMap:
-    """Canonical field to header text, and every header name of the tape."""
+    """Canonical field to its column position, and the number of header cells."""
 
-    columns: Mapping[str, str]
-    names: frozenset[str]
-
-    @property
-    def lead_field(self) -> str:
-        """The field whose cell is read as the first cell of a row by the totals rule."""
-        return LOAN_NUMBER if LOAN_NUMBER in self.columns else VIN
+    columns: Mapping[str, int]
+    width: int
 
     @classmethod
-    def from_header(cls, header: Iterable[str], kind: TapeKind) -> HeaderMap:
+    def from_header(cls, header: Sequence[str], kind: TapeKind) -> HeaderMap:
         """Validate a file header (SPEC 10.1 step 2) and map it; raises `TapeHeaderInvalidError`."""
-        columns: dict[str, str] = {}
+        columns: dict[str, int] = {}
         seen: set[str] = set()
-        names: list[str] = []
-        for name in header:
+        for position, name in enumerate(header):
             normalised = normalise_header_name(name)
             if not normalised or normalised in seen or is_extra_key(name):
                 raise TapeHeaderInvalidError
             seen.add(normalised)
-            names.append(name)
             field = _ALIAS_TO_FIELD.get(normalised)
             if field is None:
                 continue
             if field in columns:
                 raise TapeHeaderInvalidError
-            columns[field] = name
+            columns[field] = position
         if any(field not in columns for field in required_fields(kind)):
             raise TapeHeaderInvalidError
-        return cls(MappingProxyType(columns), frozenset(names))
-
-    @classmethod
-    def from_stored_keys(cls, keys: Iterable[str]) -> HeaderMap:
-        """Rebuild the map from the payload keys of a stored tape (the header was validated at intake)."""
-        names = frozenset(key for key in keys if not is_extra_key(key))
-        columns: dict[str, str] = {}
-        for name in sorted(names):
-            field = _ALIAS_TO_FIELD.get(normalise_header_name(name))
-            if field is not None:
-                columns[field] = name
-        return cls(MappingProxyType(columns), names)
+        return cls(MappingProxyType(columns), len(header))

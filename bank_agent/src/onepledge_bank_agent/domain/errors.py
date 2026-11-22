@@ -222,6 +222,12 @@ class OutsideRecordsProtocolError(PipelineStageError):
     failure_code = FailureCode.OUTSIDE_RECORDS_UNAVAILABLE
 
 
+class MissingTapeLayoutError(DomainError):
+    """A stored submission has no verbatim header; the database is not in the state intake leaves."""
+
+    code = "INTERNAL_ERROR"
+
+
 class ReferenceDataError(DomainError):
     """A reference data file (lenders and facilities) is incomplete or inconsistent."""
 

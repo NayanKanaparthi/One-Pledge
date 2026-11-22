@@ -31,6 +31,12 @@ def example_data(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture(scope="session")
+def full_data(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The `full` profile (seed 20261117): every tape of the three banks in both lender formats."""
+    return generate("full", 20261117, tmp_path_factory.mktemp("full") / "data")
+
+
+@pytest.fixture(scope="session")
 def small_data(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """The `small` profile with a fixed seed."""
     return generate("small", SMALL_SEED, tmp_path_factory.mktemp("small") / "data")

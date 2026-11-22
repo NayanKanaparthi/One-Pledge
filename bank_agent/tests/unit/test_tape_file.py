@@ -1,13 +1,16 @@
-"""Whole file validation, raw rows and fingerprints of an upload (SPEC 10.1 step 2, 10.2)."""
+"""Whole file validation, verbatim raw rows and fingerprints of an upload (SPEC 10.1, SPEC_DECISIONS 25)."""
 
 from __future__ import annotations
 
+import csv
 import hashlib
-import json
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from bank_testkit.tapes import LAKESIDE_HEADER, SUMMIT_HEADER, lakeside_tape, summit_row, summit_tape
+from onepledge_bank_agent.domain import tape_file
 from onepledge_bank_agent.domain.enums import TapeKind
 from onepledge_bank_agent.domain.errors import (
     TapeEmptyError,
@@ -17,7 +20,13 @@ from onepledge_bank_agent.domain.errors import (
     TapeRejectedError,
     TapeTooLargeError,
 )
-from onepledge_bank_agent.domain.tape_file import MAX_TAPE_BYTES, TapeFileReader, sanitise_file_name
+from onepledge_bank_agent.domain.tape_file import (
+    MAX_TAPE_BYTES,
+    TapeFileReader,
+    physical_lines,
+    reconstruct,
+    sanitise_file_name,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -80,42 +89,115 @@ def test_size_limits() -> None:
 
 def test_a_release_header_needs_only_the_vin() -> None:
     parsed = READER.read(b"VIN\n1HGCM82633A004352\n", TapeKind.RELEASE)
-    assert parsed.header_map.columns == {"vin": "VIN"}
+    assert dict(parsed.header_map.columns) == {"vin": 0}
     with pytest.raises(TapeHeaderInvalidError):
         read(b"VIN\n1HGCM82633A004352\n", TapeKind.PLEDGE)
 
 
-def test_raw_rows_are_exact_and_numbered_after_blank_lines() -> None:
+def test_raw_rows_are_verbatim_and_numbered_after_blank_lines() -> None:
     data = summit_tape(
         [summit_row(vin=" 1hgcm82633a004352 "), [], summit_row(), ["TOTAL", "", "", "", "", "$1.00"]]
     )
     parsed = READER.read(data, TapeKind.PLEDGE)
     assert [row.row_number for row in parsed.rows] == [1, 2, 3]
-    first = parsed.rows[0].payload
-    assert first["VIN"] == " 1hgcm82633a004352 " and list(first) == list(SUMMIT_HEADER)
-    assert "\ufeffLoan #" not in first and "Loan #" in first
-    assert set(parsed.rows[2].payload) == set(SUMMIT_HEADER[:6])
+    first = parsed.rows[0]
+    assert first.cells[1] == " 1hgcm82633a004352 " and len(first.cells) == len(SUMMIT_HEADER)
+    assert first.text.endswith("\r\n") and first.text.count("\r\n") == 1
+    assert parsed.rows[1].text.startswith("\r\n"), "the blank line joins the next record"
+    assert parsed.rows[2].cells == ("TOTAL", "", "", "", "", "$1.00")
+    layout = parsed.layout
+    assert layout.has_bom and layout.header_cells == SUMMIT_HEADER and layout.trailer_text == ""
+    assert layout.header_text == ",".join(SUMMIT_HEADER) + "\r\n"
+    assert first.payload["VIN"] == " 1hgcm82633a004352 " and "\ufeffLoan #" not in first.payload
     assert parsed.file_sha256 == hashlib.sha256(data).hexdigest()
+    assert reconstruct(layout, (row.text for row in parsed.rows)) == data
 
 
-def test_cells_beyond_the_header_are_kept_as_extras() -> None:
+def test_a_summit_file_with_a_totals_row_and_a_trailing_blank_line_rebuilds_exactly() -> None:
+    data = (
+        summit_tape([summit_row(), ["TOTAL", "", "", "", "", "$18,000.00", "", "", "", "", "", ""]]) + b"\r\n"
+    )
+    parsed = READER.read(data, TapeKind.PLEDGE)
+    assert len(parsed.rows) == 2 and parsed.layout.trailer_text == "\r\n"
+    assert reconstruct(parsed.layout, (row.text for row in parsed.rows)) == data
+
+
+def test_a_quoted_cell_with_a_line_break_stays_inside_one_record() -> None:
+    data = b'VIN,Note\n1HGCM82633A004352,"two\r\nlines, ""quoted"""\n\n\n5YJ3E1EA2KF317000,x'
+    parsed = READER.read(data, TapeKind.RELEASE)
+    assert [row.cells for row in parsed.rows] == [
+        ("1HGCM82633A004352", 'two\r\nlines, "quoted"'),
+        ("5YJ3E1EA2KF317000", "x"),
+    ]
+    assert parsed.rows[0].text == '1HGCM82633A004352,"two\r\nlines, ""quoted"""\n'
+    assert parsed.rows[1].text == "\n\n5YJ3E1EA2KF317000,x" and parsed.layout.trailer_text == ""
+    assert not parsed.layout.has_bom
+
+
+@pytest.mark.parametrize("terminator", ["\n", "\r\n", "\r"])
+def test_every_line_terminator_is_kept_and_mixed_files_rebuild(terminator: str) -> None:
+    text = f"VIN{terminator}1HGCM82633A004352{terminator}{terminator}5YJ3E1EA2KF317000\r\n\n"
+    parsed = READER.read(text.encode(), TapeKind.RELEASE)
+    assert parsed.layout.header_text == f"VIN{terminator}"
+    assert [row.text for row in parsed.rows] == [
+        f"1HGCM82633A004352{terminator}",
+        f"{terminator}5YJ3E1EA2KF317000\r\n",
+    ]
+    assert parsed.layout.trailer_text == "\n"
+    assert reconstruct(parsed.layout, (row.text for row in parsed.rows)) == text.encode()
+
+
+def test_cells_beyond_the_header_are_kept_in_order_and_named_extras_in_the_payload() -> None:
     parsed = READER.read(
         b"Loan #,VIN,Cust ID,Orig Date,Orig Amt,Curr Bal\na,b,c,d,e,f,g,h\n", TapeKind.PLEDGE
     )
+    assert parsed.rows[0].cells == ("a", "b", "c", "d", "e", "f", "g", "h")
     assert parsed.rows[0].payload["__extra_1"] == "g" and parsed.rows[0].payload["__extra_2"] == "h"
 
 
-def test_row_and_rows_hashes_follow_spec_10_2() -> None:
+def test_row_hashes_are_over_the_verbatim_text_and_the_rows_hash_joins_them() -> None:
     parsed = READER.read(
         lakeside_tape([["a", "b", "c", "d", "e", "f", "", "", "", "", "", ""]] * 2), TapeKind.PLEDGE
     )
-    expected_rows = []
-    for row in parsed.rows:
-        canonical = json.dumps(dict(row.payload), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-        expected_rows.append(hashlib.sha256(canonical.encode()).hexdigest())
-        assert row.row_sha256 == expected_rows[-1]
+    expected_rows = [hashlib.sha256(row.text.encode()).hexdigest() for row in parsed.rows]
+    assert [row.row_sha256 for row in parsed.rows] == expected_rows
     assert parsed.rows_sha256 == hashlib.sha256("\n".join(expected_rows).encode()).hexdigest()
-    assert list(parsed.rows[0].payload) == list(LAKESIDE_HEADER)
+    assert list(parsed.rows[0].payload) == list(LAKESIDE_HEADER) and not parsed.layout.has_bom
+
+
+CELL = st.text(alphabet=st.sampled_from(list('ab ,"\r\n\u00e9')), max_size=6)
+TERMINATOR = st.sampled_from(["\n", "\r\n", "\r"])
+
+
+def _quoted(cell: str) -> str:
+    return '"' + cell.replace('"', '""') + '"'
+
+
+@given(
+    st.lists(
+        st.tuples(st.lists(CELL, min_size=1, max_size=3), TERMINATOR, st.integers(0, 2)),
+        min_size=1,
+        max_size=6,
+    ),
+    st.booleans(),
+    st.lists(st.sampled_from(["\n", "\r\n"]), max_size=3).map("".join),
+)
+def test_any_well_formed_file_rebuilds_exactly_and_each_record_reparses(
+    records: list[tuple[list[str], str, int]], bom: bool, trailer: str
+) -> None:
+    text = "VIN,Note\n"
+    expected: list[tuple[str, ...]] = []
+    for cells, terminator, blanks in records:
+        text += terminator * blanks + ",".join(_quoted(cell) for cell in cells) + terminator
+        expected.append(tuple(cells))
+    data = (b"\xef\xbb\xbf" if bom else b"") + (text + trailer).encode()
+    parsed = READER.read(data, TapeKind.RELEASE)
+    assert [row.cells for row in parsed.rows] == expected
+    assert reconstruct(parsed.layout, (row.text for row in parsed.rows)) == data
+    for row in parsed.rows:
+        assert [cells for cells in csv.reader(physical_lines(row.text), strict=True) if cells] == [
+            list(row.cells)
+        ]
 
 
 @pytest.mark.parametrize(
@@ -126,6 +208,10 @@ def test_row_and_rows_hashes_follow_spec_10_2() -> None:
         ("tape.csv", "tape.csv"),
         ("..", "unnamed"),
         ("", "unnamed"),
+        ("._._", "unnamed"),
+        ("???", "unnamed"),
+        ("_", "unnamed"),
+        ("._a", "._a"),
         ("a/b/", "unnamed"),
         ("é.csv", "_.csv"),
         ("x" * 300 + ".csv", "x" * 255),
@@ -133,3 +219,18 @@ def test_row_and_rows_hashes_follow_spec_10_2() -> None:
 )
 def test_file_names_are_reduced_to_a_safe_base_name(name: str, stored: str) -> None:
     assert sanitise_file_name(name) == stored
+
+
+def test_a_file_its_records_do_not_rebuild_is_refused_as_malformed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The reconstruction assertion of SPEC_DECISIONS 25 rule 1 is checked on every upload."""
+    split = tape_file.split_records
+
+    def losing_the_trailer(text: str) -> tuple[list[tape_file.SourceRecord], str]:
+        records, _ = split(text)
+        return records, ""
+
+    data = summit_tape([summit_row()]) + b"\r\n"
+    READER.read(data, TapeKind.PLEDGE)
+    monkeypatch.setattr(tape_file, "split_records", losing_the_trailer)
+    with pytest.raises(TapeMalformedError):
+        READER.read(data, TapeKind.PLEDGE)
