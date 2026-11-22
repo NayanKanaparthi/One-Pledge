@@ -299,3 +299,48 @@ def test_no_suppression_without_a_code_and_a_reason() -> None:
         if marker in text and not shape.match(text[text.index(marker) + len(marker) :])
     ]
     assert violations == []
+
+
+PATCHING_CALLS = frozenset({"setattr", "delattr", "setitem", "delitem"})
+PATCHING_MODULES = ("unittest.mock", "mock", "pytest_mock")
+
+
+def patching(tree: ast.Module) -> Iterator[tuple[str, int]]:
+    """Every place a test replaces an attribute of a module or class instead of injecting a collaborator."""
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in PATCHING_CALLS
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "monkeypatch"
+        ):
+            yield f"monkeypatch.{node.func.attr}", node.lineno
+        elif isinstance(node, ast.Import):
+            yield from ((alias.name, node.lineno) for alias in node.names if alias.name in PATCHING_MODULES)
+        elif isinstance(node, ast.ImportFrom) and node.module in PATCHING_MODULES:
+            yield node.module, node.lineno
+
+
+def test_no_test_patches_a_module_or_class_instead_of_injecting_a_collaborator() -> None:
+    """SPEC_DECISIONS 42 and 53.10: collaborators are injected through constructors; only the
+    process environment is set by tests (`monkeypatch.setenv` and `delenv`)."""
+    violations = [
+        f"{where(path, line)} uses {name}"
+        for path in sorted(TESTS.rglob("*.py"))
+        for name, line in patching(parsed(path))
+    ]
+    assert violations == []
+
+
+def test_the_patching_rule_finds_each_planted_form() -> None:
+    planted = ast.parse(
+        "import unittest.mock\n"
+        "from unittest.mock import patch\n"
+        "monkeypatch.setattr(module, 'name', value)\n"
+        "monkeypatch.setitem(table, 'key', value)\n"
+        "monkeypatch.setenv('NAME', 'value')\n"
+    )
+    assert [name for name, _ in patching(planted)] == [
+        "unittest.mock", "unittest.mock", "monkeypatch.setattr", "monkeypatch.setitem",
+    ]  # fmt: skip

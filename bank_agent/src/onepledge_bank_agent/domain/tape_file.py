@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import csv
 import re
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 
@@ -156,15 +156,26 @@ def _check_limits(records: Sequence[SourceRecord]) -> None:
             raise TapeTooLargeError
 
 
+type RecordSplitter = Callable[[str], tuple[list[SourceRecord], str]]
+
+
 class TapeFileReader:
-    """Validates an uploaded file and turns it into verbatim raw rows, or raises the matching tape error."""
+    """Validates an uploaded file and turns it into verbatim raw rows, or raises the matching tape error.
+
+    The record splitter is a collaborator (SPEC_DECISIONS 53.10). The byte exact reconstruction
+    check stays after it as defence in depth: records that do not rebuild the uploaded bytes are
+    `TAPE_MALFORMED`, whatever splitter produced them.
+    """
+
+    def __init__(self, splitter: RecordSplitter = split_records) -> None:
+        self._split = splitter
 
     def read(self, data: bytes, kind: TapeKind) -> ParsedTape:
         """Checks in the order of the SPEC 10.1 table, then the byte exact reconstruction."""
         if len(data) > MAX_TAPE_BYTES:
             raise TapeTooLargeError
         has_bom, text = _decode(data)
-        records, trailer = split_records(text)
+        records, trailer = self._split(text)
         if len(records) < MIN_RECORDS:
             raise TapeEmptyError
         header = records[0]

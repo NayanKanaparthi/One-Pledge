@@ -221,16 +221,17 @@ def test_file_names_are_reduced_to_a_safe_base_name(name: str, stored: str) -> N
     assert sanitise_file_name(name) == stored
 
 
-def test_a_file_its_records_do_not_rebuild_is_refused_as_malformed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The reconstruction assertion of SPEC_DECISIONS 25 rule 1 is checked on every upload."""
-    split = tape_file.split_records
+def test_a_file_its_records_do_not_rebuild_is_refused_as_malformed() -> None:
+    """The reconstruction assertion of SPEC_DECISIONS 25 rule 1 is checked on every upload.
+
+    A faulty splitter is injected through the reader's constructor (SPEC_DECISIONS 53.10).
+    """
 
     def losing_the_trailer(text: str) -> tuple[list[tape_file.SourceRecord], str]:
-        records, _ = split(text)
+        records, _ = tape_file.split_records(text)
         return records, ""
 
     data = summit_tape([summit_row()]) + b"\r\n"
     READER.read(data, TapeKind.PLEDGE)
-    monkeypatch.setattr(tape_file, "split_records", losing_the_trailer)
     with pytest.raises(TapeMalformedError):
-        READER.read(data, TapeKind.PLEDGE)
+        TapeFileReader(losing_the_trailer).read(data, TapeKind.PLEDGE)
