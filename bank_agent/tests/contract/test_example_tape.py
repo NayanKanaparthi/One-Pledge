@@ -11,8 +11,9 @@ import pytest
 
 from bank_testkit.data import EXAMPLE_TAPES, seed_reference
 from bank_testkit.database import BankDatabase
+from bank_testkit.doubles import InProcessDoubles
 from bank_testkit.outside import InProcessOutsideRecords
-from bank_testkit.pipeline import BankAgentHarness
+from bank_testkit.pipeline import BankAgentHarness, Services
 from onepledge_bank_agent.domain.enums import TapeKind, TapeStatus
 
 pytestmark = [pytest.mark.contract, pytest.mark.integration]
@@ -54,19 +55,22 @@ def _observed(database: BankDatabase, submission_id: object) -> dict[int, dict[s
 
 
 def test_the_example_tape_matches_its_expected_file(
-    bank_db: BankDatabase, example_data: Path, example_outside: InProcessOutsideRecords
+    bank_db: BankDatabase,
+    example_data: Path,
+    example_outside: InProcessOutsideRecords,
+    doubles: InProcessDoubles,
 ) -> None:
     expected = json.loads(EXPECTED.read_text(encoding="utf-8"))
     seed_reference(bank_db, example_data, "HARBOR")
-    with BankAgentHarness(bank_db, example_outside) as bank:
+    with BankAgentHarness(bank_db, Services(example_outside, doubles)) as bank:
         submission = bank.ingest(
             TAPE,
             expected["facility_code"],
             TapeKind(expected["kind"]),
             date.fromisoformat(expected["as_of_date"]),
         )
-        report = bank.run_worker()
-    assert report.runs[-1].status is TapeStatus.CHECKED
+        reached = bank.run_until(submission, TapeStatus.CHECKED)
+    assert reached is TapeStatus.CHECKED
 
     observed = _observed(bank_db, submission.submission_id)
     assert sorted(observed) == list(range(1, 21))

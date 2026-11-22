@@ -25,10 +25,12 @@ from onepledge_bank_agent.domain.enums import (
     TapeKind,
     TapeSource,
     TapeStatus,
+    TokenKind,
 )
 from onepledge_bank_agent.domain.loan import Loan
 from onepledge_bank_agent.domain.tape import TapeFacts, TapeSubmission
 from onepledge_bank_agent.domain.tape_file import TapeFileReader, TapeLayout, row_sha256
+from onepledge_bank_agent.domain.values import KeyVersion, Sha256Hex, Token
 
 pytestmark = pytest.mark.unit
 
@@ -154,7 +156,8 @@ def test_a_held_loan_presented_again_goes_back_to_pending_with_new_terms(world: 
 def test_a_tokenised_loan_keeps_its_terms(world: World) -> None:
     first = upload(world, [summit_row()], name="a.csv")
     clean(world, first)
-    world.store.state.tokens.add(loan_by_vin(world, "1HGCM82633A004352").loan_id)
+    loan_id = loan_by_vin(world, "1HGCM82633A004352").loan_id
+    world.store.state.tokens[loan_id] = [Token(TokenKind.ASSET, Sha256Hex("ab" * 32), KeyVersion(1, 1))]
     changed = upload(world, [summit_row(original="$30,000.00")], name="b.csv")
     clean(world, changed)
     assert (

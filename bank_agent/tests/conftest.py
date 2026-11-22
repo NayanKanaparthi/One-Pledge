@@ -14,6 +14,7 @@ import pytest
 
 from bank_testkit.data import CONTRACTS, EXAMPLE_TAPES, SMALL_SEED, generate
 from bank_testkit.database import BankDatabase, drop, new_bank_database, provision_and_migrate
+from bank_testkit.doubles import InProcessDoubles
 from bank_testkit.outside import InProcessOutsideRecords, copy_outside_records
 
 
@@ -81,3 +82,11 @@ def small_outside(small_data: Path) -> Iterator[InProcessOutsideRecords]:
     service = InProcessOutsideRecords(small_data)
     yield service
     service.close()
+
+
+@pytest.fixture
+def doubles() -> Iterator[InProcessDoubles]:
+    """A fresh registry and two key holder doubles, with a member per bank."""
+    made = InProcessDoubles()
+    yield made
+    made.close()

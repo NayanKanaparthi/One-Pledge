@@ -84,10 +84,37 @@ def test_registry_proofs_report_whether_they_verified() -> None:
     assert not request.answered and replace(request, response_status=201).answered
     with pytest.raises(InvalidValueError):
         replace(request, item_count=501)
-    certificate = Certificate(uuid.uuid4(), uuid.uuid4(), 7, {}, Sha256Hex("b" * 64), "sig", "key", None, AT)
+    certificate = Certificate(
+        certificate_id=uuid.uuid4(),
+        request_id=request.request_id,
+        registry_submission_id=uuid.uuid4(),
+        kind=TapeKind.PLEDGE,
+        as_of_seq=7,
+        issued_at=AT,
+        body={},
+        body_hash=Sha256Hex("b" * 64),
+        signature="sig",
+        signing_key_id="key",
+        failure=None,
+        verified_at=AT,
+        received_at=AT,
+    )
     assert certificate.verified
     assert not replace(certificate, failure=CertificateFailure.BAD_SIGNATURE).verified
-    checkpoint = Checkpoint(3, 40, Sha256Hex("c" * 64), AT, "sig", "key", CheckpointFailure.FORK, 12)
+    checkpoint = Checkpoint(
+        checkpoint_id=uuid.uuid4(),
+        checkpoint_seq=3,
+        last_event_seq=40,
+        head_hash=Sha256Hex("c" * 64),
+        signed_at=AT,
+        signature="sig",
+        signing_key_id="key",
+        body={},
+        received_at=AT,
+        verified_at=AT,
+        failure=CheckpointFailure.FORK,
+        first_bad_event_seq=12,
+    )
     assert not checkpoint.verified and replace(checkpoint, failure=None).verified
 
 

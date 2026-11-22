@@ -1,22 +1,29 @@
-"""A bank agent wired by its own composition root against a test database and in-process outside records."""
+"""A bank agent wired by its own composition root against a test database, in-process outside records
+and the in-process registry and key holder doubles."""
 
 from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from types import TracebackType
 from typing import Self
 
 from bank_testkit.database import BankDatabase, insert_user
+from bank_testkit.doubles import InProcessDoubles, combined_factory
 from bank_testkit.outside import OUTSIDE_BASE_URL, OutsideService
+from onepledge_bank_agent.application.advance_submission import StageOutcome
 from onepledge_bank_agent.application.faults import FaultInjector, NoFaults
 from onepledge_bank_agent.application.ingest_tape import IngestCommand
 from onepledge_bank_agent.application.ports import Clock
+from onepledge_bank_agent.application.requester import Requester
+from onepledge_bank_agent.application.retry_tape import RetryCommand
 from onepledge_bank_agent.application.run_pipeline_worker import WorkerReport
 from onepledge_bank_agent.domain.audit import Actor
-from onepledge_bank_agent.domain.enums import Role, TapeKind
+from onepledge_bank_agent.domain.enums import Role, TapeKind, TapeStatus
+from onepledge_bank_agent.domain.integrity import IntegrityReport
 from onepledge_bank_agent.domain.tape import TapeSubmission
 from onepledge_bank_agent.infrastructure.clock import SystemClock
 from onepledge_bank_agent.interface.composition import Collaborators, RuntimeComposition
@@ -26,31 +33,48 @@ def _no_sleep(seconds: float) -> None:
     """Retries in tests do not wait."""
 
 
+@dataclass(frozen=True)
+class Services:
+    """The services one bank agent reaches: outside records and the registry side doubles."""
+
+    outside: OutsideService
+    doubles: InProcessDoubles
+
+
 class BankAgentHarness:
-    """Intake and worker of one bank, built exactly as `onepledge-bank worker` builds them."""
+    """Intake, worker and registry side of one bank, built exactly as `onepledge-bank worker` builds them.
+
+    `BANK_CODE` in `environment` picks the bank (HARBOR by default) and so its registry member.
+    """
 
     def __init__(
         self,
         database: BankDatabase,
-        outside: OutsideService,
+        services: Services,
         *,
         faults: FaultInjector | None = None,
         clock: Clock | None = None,
         environment: Mapping[str, str] | None = None,
     ) -> None:
         self.database = database
+        self.doubles = services.doubles
+        extra = dict(environment or {})
+        self.bank_code = extra.get("BANK_CODE", "HARBOR")
         variables = {
+            "BANK_CODE": self.bank_code,
             "OUTSIDE_RECORDS_URL": OUTSIDE_BASE_URL,
-            "OUTSIDE_RECORDS_API_KEY": outside.api_key,
+            "OUTSIDE_RECORDS_API_KEY": services.outside.api_key,
             "CHECK_CHUNK_LOANS": "20",
-            **dict(environment or {}),
+            "TOKENIZE_CHUNK_LOANS": "25",
+            **services.doubles.environment(self.bank_code),
+            **extra,
         }
         self.environment = database.environment(**variables)
         self.settings = database.settings(variables)
         self.collaborators = Collaborators(
             clock=clock or SystemClock(),
             faults=faults or NoFaults(),
-            http_client_factory=outside.client_factory(),
+            http_client_factory=combined_factory(services.outside.client_factory(), services.doubles),
             sleep=_no_sleep,
         )
         self.composition = RuntimeComposition(self.settings, self.collaborators)
@@ -91,3 +115,32 @@ class BankAgentHarness:
     def run_worker(self) -> WorkerReport:
         """`onepledge-bank worker --once`."""
         return self.composition.worker().run_once()
+
+    def run_until(self, submission: TapeSubmission, status: TapeStatus) -> TapeStatus:
+        """Advance one submission stage by stage until it reaches `status` or stops advancing."""
+        advance = self.composition.advance_submission()
+        while True:
+            run = advance.advance(submission.submission_id)
+            if run.status is status or run.outcome is not StageOutcome.ADVANCED:
+                return run.status
+
+    def sync(self) -> None:
+        """One registry outbox sync, as the worker runs it."""
+        self.composition.outbox_sync().run()
+
+    def requester(self, role: Role = Role.CREDIT_OFFICER) -> Requester:
+        """A signed in user of the role, as the HTTP layer would pass it."""
+        user = self.officer if role is Role.CREDIT_OFFICER else self.analyst
+        return Requester(Actor.user(user, role), f"req-{uuid.uuid4().hex[:12]}", "api")
+
+    def retry(self, submission: TapeSubmission) -> TapeSubmission:
+        """`POST /v1/tapes/{id}/retry` as the credit officer."""
+        return self.composition.retry_tape().execute(RetryCommand(submission.submission_id, self.requester()))
+
+    def verify(self) -> IntegrityReport:
+        """`onepledge-bank integrity verify`."""
+        return self.composition.deep_verification().execute(Requester.command_line())
+
+    def report(self) -> IntegrityReport:
+        """`GET /v1/integrity`."""
+        return self.composition.integrity_report().execute()

@@ -24,8 +24,9 @@ import pytest
 
 from bank_testkit.data import seed_reference
 from bank_testkit.database import BankDatabase, drop, new_bank_database, provision_and_migrate
+from bank_testkit.doubles import InProcessDoubles
 from bank_testkit.outside import ScriptedOutsideRecords
-from bank_testkit.pipeline import BankAgentHarness
+from bank_testkit.pipeline import BankAgentHarness, Services
 from onepledge_bank_agent.domain.enums import TapeKind
 
 pytestmark = pytest.mark.integration
@@ -50,6 +51,7 @@ def uploads(full_data: Path) -> Iterator[list[Upload]]:
     steps = json.loads((full_data / "manifest.json").read_text(encoding="utf-8"))["steps"]
     databases: dict[str, BankDatabase] = {}
     found: list[Upload] = []
+    doubles = InProcessDoubles()
     try:
         for step in steps:
             bank = step["bank_code"]
@@ -57,7 +59,9 @@ def uploads(full_data: Path) -> Iterator[list[Upload]]:
                 databases[bank] = new_bank_database(bank.lower())
                 provision_and_migrate(databases[bank])
                 seed_reference(databases[bank], full_data, bank)
-            with BankAgentHarness(databases[bank], ScriptedOutsideRecords(no_lookups)) as harness:
+            with BankAgentHarness(
+                databases[bank], Services(ScriptedOutsideRecords(no_lookups), doubles)
+            ) as harness:
                 file = full_data / step["file"]
                 tape = harness.ingest(
                     file,
@@ -68,6 +72,7 @@ def uploads(full_data: Path) -> Iterator[list[Upload]]:
             found.append(Upload(databases[bank], tape.submission_id, file, step["facility_code"]))
         yield found
     finally:
+        doubles.close()
         for database in databases.values():
             drop(database)
 

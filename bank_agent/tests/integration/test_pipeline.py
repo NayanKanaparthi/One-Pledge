@@ -1,6 +1,6 @@
 """The scripted run of WORK_PACKAGES WP2: S01 of the small profile through intake, clean and check.
 
-Ingested through `IngestTape`, advanced by the worker until CHECKED against in-process
+Ingested through `IngestTape`, advanced stage by stage until CHECKED against in-process
 outside records, and compared, row by row, with an independent computation written in
 the test kit (never with the answer key).
 """
@@ -15,9 +15,10 @@ import pytest
 
 from bank_testkit.data import seed_reference
 from bank_testkit.database import BankDatabase
+from bank_testkit.doubles import InProcessDoubles
 from bank_testkit.independent import accepted_rows, held_vins
 from bank_testkit.outside import InProcessOutsideRecords
-from bank_testkit.pipeline import BankAgentHarness
+from bank_testkit.pipeline import BankAgentHarness, Services
 from onepledge_bank_agent.domain.enums import TapeKind, TapeStatus
 
 pytestmark = pytest.mark.integration
@@ -39,17 +40,21 @@ def _lender_name(data_dir: Path, facility_code: str) -> str:
 
 @pytest.mark.parametrize("step_id", ["S01", "S04", "S09", "S10"])
 def test_a_small_profile_tape_reaches_checked_with_independently_computed_outcomes(
-    step_id: str, bank_db: BankDatabase, small_data: Path, small_outside: InProcessOutsideRecords
+    step_id: str,
+    bank_db: BankDatabase,
+    small_data: Path,
+    small_outside: InProcessOutsideRecords,
+    doubles: InProcessDoubles,
 ) -> None:
     """S01 is the required run; S04 (Lakeside), S09 and S10 (planted holds) widen it, each on a fresh bank."""
     step = _step(small_data, step_id)
     tape, as_of = small_data / step["file"], date.fromisoformat(step["as_of_date"])
     seed_reference(bank_db, small_data, step["bank_code"])
-    with BankAgentHarness(bank_db, small_outside) as bank:
+    with BankAgentHarness(bank_db, Services(small_outside, doubles)) as bank:
         submission = bank.ingest(tape, step["facility_code"], TapeKind(step["kind"]), as_of)
-        report = bank.run_worker()
+        reached = bank.run_until(submission, TapeStatus.CHECKED)
 
-    assert [run.status for run in report.runs] == [TapeStatus.CLEANED, TapeStatus.CHECKED]
+    assert reached is TapeStatus.CHECKED
     expected_accepted = accepted_rows(tape, as_of)
     expected_held = held_vins(
         expected_accepted, small_data, _lender_name(small_data, step["facility_code"]), as_of

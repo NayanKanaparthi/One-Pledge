@@ -140,7 +140,7 @@ def test_the_schema_status_reads_the_revision_as_the_app_role(bank_db: BankDatab
         status = SchemaInspector(engine).status()
         assert (status.current_revision, status.head_revision, status.at_head) == (
             head_revision(),
-            "0003_grants",
+            "0004_checkpoint_body",
             True,
         )
         SchemaInspector(engine).require_head()

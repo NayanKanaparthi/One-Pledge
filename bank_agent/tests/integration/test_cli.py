@@ -20,8 +20,9 @@ import pytest
 from bank_testkit.audit_chain import first_broken_seq
 from bank_testkit.data import seed_reference
 from bank_testkit.database import BankDatabase, drop, new_bank_database, pairs
+from bank_testkit.doubles import InProcessDoubles
 from bank_testkit.outside import InProcessOutsideRecords, ScriptedOutsideRecords
-from bank_testkit.pipeline import BankAgentHarness
+from bank_testkit.pipeline import BankAgentHarness, Services
 from bank_testkit.programs import run_program
 from onepledge_bank_agent.domain.enums import TapeKind
 from onepledge_bank_agent.infrastructure.db.migrations import MigrationRunner, SchemaInspector, head_revision
@@ -32,6 +33,26 @@ from onepledge_bank_agent.interface.composition import Collaborators
 pytestmark = pytest.mark.integration
 
 TAPE = "tapes/HARBOR/S01_HARBOR-SUMMIT_BACK_BOOK.csv"
+REGISTRY_SIDE = (
+    "REGISTRY_URL", "REGISTRY_API_KEY", "REGISTRY_MEMBER_ID", "REGISTRY_PUBLIC_KEYS", "KEY_HOLDER_1_URL",
+    "KEY_HOLDER_1_API_KEY", "KEY_HOLDER_2_URL", "KEY_HOLDER_2_API_KEY", "HALT_ON_REGISTRY_INTEGRITY_FAILURE",
+)  # fmt: skip
+UNREACHABLE = "http://127.0.0.1:9"
+
+
+def unreachable_services(doubles: InProcessDoubles) -> dict[str, str]:
+    """Outside records, registry and key holder variables that point at a closed port."""
+    variables = doubles.environment("HARBOR")
+    variables.update(
+        {
+            "OUTSIDE_RECORDS_URL": UNREACHABLE,
+            "OUTSIDE_RECORDS_API_KEY": "opk_" + "k" * 43,
+            "REGISTRY_URL": UNREACHABLE,
+            "KEY_HOLDER_1_URL": UNREACHABLE,
+            "KEY_HOLDER_2_URL": UNREACHABLE,
+        }
+    )
+    return variables
 
 
 @dataclass
@@ -62,7 +83,7 @@ def cli_for(monkeypatch: pytest.MonkeyPatch, environment: dict[str, str]) -> Cli
     """Calls `main()` with exactly these bank agent variables in the process environment."""
     for name in (
         "PG_ADMIN_URL", "MIGRATION_DATABASE_URL", "DATABASE_URL", "DB_APP_ROLE", "BANK_CODE", "LOG_LEVEL",
-        "OUTSIDE_RECORDS_URL", "OUTSIDE_RECORDS_API_KEY",
+        "OUTSIDE_RECORDS_URL", "OUTSIDE_RECORDS_API_KEY", *REGISTRY_SIDE,
     ):  # fmt: skip
         monkeypatch.delenv(name, raising=False)
     for name, value in environment.items():
@@ -207,10 +228,11 @@ def test_worker_once_runs_every_runnable_stage_and_reports_it(
     bank_db: BankDatabase,
     small_data: Path,
     small_outside: InProcessOutsideRecords,
+    doubles: InProcessDoubles,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seed_reference(bank_db, small_data)
-    with BankAgentHarness(bank_db, small_outside) as harness:
+    with BankAgentHarness(bank_db, Services(small_outside, doubles)) as harness:
         submission = harness.ingest(small_data / TAPE, "HARBOR-SUMMIT", TapeKind.BACK_BOOK, date(2026, 9, 30))
         cli = cli_for(monkeypatch, harness.environment)
         report = cli("worker", "--once", "--json", collaborators=harness.collaborators)
@@ -222,19 +244,21 @@ def test_worker_once_runs_every_runnable_stage_and_reports_it(
         "stages": [
             {**stage, "from": "RECEIVED", "status": "CLEANED"},
             {**stage, "from": "CLEANED", "status": "CHECKED"},
+            {**stage, "from": "CHECKED", "status": "TOKENIZED"},
+            {**stage, "from": "TOKENIZED", "status": "SUBMITTED"},
+            {**stage, "from": "SUBMITTED", "status": "COMPLETED"},
         ],
     }
-    assert pairs(bank_db, "SELECT 'status', status FROM tape_submissions") == {"status": "CHECKED"}
+    assert pairs(bank_db, "SELECT 'status', status FROM tape_submissions") == {"status": "COMPLETED"}
     assert idle.out.splitlines()[-2:] == ["0 stages run", "Nothing else is runnable now."]
 
 
 def test_the_worker_refuses_a_schema_that_is_not_at_the_latest_revision(
-    bank_db: BankDatabase, monkeypatch: pytest.MonkeyPatch
+    bank_db: BankDatabase, doubles: InProcessDoubles, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cli = cli_for(monkeypatch, {**bank_db.environment(), "OUTSIDE_RECORDS_URL": "http://127.0.0.1:9"})
-    monkeypatch.setenv("OUTSIDE_RECORDS_API_KEY", "k" * 32)
+    cli = cli_for(monkeypatch, {**bank_db.environment(), **unreachable_services(doubles)})
     with bank_db.connect("owner") as connection:
-        connection.execute("UPDATE alembic_version SET version_num = '0002_guards'")
+        connection.execute("UPDATE alembic_version SET version_num = '0003_grants'")
     sentence = f"The database {bank_db.name} is not at the latest revision; run db migrate."
     assert cli("worker", "--once") == Run(1, "", sentence + "\n")
     refused = cli("worker", "--once", "--json")
@@ -255,14 +279,13 @@ def log_lines_and_sentences(stderr: str) -> tuple[list[dict[str, object]], list[
 
 
 def test_worker_once_json_in_a_child_process_writes_one_document_and_only_log_lines_on_stderr(
-    bank_db: BankDatabase, small_data: Path
+    bank_db: BankDatabase, small_data: Path, doubles: InProcessDoubles
 ) -> None:
     """SPEC_DECISIONS 27: stdout parses as one JSON document, every stderr line as a JSON object."""
     seed_reference(bank_db, small_data)
-    with BankAgentHarness(bank_db, ScriptedOutsideRecords(unreachable)) as harness:
+    with BankAgentHarness(bank_db, Services(ScriptedOutsideRecords(unreachable), doubles)) as harness:
         harness.ingest(small_data / TAPE, "HARBOR-SUMMIT", TapeKind.BACK_BOOK, date(2026, 9, 30))
-    environment = {**bank_db.environment(), "OUTSIDE_RECORDS_URL": "http://127.0.0.1:9",
-                   "OUTSIDE_RECORDS_API_KEY": "opk_" + "k" * 43, "LOG_LEVEL": "DEBUG",
+    environment = {**bank_db.environment(), **unreachable_services(doubles), "LOG_LEVEL": "DEBUG",
                    "HTTP_CONNECT_TIMEOUT_SECONDS": "0.2"}  # fmt: skip
     finished = run_program("onepledge-bank", ["worker", "--once", "--json"], environment)
     assert finished.returncode == 0, finished.stderr
@@ -309,13 +332,12 @@ def test_a_missing_variable_is_one_sentence_on_stderr_and_exit_1(bank_db: BankDa
         assert json.loads(as_json.stdout)["error"]["code"] == "CONFIGURATION_ERROR"
 
 
-def test_the_worker_never_needs_an_owner_credential(bank_db: BankDatabase, small_data: Path) -> None:
+def test_the_worker_never_needs_an_owner_credential(
+    bank_db: BankDatabase, small_data: Path, doubles: InProcessDoubles
+) -> None:
     """The worker runs from an environment without MIGRATION_DATABASE_URL, PG_ADMIN_URL or DB_APP_ROLE."""
     seed_reference(bank_db, small_data)
-    runtime_only = {
-        "DATABASE_URL": bank_db.app_url, "BANK_CODE": "HARBOR",
-        "OUTSIDE_RECORDS_URL": "http://127.0.0.1:9", "OUTSIDE_RECORDS_API_KEY": "opk_" + "k" * 43,
-    }  # fmt: skip
+    runtime_only = {"DATABASE_URL": bank_db.app_url, "BANK_CODE": "HARBOR", **unreachable_services(doubles)}
     finished = run_program("onepledge-bank", ["worker", "--once", "--json"], runtime_only)
     assert json.loads(finished.stdout) == {"ok": True, "stages": []}
 

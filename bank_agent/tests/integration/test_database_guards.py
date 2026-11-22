@@ -17,9 +17,10 @@ from psycopg import sql
 
 from bank_testkit.data import EXAMPLE_TAPES, seed_reference
 from bank_testkit.database import BankDatabase, drop, new_bank_database, provision_and_migrate
+from bank_testkit.doubles import InProcessDoubles
 from bank_testkit.outside import InProcessOutsideRecords
-from bank_testkit.pipeline import BankAgentHarness
-from onepledge_bank_agent.domain.enums import TapeKind
+from bank_testkit.pipeline import BankAgentHarness, Services
+from onepledge_bank_agent.domain.enums import TapeKind, TapeStatus
 
 pytestmark = pytest.mark.integration
 
@@ -38,11 +39,13 @@ def filled(
     database = new_bank_database()
     provision_and_migrate(database)
     seed_reference(database, example_data)
-    with BankAgentHarness(database, example_outside) as bank:
-        bank.ingest(
+    doubles = InProcessDoubles()
+    with BankAgentHarness(database, Services(example_outside, doubles)) as bank:
+        submission = bank.ingest(
             EXAMPLE_TAPES / "example_tape_20.csv", "HARBOR-SUMMIT", TapeKind.PLEDGE, date(2026, 10, 15)
         )
-        bank.run_worker()
+        bank.run_until(submission, TapeStatus.CHECKED)
+    doubles.close()
     with database.connect("owner") as connection:
         loan_id = connection.execute(
             "SELECT loan_id FROM loans WHERE state = 'PENDING' ORDER BY loan_id LIMIT 1"
