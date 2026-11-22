@@ -17,6 +17,8 @@ from types import MappingProxyType
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, SecretStr
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 from onepledge_outside_records.domain.errors import OperatorError
 from onepledge_outside_records.domain.text_values import IntegerIssue, parse_integer_text
@@ -24,6 +26,7 @@ from onepledge_outside_records.domain.text_values import IntegerIssue, parse_int
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 _ROLE_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 MAX_PORT = 65535
+_DATABASE_SCHEMES = frozenset({"postgresql", "postgresql+psycopg"})
 DEFAULT_BIND_HOST = "127.0.0.1"
 # Settings are trimmed of ASCII whitespace only; any other space is part of the value and fails it.
 ASCII_WHITESPACE = " \t\r\n"
@@ -62,6 +65,29 @@ def _secret(environ: Mapping[str, str], name: str) -> SecretStr | None:
     return SecretStr(text) if text is not None else None
 
 
+def _database_url(environ: Mapping[str, str], name: str, needs_database: bool) -> SecretStr | None:
+    """A `postgresql://` URL checked for its form here, so a malformed one never reaches an engine.
+
+    The value is a secret: the sentence names the variable and the expected form only.
+    """
+    secret = _secret(environ, name)
+    if secret is None:
+        return None
+    try:
+        url = make_url(secret.get_secret_value())
+    except (ArgumentError, ValueError):
+        url = None
+    port_ok = url is not None and (url.port is None or 1 <= url.port <= MAX_PORT)
+    if (
+        url is None
+        or url.drivername not in _DATABASE_SCHEMES
+        or not port_ok
+        or (needs_database and not url.database)
+    ):
+        raise _invalid(f"{name} must be a postgresql://USER:PASSWORD@HOST:PORT/DATABASE URL.")
+    return secret
+
+
 def _bind_host(environ: Mapping[str, str]) -> str:
     text = _value(environ, "BIND_HOST") or DEFAULT_BIND_HOST
     try:
@@ -97,7 +123,7 @@ class ServeSettings(BaseModel):
         return cls(
             bind_host=_bind_host(environ),
             port=port,
-            database_url=_secret(environ, "DATABASE_URL"),
+            database_url=_database_url(environ, "DATABASE_URL", needs_database=True),
             log_level=_log_level(environ),
         )
 
@@ -134,9 +160,9 @@ class AdminSettings(BaseModel):
         if role is not None and not _ROLE_NAME.fullmatch(role):
             raise _invalid("DB_APP_ROLE is not a valid role name.")
         return cls(
-            database_url=_secret(scoped, "DATABASE_URL"),
-            migration_database_url=_secret(scoped, "MIGRATION_DATABASE_URL"),
-            admin_url=_secret(scoped, "PG_ADMIN_URL"),
+            database_url=_database_url(scoped, "DATABASE_URL", needs_database=True),
+            migration_database_url=_database_url(scoped, "MIGRATION_DATABASE_URL", needs_database=True),
+            admin_url=_database_url(scoped, "PG_ADMIN_URL", needs_database=False),
             db_app_role=role,
             log_level=_log_level(environ),
         )

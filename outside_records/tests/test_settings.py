@@ -186,3 +186,38 @@ def test_only_postgresql_urls_are_accepted(url: str, fragment: str) -> None:
 def test_a_postgresql_url_uses_the_psycopg_driver() -> None:
     assert sqlalchemy_url(OWNER).drivername == "postgresql+psycopg"
     assert sqlalchemy_url(OWNER.replace("postgresql://", "postgresql+psycopg://")).database == "opx_outside"
+
+
+# SPEC_DECISIONS 43.3: every setting is validated in the loader, so a malformed database URL is
+# one sentence naming its variable, never the value and never the last resort sentence.
+MALFORMED_URLS = [
+    "notaurl",
+    "mysql://user:secret-pw@localhost/db",
+    "postgresql://user:secret-pw@localhost:99999/db",
+    "postgresql://user:secret-pw@localhost:0/db",
+    "postgresql://user:secret-pw@localhost:abc/db",
+]
+
+
+@pytest.mark.parametrize("url", [*MALFORMED_URLS, "postgresql://user:secret-pw@localhost:5432/"])
+def test_a_malformed_serving_database_url_names_the_variable(url: str) -> None:
+    with pytest.raises(OperatorError) as raised:
+        ServeSettings.from_env({"DATABASE_URL": url})
+    assert raised.value.sentence == (
+        "Configuration error: DATABASE_URL must be a postgresql://USER:PASSWORD@HOST:PORT/DATABASE URL."
+    )
+    assert "secret-pw" not in raised.value.sentence
+
+
+@pytest.mark.parametrize("variable", ["DATABASE_URL", "MIGRATION_DATABASE_URL", "PG_ADMIN_URL"])
+@pytest.mark.parametrize("url", MALFORMED_URLS)
+def test_a_malformed_administrative_database_url_names_the_variable(variable: str, url: str) -> None:
+    with pytest.raises(OperatorError) as raised:
+        AdminSettings.from_env({variable: url}, "provision")
+    assert raised.value.sentence.startswith(f"Configuration error: {variable} must be a postgresql://")
+    assert "secret-pw" not in raised.value.sentence
+
+
+def test_an_admin_url_may_omit_the_database_name() -> None:
+    settings = AdminSettings.from_env({"PG_ADMIN_URL": "postgresql://postgres@localhost:55432"}, "provision")
+    assert settings.require_admin_url() == "postgresql://postgres@localhost:55432"
