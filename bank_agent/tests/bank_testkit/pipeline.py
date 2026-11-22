@@ -20,11 +20,15 @@ from onepledge_bank_agent.application.faults import FaultInjector, NoFaults
 from onepledge_bank_agent.application.ingest_tape import IngestCommand
 from onepledge_bank_agent.application.ports import Clock
 from onepledge_bank_agent.application.requester import Requester
+from onepledge_bank_agent.application.resubmit_loan import ResubmitCommand
 from onepledge_bank_agent.application.retry_tape import RetryCommand
+from onepledge_bank_agent.application.review_alert import ReviewAction, ReviewCommand
 from onepledge_bank_agent.application.run_pipeline_worker import WorkerReport
+from onepledge_bank_agent.domain.alert import Alert
 from onepledge_bank_agent.domain.audit import Actor
-from onepledge_bank_agent.domain.enums import Role, TapeKind, TapeStatus
+from onepledge_bank_agent.domain.enums import BankPosition, Role, TapeKind, TapeStatus
 from onepledge_bank_agent.domain.integrity import IntegrityReport
+from onepledge_bank_agent.domain.loan import Loan
 from onepledge_bank_agent.domain.tape import TapeSubmission
 from onepledge_bank_agent.infrastructure.clock import SystemClock
 from onepledge_bank_agent.interface.composition import Collaborators, RuntimeComposition
@@ -142,6 +146,18 @@ class BankAgentHarness:
         """`POST /v1/releases` as the credit officer."""
         command = ReleaseCommand(facility_id, as_of, tuple(loan_ids), self.requester())
         return self.composition.create_release().execute(command)
+
+    def review(
+        self, alert_id: uuid.UUID, action: ReviewAction, position: BankPosition | None = None
+    ) -> Alert:
+        """`POST /v1/alerts/{id}/review`: START_REVIEW as the analyst, SUBMIT_POSITION as the officer."""
+        role = Role.ANALYST if action is ReviewAction.START_REVIEW else Role.CREDIT_OFFICER
+        command = ReviewCommand(alert_id, action, self.requester(role), position, "reviewed with the lender")
+        return self.composition.review_alert().execute(command)
+
+    def resubmit(self, loan_id: uuid.UUID) -> Loan:
+        """`POST /v1/loans/{id}/resubmit` as the credit officer."""
+        return self.composition.resubmit_loan().execute(ResubmitCommand(loan_id, self.requester()))
 
     def verify(self) -> IntegrityReport:
         """`onepledge-bank integrity verify`."""
