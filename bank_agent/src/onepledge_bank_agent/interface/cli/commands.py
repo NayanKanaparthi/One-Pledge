@@ -17,7 +17,7 @@ from types import FrameType, MappingProxyType
 
 from onepledge_bank_agent.application.advance_submission import StageRun
 from onepledge_bank_agent.application.run_pipeline_worker import WorkerReport
-from onepledge_bank_agent.application.seed_reference import UpsertCounts
+from onepledge_bank_agent.application.seed_reference import SeedResult, UpsertCounts
 from onepledge_bank_agent.domain.canonical_json import JsonValue
 from onepledge_bank_agent.infrastructure.db.errors import database_errors_as_operator_errors
 from onepledge_bank_agent.infrastructure.logging import configure_logging
@@ -143,6 +143,18 @@ def _counts_row(table: str, counts: UpsertCounts) -> tuple[str, str, str, str]:
     return table, f"{counts.inserted:,}", f"{counts.updated:,}", f"{counts.unchanged:,}"
 
 
+def _seed_summary(result: SeedResult) -> str:
+    """The closing line: the counts the seed audits, never a fixed sentence (SPEC_DECISIONS 78)."""
+    lenders, facilities = result.lenders, result.facilities
+    inserted = lenders.inserted + facilities.inserted
+    updated = lenders.updated + facilities.updated
+    unchanged = lenders.unchanged + facilities.unchanged
+    source = f"reference.json {short_hash(result.source_sha256)}"
+    if inserted == updated == 0:
+        return f"Nothing changed: {unchanged:,} rows already up to date ({source})."
+    return f"{inserted:,} rows inserted, {updated:,} updated, {unchanged:,} unchanged ({source})."
+
+
 def _seed_reference(
     arguments: argparse.Namespace, settings: AdminSettings, composition: AdminComposition, output: Output
 ) -> None:
@@ -164,7 +176,7 @@ def _seed_reference(
         ("table", "inserted", "updated", "unchanged"),
         (_counts_row("lenders", result.lenders), _counts_row("facilities", result.facilities)),
         ("table seeded", "tables seeded"),
-        f"Lenders and facilities are up to date (reference.json {short_hash(result.source_sha256)}).",
+        _seed_summary(result),
     )
 
 
@@ -183,9 +195,21 @@ def _run_document(run: StageRun) -> dict[str, JsonValue]:
     }
 
 
-def _run_row(run: StageRun) -> tuple[str, ...]:
+def _failure_text(document: Mapping[str, JsonValue]) -> str:
+    """The six failure facts of a stage run as `name value` pairs, the names of the JSON form."""
+    return ", ".join(f"{key} {document[key]}" for key in FAILURE_KEYS if document[key] is not None)
+
+
+def _run_row(run: StageRun, output: Output) -> tuple[str, ...]:
     document = _run_document(run)
-    return tuple("" if document[key] is None else str(document[key]) for key in document)
+    submission = output.identifier(str(document["submission_id"]))
+    return (
+        submission,
+        str(document["from"]),
+        str(document["outcome"]),
+        str(document["status"]),
+        (_failure_text(document)),
+    )
 
 
 TASK_FAILED = (
@@ -194,7 +218,7 @@ TASK_FAILED = (
 )
 
 
-def _report(report: WorkerReport, output: Output) -> int:
+def worker_report(report: WorkerReport, output: Output) -> int:
     """The stage runs; exit 1 after them when a periodic task failed (SPEC_DECISIONS 85, rule 5)."""
     failed = bool(report.task_failures)
     stages: list[JsonValue] = [_run_document(run) for run in report.runs]
@@ -206,8 +230,8 @@ def _report(report: WorkerReport, output: Output) -> int:
     else:
         output.table(
             "Pipeline worker",
-            ("submission", "from", "outcome", "status", *FAILURE_KEYS),
-            [_run_row(run) for run in report.runs],
+            ("submission", "from", "outcome", "status", "failure"),
+            [_run_row(run, output) for run in report.runs],
             ("stage run", "stages run"),
             "Nothing else is runnable now.",
         )
@@ -231,7 +255,7 @@ def _worker(arguments: argparse.Namespace, output: Output, collaborators: Collab
         signal.signal(signal.SIGTERM, request_stop)
         signal.signal(signal.SIGINT, request_stop)
         if arguments.once:
-            return _report(worker.run_once(), output)
+            return worker_report(worker.run_once(), output)
         worker.run_until_stopped()
         return 0
 

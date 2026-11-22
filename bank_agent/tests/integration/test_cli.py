@@ -33,7 +33,7 @@ from bank_testkit.database import (
 from bank_testkit.doubles import InProcessDoubles
 from bank_testkit.outside import InProcessOutsideRecords, ScriptedOutsideRecords
 from bank_testkit.pipeline import BankAgentHarness, Services
-from bank_testkit.programs import run_program
+from bank_testkit.programs import run_program, split_stderr, unwrap
 from onepledge_bank_agent.domain.enums import TapeKind
 from onepledge_bank_agent.infrastructure.db.migrations import head_revision
 from onepledge_bank_agent.infrastructure.db.provisioning import DatabaseProvisioner
@@ -80,6 +80,10 @@ class Run:
         """Stdout parsed as JSON."""
         return json.loads(self.out)
 
+    def outcome(self) -> tuple[int, str, str]:
+        """Exit code, stdout and the sentences on stderr with every wrapped line joined back."""
+        return self.code, self.out, unwrap(self.err)
+
 
 type Cli = Callable[..., Run]
 
@@ -106,7 +110,12 @@ def cli_for(monkeypatch: pytest.MonkeyPatch, environment: dict[str, str]) -> Cli
     def invoke(*argv: str, collaborators: Collaborators | None = None) -> Run:
         out, err = io.StringIO(), io.StringIO()
         code = main(list(argv), Output(out, err), collaborators)
-        return Run(code, out.getvalue(), err.getvalue())
+        run = Run(code, out.getvalue(), err.getvalue())
+        if not {"--wide", "--debug"} & set(argv):  # SPEC_DECISIONS 78: every human readable line of every run
+            split_stderr(run.err)
+            if "--json" not in argv:
+                unwrap(run.out)
+        return run
 
     return invoke
 
@@ -123,7 +132,7 @@ def test_provision_migrate_and_status_bring_up_a_new_bank_database(
 ) -> None:
     cli = cli_for(monkeypatch, fresh.environment())
     first = cli("db", "provision")
-    assert first == Run(
+    assert (first.code, unwrap(first.out), first.err) == (
         0,
         f"Provisioned database {fresh.name} with roles {fresh.target.owner_role} and {fresh.app_role}.\n",
         "",
@@ -180,7 +189,7 @@ def test_db_migrate_logs_each_applied_revision_and_no_library_line(bank_db: Bank
     expected = sorted(path.stem for path in versions.glob("0*.py") if path.stem > "0002_guards")
     finished = run_program("onepledge-bank", ["db", "migrate", "--json"], bank_db.environment())
     assert finished.returncode == 0, finished.stderr
-    records, sentences = log_lines_and_sentences(finished.stderr)
+    records, sentences = split_stderr(finished.stderr)
     assert sentences == []
     assert [record["event"] for record in records] == ["schema_migration_applied"] * len(expected)
     assert [record["revision"] for record in records] == expected
@@ -210,45 +219,58 @@ def test_seed_reference_loads_the_bank_reference_data_audits_it_and_is_idempoten
     bank_db: BankDatabase, example_data: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cli = cli_for(monkeypatch, bank_db.environment())
-    seeded = cli("seed-reference", "--data-dir", str(example_data), "--json")
+    first = cli("seed-reference", "--data-dir", str(example_data))
     stored = pairs(bank_db, "SELECT 'lenders', count(*)::text FROM lenders UNION ALL "
                    "SELECT 'facilities', count(*)::text FROM facilities")  # fmt: skip
     digest = hashlib.sha256((example_data / "reference.json").read_bytes()).hexdigest()
     lenders, facilities = int(stored["lenders"]), int(stored["facilities"])
-    assert seeded.code == 0 and facilities > 0
-    assert seeded.json() == {
-        "ok": True, "bank_code": "HARBOR", "source_sha256": digest,
-        "lenders": {"inserted": lenders, "updated": 0, "unchanged": 0},
-        "facilities": {"inserted": facilities, "updated": 0, "unchanged": 0},
-    }  # fmt: skip
-    text = cli("seed-reference", "--data-dir", str(example_data)).out.splitlines()
+    assert first.code == 0 and facilities > 0
+    text = first.out.splitlines()
     assert text[0] == "Reference data of HARBOR"
     assert text[1].split() == ["table", "inserted", "updated", "unchanged"]
-    assert text[2].split() == ["lenders", "0", "0", str(lenders)]
+    assert text[2].split() == ["lenders", str(lenders), "0", "0"]
     assert text[-2:] == [
         "2 tables seeded",
-        f"Lenders and facilities are up to date (reference.json {digest[:12]}...).",
-    ]
-    entries = audit_actions(bank_db)
-    assert [(a, o, t) for a, o, t, _ in entries] == [
-        ("REFERENCE_DATA_SEEDED", "REFERENCE_DATA", "SYSTEM")
-    ] * 2
-    assert entries[1][3] == {
-        "via": "cli", "source_sha256": digest,
+        f"{lenders + facilities:,} rows inserted, 0 updated, 0 unchanged (reference.json {digest[:12]}...).",
+    ], "the counts it audits (SPEC_DECISIONS 78), not a fixed sentence"
+    seeded = cli("seed-reference", "--data-dir", str(example_data), "--json")
+    assert seeded.json() == {
+        "ok": True, "bank_code": "HARBOR", "source_sha256": digest,
         "lenders": {"inserted": 0, "updated": 0, "unchanged": lenders},
         "facilities": {"inserted": 0, "updated": 0, "unchanged": facilities},
     }  # fmt: skip
+    again = cli("seed-reference", "--data-dir", str(example_data)).out.splitlines()
+    assert again[-1] == (
+        f"Nothing changed: {lenders + facilities:,} rows already up to date "
+        f"(reference.json {digest[:12]}...)."
+    )
+    entries = audit_actions(bank_db)
+    assert [(a, o, t) for a, o, t, _ in entries] == [
+        ("REFERENCE_DATA_SEEDED", "REFERENCE_DATA", "SYSTEM")
+    ] * 3
+    assert [detail for _, _, _, detail in entries] == [
+        {
+            "via": "cli", "source_sha256": digest,
+            "lenders": {"inserted": lenders, "updated": 0, "unchanged": 0},
+            "facilities": {"inserted": facilities, "updated": 0, "unchanged": 0},
+        },
+        *[{
+            "via": "cli", "source_sha256": digest,
+            "lenders": {"inserted": 0, "updated": 0, "unchanged": lenders},
+            "facilities": {"inserted": 0, "updated": 0, "unchanged": facilities},
+        }] * 2,
+    ], "the printed counts are the audited ones"  # fmt: skip
     assert first_broken_seq(bank_db) is None
     missing = cli("seed-reference", "--data-dir", str(example_data / "nowhere"), "--json")
     assert (
         missing.code == 1
-        and missing.err == f"cannot read {example_data / 'nowhere'}/reference.json: no such file.\n"
+        and unwrap(missing.err) == f"{example_data / 'nowhere'}/reference.json: no such file.\n"
     )
     assert missing.json() == {
         "ok": False,
-        "error": {"code": "REFERENCE_DATA_INVALID", "message": missing.err.strip()},
+        "error": {"code": "REFERENCE_DATA_INVALID", "message": unwrap(missing.err).strip()},
     }
-    assert len(audit_actions(bank_db)) == 2, "a refused file is not audited"
+    assert len(audit_actions(bank_db)) == 3, "a refused file is not audited"
 
 
 def test_worker_once_runs_every_runnable_stage_and_reports_it(
@@ -288,22 +310,9 @@ def test_the_worker_refuses_a_schema_that_is_not_at_the_latest_revision(
     with bank_db.connect("owner") as connection:
         connection.execute("UPDATE alembic_version SET version_num = '0003_grants'")
     sentence = f"The database {bank_db.name} is not at the latest revision; run db migrate."
-    assert cli("worker", "--once") == Run(1, "", sentence + "\n")
+    assert cli("worker", "--once").outcome() == (1, "", sentence + "\n")
     refused = cli("worker", "--once", "--json")
     assert refused.json() == {"ok": False, "error": {"code": "SCHEMA_NOT_CURRENT", "message": sentence}}
-
-
-def log_lines_and_sentences(stderr: str) -> tuple[list[dict[str, object]], list[str]]:
-    """stderr split into JSON log records (each must parse as an object) and plain sentences."""
-    records, sentences = [], []
-    for line in stderr.splitlines():
-        if line.startswith("{"):
-            record = json.loads(line)
-            assert isinstance(record, dict)
-            records.append(record)
-        else:
-            sentences.append(line)
-    return records, sentences
 
 
 def test_worker_once_json_in_a_child_process_writes_one_document_and_only_log_lines_on_stderr(
@@ -322,12 +331,12 @@ def test_worker_once_json_in_a_child_process_writes_one_document_and_only_log_li
         "ADVANCED",
         "RETRY_SCHEDULED",
     ]
-    records, sentences = log_lines_and_sentences(finished.stderr)
+    records, sentences = split_stderr(finished.stderr)
     assert sentences == [] and records
     assert {record["service"] for record in records} == {"bank_agent"}
     assert {"tape_stage_advanced", "tape_stage_attempt_failed"} <= {str(r["event"]) for r in records}
     quiet = run_program("onepledge-bank", ["worker", "--once", "--json", "--quiet"], environment)
-    quiet_records, _ = log_lines_and_sentences(quiet.stderr)
+    quiet_records, _ = split_stderr(quiet.stderr)
     assert json.loads(quiet.stdout)["ok"] is True
     assert {record["level"] for record in quiet_records} <= {"warning", "error", "critical"}
 
@@ -360,7 +369,7 @@ def test_a_missing_variable_is_one_sentence_on_stderr_and_exit_1(
         finished = run_program(
             "onepledge-bank", command, {k: v for k, v in environment.items() if k != missing}
         )
-        _, sentences = log_lines_and_sentences(finished.stderr)
+        _, sentences = split_stderr(finished.stderr)
         assert (finished.returncode, finished.stdout, sentences) == (
             1,
             "",
@@ -410,7 +419,7 @@ def test_the_worker_refuses_to_start_as_the_owner_role(
         "ok": False,
         "error": {"code": "ROLE_NOT_LEAST_PRIVILEGE", "message": role_sentence("ROLE_OWNS_OBJECT")},
     }
-    assert log_lines_and_sentences(finished.stderr)[1] == [role_sentence("ROLE_OWNS_OBJECT")]
+    assert split_stderr(finished.stderr)[1] == [role_sentence("ROLE_OWNS_OBJECT")]
     assert pairs(bank_db, "SELECT 'audit', count(*)::text FROM audit_log") == {"audit": "0"}
 
 
@@ -439,7 +448,7 @@ def test_every_guarded_command_refuses_an_app_role_with_a_forbidden_privilege(
         )
     cli = cli_for(monkeypatch, {**bank_db.environment(), **unreachable_services(doubles)})
     for command in (("worker", "--once"), ("registry", "sync"), ("integrity", "verify")):
-        assert cli(*command) == Run(1, "", role_sentence(code) + "\n"), command
+        assert cli(*command).outcome() == (1, "", role_sentence(code) + "\n"), command
     report = cli("integrity", "report", "--json")
     controls = {c["name"]: c["ok"] for c in json.loads(report.out)["database_controls"]["controls"]}
     assert controls["APP_ROLE_GRANTS_EXACT"] is False
@@ -457,13 +466,13 @@ def test_the_worker_refuses_to_start_as_a_superuser_whatever_the_server_checks_o
         ).fetchone() == (True,)
     environment = {**bank_db.environment(), "DATABASE_URL": superuser_url, **unreachable_services(doubles)}
     cli = cli_for(monkeypatch, environment)
-    assert cli("worker", "--once") == Run(1, "", role_sentence("ROLE_IS_SUPERUSER") + "\n")
+    assert cli("worker", "--once").outcome() == (1, "", role_sentence("ROLE_IS_SUPERUSER") + "\n")
     assert pairs(bank_db, "SELECT 'audit', count(*)::text FROM audit_log") == {"audit": "0"}
 
 
 def sentence_of(finished: subprocess.CompletedProcess[str]) -> tuple[int, str, str]:
     """Exit code, the `--json` error code and the one sentence on stderr."""
-    _, sentences = log_lines_and_sentences(finished.stderr)
+    _, sentences = split_stderr(finished.stderr)
     document = json.loads(finished.stdout)
     assert sentences == [document["error"]["message"]]
     return finished.returncode, document["error"]["code"], sentences[0]
@@ -495,16 +504,21 @@ def test_an_unreachable_database_and_a_refused_connection_are_different_sentence
 
 
 def test_a_database_without_tables_and_a_role_without_a_privilege_are_different_sentences(
-    fresh: BankDatabase, small_data: Path
+    fresh: BankDatabase, small_data: Path, doubles: InProcessDoubles
 ) -> None:
+    """SPEC_DECISIONS 78: the same two causes, the same two sentences, in every command."""
     DatabaseProvisioner(fresh.admin_url).provision(fresh.target)
+    missing = (1, "SCHEMA_NOT_CURRENT", "The bank database tables are missing; run db migrate first.")
     seeding = ["seed-reference", "--data-dir", str(small_data), "--json"]
-    empty = run_program("onepledge-bank", seeding, fresh.environment())
-    assert sentence_of(empty) == (
-        1,
-        "SCHEMA_NOT_CURRENT",
-        "The bank database tables are missing; run db migrate first.",
-    )
+    assert sentence_of(run_program("onepledge-bank", seeding, fresh.environment())) == missing
+    runtime = {**fresh.environment(), **unreachable_services(doubles)}
+    for command in (
+        ["worker", "--once"],
+        ["registry", "sync"],
+        ["integrity", "verify"],
+        ["integrity", "report"],
+    ):
+        assert sentence_of(run_program("onepledge-bank", [*command, "--json"], runtime)) == missing, command
     migration_runner(fresh).upgrade()
     with fresh.connect("admin") as connection:
         connection.execute(
@@ -533,9 +547,13 @@ def test_provision_with_an_admin_url_that_is_not_a_superuser_says_so(fresh: Bank
 
 
 def test_an_unexpected_error_is_one_sentence_and_the_traceback_needs_debug(
-    bank_db: BankDatabase, doubles: InProcessDoubles, monkeypatch: pytest.MonkeyPatch
+    bank_db: BankDatabase,
+    doubles: InProcessDoubles,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A defect reaches the last resort handler through an injected collaborator, with no patching."""
+    """A defect reaches the last resort handler through an injected collaborator, with no patching;
+    it writes one error record with the type and frames before its sentence (SPEC_DECISIONS 78)."""
 
     def exploding_factory(base_url: str, timeouts: HttpTimeouts) -> httpx.Client:
         raise RuntimeError("1HGCM82633A004352 must never be printed")
@@ -544,8 +562,14 @@ def test_an_unexpected_error_is_one_sentence_and_the_traceback_needs_debug(
     cli = cli_for(monkeypatch, {**bank_db.environment(), **unreachable_services(doubles)})
     plain = cli("registry", "sync", "--json", collaborators=broken)
     sentence = "Unexpected error. Run with --debug for details."
-    assert plain.code == 1 and plain.err == sentence + "\n" and "1HGCM82633A004352" not in plain.out
+    assert plain.outcome()[0::2] == (1, sentence + "\n") and "1HGCM82633A004352" not in plain.out
     assert plain.json() == {"ok": False, "error": {"code": "INTERNAL_ERROR", "message": sentence}}
+    records, _ = split_stderr(capsys.readouterr().err)
+    errors = [r for r in records if r["level"] == "error"]
+    assert [(r["event"], r["exception_type"], r["error_code"]) for r in errors] == [
+        ("unhandled_exception", "RuntimeError", "INTERNAL_ERROR")
+    ]
+    assert "stack" in errors[0] and "1HGCM82633A004352" not in json.dumps(records)
     debug = cli("registry", "sync", "--debug", collaborators=broken)
     assert debug.code == 1 and debug.err.endswith("Run with --debug for details.\n")
     trace = debug.err.splitlines()
@@ -556,11 +580,14 @@ def test_an_unexpected_error_is_one_sentence_and_the_traceback_needs_debug(
     assert "raise RuntimeError" not in debug.err, "no source line (SPEC_DECISIONS 53.12)"
 
 
-def test_a_usage_error_exits_2(bank_db: BankDatabase) -> None:
-    usage = (["db"], ["seed-reference"], ["no-such-command"], ["worker", "--twice"], ["worker", "--json"])
+def test_a_usage_error_exits_2_and_with_json_prints_one_document(bank_db: BankDatabase) -> None:
+    usage = (["db"], ["seed-reference"], ["no-such-command"], ["worker", "--twice"])
     for arguments in usage:
         finished = run_program("onepledge-bank", arguments, bank_db.environment())
         assert finished.returncode == 2, arguments
         assert "Traceback" not in finished.stderr and finished.stdout == ""
+        as_json = run_program("onepledge-bank", [*arguments, "--json"], bank_db.environment())
+        assert as_json.returncode == 2 and "usage:" in as_json.stderr, arguments
+        assert json.loads(as_json.stdout)["error"]["code"] == "USAGE", arguments
     helped = run_program("onepledge-bank", ["--help"], bank_db.environment())
     assert helped.returncode == 0 and "seed-reference" in helped.stdout and "worker" in helped.stdout

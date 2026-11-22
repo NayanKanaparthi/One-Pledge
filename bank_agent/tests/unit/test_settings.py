@@ -179,8 +179,7 @@ def test_bind_host_accepts_an_ip_literal_or_a_wildcard(value: str, bound: str) -
 
 
 BIND_SENTENCE = (
-    "Configuration error: BIND_HOST must be an IP address of this machine; "
-    "set BIND_HOST to 127.0.0.1 or 0.0.0.0."
+    "Configuration error: BIND_HOST must be an IPv4 or IPv6 address; set it to 127.0.0.1 or 0.0.0.0."
 )
 FULL_WIDTH_LOOPBACK = "".join(chr(0xFF10 + int(d)) for d in "127") + ".0.0.1"
 UNPRINTABLE_KEYS = [
@@ -205,7 +204,70 @@ def test_bind_host_refuses_a_name_or_a_malformed_address_in_one_sentence(value: 
 def test_a_malformed_port_names_the_variable(value: str) -> None:
     with pytest.raises(OperatorError) as raised:
         ServeSettings.from_env({**FULL, "PORT": value})
-    assert raised.value.sentence.startswith("Configuration error: PORT must be")
+    assert (
+        raised.value.sentence.startswith("Configuration error: PORT ") and value not in raised.value.sentence
+    )
+
+
+DATABASE_URL_SENTENCE = (
+    "Configuration error: DATABASE_URL must be a postgresql://USER:PASSWORD@HOST:PORT/DATABASE URL."
+)
+SHARED = {
+    ("DATABASE_URL", "nonsense"): DATABASE_URL_SENTENCE,
+    ("DATABASE_URL", "mysql://app:secret@localhost:5432/bank"): DATABASE_URL_SENTENCE,
+    ("DATABASE_URL", "postgresql://app:secret@localhost:99999/bank"): DATABASE_URL_SENTENCE,
+    ("DATABASE_URL", "postgresql://app:secret@localhost:5432"): DATABASE_URL_SENTENCE,
+    ("LOG_LEVEL", "IN\u2028FO"): (
+        "Configuration error: LOG_LEVEL contains whitespace other than a space, or a control character."
+    ),
+    ("PORT", "+80"): "Configuration error: PORT must be a whole number written with the digits 0 to 9.",
+    ("PORT", "70000"): "Configuration error: PORT is out of range (1 to 65,535).",
+    ("LOG_LEVEL", "LOUD"): "Configuration error: LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR or CRITICAL.",
+    ("BIND_HOST", "localhost"): BIND_SENTENCE,
+}
+"""The sentences every service words the same way (SPEC_DECISIONS 78), as outside records and the doubles."""
+
+
+@pytest.mark.parametrize(("setting", "sentence"), list(SHARED.items()), ids=[" ".join(k) for k in SHARED])
+def test_a_shared_setting_has_the_sentence_of_every_service(setting: tuple[str, str], sentence: str) -> None:
+    name, value = setting
+    with pytest.raises(OperatorError) as raised:
+        ServeSettings.from_env({**FULL, name: value})
+    assert raised.value.sentence == sentence and value not in sentence.removeprefix("Configuration error: ")
+    assert not sentence.endswith(":")
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "sentence"),
+    [
+        ("CHECK_CHUNK_LOANS", "1001", "Configuration error: CHECK_CHUNK_LOANS is out of range (1 to 1,000)."),
+        ("PIPELINE_MAX_ATTEMPTS", "1" + "0" * 18,
+         "Configuration error: PIPELINE_MAX_ATTEMPTS is out of range (1 to 100)."),
+        ("PIPELINE_POLL_SECONDS", "4000", "Configuration error: PIPELINE_POLL_SECONDS is out of range "
+         "(0.001 to 3,600 seconds)."),
+        ("PIPELINE_POLL_SECONDS", "0", "Configuration error: PIPELINE_POLL_SECONDS is out of range "
+         "(0.001 to 3,600 seconds)."),
+        ("OUTBOX_POLL_SECONDS", "9" * 40, "Configuration error: OUTBOX_POLL_SECONDS is out of range "
+         "(0.001 to 3,600 seconds)."),
+        ("OUTBOX_POLL_SECONDS", "0003600.000", None),
+        ("HTTP_READ_TIMEOUT_SECONDS", "1.2345", "Configuration error: HTTP_READ_TIMEOUT_SECONDS must be a "
+         "number of seconds written with the digits 0 to 9, with at most three decimals."),
+        ("HTTP_READ_TIMEOUT_SECONDS", "\u0661", "Configuration error: HTTP_READ_TIMEOUT_SECONDS must be a "
+         "number of seconds written with the digits 0 to 9, with at most three decimals."),
+        ("PIPELINE_MAX_ATTEMPTS", "1.5", "Configuration error: PIPELINE_MAX_ATTEMPTS must be a whole number "
+         "written with the digits 0 to 9."),
+    ],
+)  # fmt: skip
+def test_a_well_formed_number_out_of_range_says_out_of_range(
+    name: str, value: str, sentence: str | None
+) -> None:
+    """Review 2, quality finding 12; SPEC_DECISIONS 78: not "must be a whole number"."""
+    if sentence is None:
+        assert RuntimeSettings.from_env({**FULL, name: value}).tunables.outbox_poll_seconds == 3600
+        return
+    with pytest.raises(OperatorError) as raised:
+        RuntimeSettings.from_env({**FULL, name: value})
+    assert raised.value.sentence == sentence
 
 
 @pytest.mark.parametrize("value", UNPRINTABLE_KEYS)
@@ -213,5 +275,28 @@ def test_a_value_with_a_control_character_or_other_whitespace_names_its_variable
     """SPEC_DECISIONS 66: only ASCII whitespace at the ends is trimmed; secrets included."""
     with pytest.raises(OperatorError) as raised:
         RuntimeSettings.from_env({**FULL, "OUTSIDE_RECORDS_API_KEY": value})
-    assert raised.value.sentence.startswith("Configuration error: OUTSIDE_RECORDS_API_KEY must be")
+    assert raised.value.sentence == (
+        "Configuration error: OUTSIDE_RECORDS_API_KEY contains whitespace other than a space, "
+        "or a control character."
+    ), "the sentence outside records and the doubles use (SPEC_DECISIONS 78)"
     assert value not in raised.value.sentence
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("MIGRATION_DATABASE_URL", "postgres:/nowhere"),
+        ("MIGRATION_DATABASE_URL", "postgresql://owner:secret@localhost:5432"),
+        ("PG_ADMIN_URL", "http://postgres@localhost:5432/postgres"),
+        ("PG_ADMIN_URL", "postgresql://postgres@localhost:0"),
+    ],
+)
+def test_an_administrative_database_url_is_checked_in_the_loader(name: str, value: str) -> None:
+    """SPEC_DECISIONS 43.3 and 78: the URL's form is checked where it is read, with the sentence of outside
+    records; the superuser URL needs no database name, the owner URL does."""
+    with pytest.raises(OperatorError) as raised:
+        AdminSettings.from_env({**FULL, name: value})
+    assert raised.value.sentence == (
+        f"Configuration error: {name} must be a postgresql://USER:PASSWORD@HOST:PORT/DATABASE URL."
+    )
+    assert AdminSettings.from_env({**FULL, "PG_ADMIN_URL": "postgresql://postgres@localhost:55432"})

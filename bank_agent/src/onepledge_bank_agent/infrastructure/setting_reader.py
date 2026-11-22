@@ -9,8 +9,6 @@ mapping; only `settings.py` reads the process environment.
 
 from __future__ import annotations
 
-import base64
-import binascii
 import ipaddress
 import json
 import re
@@ -21,21 +19,34 @@ from types import MappingProxyType
 from urllib.parse import urlsplit
 
 from pydantic import SecretStr
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 from onepledge_bank_agent.domain.errors import InvalidValueError
-from onepledge_bank_agent.domain.text_rules import ascii_lower, parse_integer, trim
+from onepledge_bank_agent.domain.text_rules import OUT_OF_RANGE, ascii_lower, is_digits, parse_integer, trim
+from onepledge_bank_agent.infrastructure.encodings import canonical_base64
 from onepledge_bank_agent.infrastructure.operator_errors import CONFIGURATION_ERROR, OperatorError
 
 _BOOLEANS = MappingProxyType({"true": True, "false": False})
+MAX_PORT = 65535
 MAX_SECONDS = 3600.0
 _KEY_ID = re.compile(r"^[a-z0-9-]{1,64}$")
-_SECONDS = re.compile(r"^([0-9]{1,6})(?:\.([0-9]{1,3}))?$")
+_SECONDS = re.compile(r"^([0-9]+)(?:\.([0-9]{1,3}))?$")
+SECONDS_RULE = "a number of seconds written with the digits 0 to 9, with at most three decimals"
+MAX_SECONDS_DIGITS = 4
 PUBLIC_KEY_BYTES = 32
 # The published test vector key (contracts/examples/vectors/signatures.json) is never a trust anchor.
 TEST_VECTOR_PUBLIC_KEYS = frozenset({"BlflaowBg3VkeFNDcT9cKZFMgLkwYA7l+SNUMxWPOVQ="})
 
 DEFAULT_BIND_HOST = "127.0.0.1"
-BIND_HOST_RULE = "an IP address of this machine; set BIND_HOST to 127.0.0.1 or 0.0.0.0"
+BIND_HOST_RULE = "an IPv4 or IPv6 address; set it to 127.0.0.1 or 0.0.0.0"
+WHOLE_NUMBER_RULE = "a whole number written with the digits 0 to 9"
+LOG_LEVEL_RULE = "DEBUG, INFO, WARNING, ERROR or CRITICAL"
+DATABASE_URL_RULE = "a postgresql://USER:PASSWORD@HOST:PORT/DATABASE URL"
+UNPLAIN_PROBLEM = "contains whitespace other than a space, or a control character"
+"""The rules every service words the same way, so the same setting has the same sentence everywhere
+(SPEC_DECISIONS 78): a number, PORT, LOG_LEVEL, BIND_HOST, a database URL, a value that is not plain."""
+_DATABASE_SCHEMES = frozenset({"postgresql", "postgresql+psycopg"})
 
 
 def _unprintable(char: str) -> bool:
@@ -48,6 +59,20 @@ def _unprintable(char: str) -> bool:
 def invalid(name: str, rule: str) -> OperatorError:
     """The one sentence of a malformed setting: the variable and the rule, never the value."""
     return OperatorError(f"Configuration error: {name} must be {rule}.", CONFIGURATION_ERROR)
+
+
+def out_of_range(name: str, low: int, high: int) -> OperatorError:
+    """A well formed number outside its bounds says so (SPEC_DECISIONS 78)."""
+    return OperatorError(
+        f"Configuration error: {name} is out of range ({low:,} to {high:,}).", CONFIGURATION_ERROR
+    )
+
+
+def seconds_out_of_range(name: str) -> OperatorError:
+    """A well formed number of seconds outside 0.001 to 3,600 (SPEC_DECISIONS 78)."""
+    return OperatorError(
+        f"Configuration error: {name} is out of range (0.001 to 3,600 seconds).", CONFIGURATION_ERROR
+    )
 
 
 class SettingReader:
@@ -64,7 +89,7 @@ class SettingReader:
         """
         value = trim(self._environ.get(name, ""))
         if any(_unprintable(char) for char in value):
-            raise invalid(name, "free of control characters and of whitespace other than spaces")
+            raise OperatorError(f"Configuration error: {name} {UNPLAIN_PROBLEM}.", CONFIGURATION_ERROR)
         return value or None
 
     def bind_host(self) -> str:
@@ -74,6 +99,21 @@ class SettingReader:
             return str(ipaddress.ip_address(value))
         except ValueError:
             raise invalid("BIND_HOST", BIND_HOST_RULE) from None
+
+    def database_url(self, name: str, needs_database: bool = True) -> SecretStr | None:
+        """A `postgresql://` URL checked for its form here, so a malformed one never reaches an engine
+        (SPEC_DECISIONS 43.3). The value is a secret: the sentence names the variable and the form only."""
+        secret = self.secret(name)
+        if secret is None:
+            return None
+        try:
+            url = make_url(secret.get_secret_value())
+            port_ok = url.port is None or 1 <= url.port <= MAX_PORT
+        except (ArgumentError, ValueError):
+            raise invalid(name, DATABASE_URL_RULE) from None
+        if url.drivername not in _DATABASE_SCHEMES or not port_ok or (needs_database and not url.database):
+            raise invalid(name, DATABASE_URL_RULE)
+        return secret
 
     def secret(self, name: str) -> SecretStr | None:
         """A value masked in every repr."""
@@ -94,8 +134,11 @@ class SettingReader:
             return default
         try:
             return parse_integer(value, name, low, high)
-        except InvalidValueError:
-            raise invalid(name, f"a whole number from {low} to {high}") from None
+        except InvalidValueError as error:
+            digits = value.removeprefix("-")
+            if error.issue == OUT_OF_RANGE or (digits and is_digits(digits)):
+                raise out_of_range(name, low, high) from None  # too many digits is too large, not malformed
+            raise invalid(name, WHOLE_NUMBER_RULE) from None
 
     def seconds(self, name: str, default: float) -> float:
         """A positive number of seconds with at most three decimals, at most an hour."""
@@ -104,12 +147,14 @@ class SettingReader:
             return default
         match = _SECONDS.fullmatch(value)
         if match is None:
-            raise invalid(name, "a positive number of seconds")
+            raise invalid(name, SECONDS_RULE)
+        whole = match[1].lstrip("0") or "0"
         fraction = (match[2] or "").ljust(3, "0")
-        milliseconds = parse_integer(match[1], name, 0) * 1000 + parse_integer(fraction, name, 0)
-        seconds = milliseconds / 1000
+        if len(whole) > MAX_SECONDS_DIGITS:  # well formed and too large: out of range, not malformed
+            raise seconds_out_of_range(name)
+        seconds = (parse_integer(whole, name, 0) * 1000 + parse_integer(fraction, name, 0)) / 1000
         if not 0 < seconds <= MAX_SECONDS:
-            raise invalid(name, "a positive number of seconds")
+            raise seconds_out_of_range(name)
         return seconds
 
     def boolean(self, name: str, default: bool) -> bool:
@@ -166,7 +211,6 @@ class SettingReader:
 
 
 def _is_public_key(text: str) -> bool:
-    try:
-        return len(base64.b64decode(text, validate=True)) == PUBLIC_KEY_BYTES
-    except (binascii.Error, ValueError):
-        return False
+    """32 bytes of canonical standard base64 (SPEC_DECISIONS 75)."""
+    raw = canonical_base64(text)
+    return raw is not None and len(raw) == PUBLIC_KEY_BYTES

@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from bank_testkit.database import BankDatabase, drop, new_bank_database
-from bank_testkit.programs import run_program
+from bank_testkit.programs import run_program, split_stderr
 from onepledge_bank_agent.infrastructure.db.provisioning import DatabaseProvisioner
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(60)]
@@ -45,9 +45,7 @@ def migrate(environment: dict[str, str]) -> tuple[int, dict[str, Any], list[dict
     finished = run_program(
         "onepledge-bank", ["db", "migrate", "--json"], {**environment, "LOG_LEVEL": "INFO"}
     )
-    lines = finished.stderr.splitlines()
-    records = [json.loads(line) for line in lines if line.startswith("{")]
-    sentences = [line for line in lines if not line.startswith("{")]
+    records, sentences = split_stderr(finished.stderr)
     return finished.returncode, json.loads(finished.stdout), records, sentences
 
 

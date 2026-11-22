@@ -117,6 +117,7 @@ def test_every_section_and_every_failure_id_is_in_both_forms() -> None:
     for ident in TEXT_ONLY:
         assert ident in text, ident
     assert (report.status, text_code, json_code) == (IntegrityRunStatus.BROKEN, 1, 1)
+    assert all(len(line) <= 100 for line in text.splitlines()), "SPEC_DECISIONS 78: the text form fits"
 
 
 def test_open_and_recovered_failures_are_listed_apart_and_every_open_one_is_listed() -> None:

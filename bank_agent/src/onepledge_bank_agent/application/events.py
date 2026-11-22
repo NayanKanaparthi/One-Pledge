@@ -25,6 +25,7 @@ class LogEvent(StrEnum):
     LIBRARY_LOG = "library_log"
     SCHEMA_MIGRATION_APPLIED = "schema_migration_applied"
     SCHEMA_MIGRATION_FAILED = "schema_migration_failed"
+    UNHANDLED_EXCEPTION = "unhandled_exception"
     CODES_STORED = "codes_stored"
     REGISTRY_REQUESTS_PLANNED = "registry_requests_planned"
     REGISTRY_REQUEST_SENT = "registry_request_sent"

@@ -105,8 +105,14 @@ def _unread(sqlstate: str) -> str:
     return f"not read: the database refused the query (SQLSTATE {sqlstate}); run db migrate"
 
 
-def _rows(findings: list[Finding]) -> list[tuple[str, str, str, str]]:
-    return [(f.section, f.subject, f.ident, f"{f.reason} {f.where}".strip()) for f in findings]
+def _finding_text(finding: Finding) -> str:
+    """`ID: REASON, where`: the last column of a failure row, which wraps under itself."""
+    text = f"{finding.ident}: {finding.reason}" if finding.ident else finding.reason
+    return f"{text}, {finding.where}" if finding.where else text
+
+
+def _rows(findings: list[Finding]) -> list[tuple[str, str, str]]:
+    return [(f.section, f.subject, _finding_text(f)) for f in findings]
 
 
 def print_report(report: IntegrityReport, output: Output, title: str) -> int:
@@ -137,7 +143,7 @@ def print_report(report: IntegrityReport, output: Output, title: str) -> int:
     ]
     output.table("Sections", ("section", "status", "facts"), rows, ("section", "sections"), "")
     open_findings, recovered = all_findings(report)
-    headers = ("section", "object", "id", "reason")
+    headers = ("section", "object", "finding")
     if open_findings:
         output.table("Open failures", headers, _rows(open_findings), ("failure", "failures"), "")
     if recovered:

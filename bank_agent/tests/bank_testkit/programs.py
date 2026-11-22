@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -27,3 +28,39 @@ def run_program(
     return subprocess.run(  # noqa: S603 - an installed program of this repository, arguments from the test
         [command, *arguments], capture_output=True, text=True, env=variables, check=False, timeout=120
     )
+
+
+WIDTH = 100
+"""The width of human readable command line output (SPEC_DECISIONS 78)."""
+CONTINUATION = "  "
+
+
+def unwrap(text: str) -> str:
+    """Human readable text with each wrapped line joined back to the line it continues.
+
+    A line longer than 100 columns fails the test; a continuation line starts with two spaces, so this
+    is for sentences and single lines, not for tables, whose rows are indented themselves.
+    """
+    joined: list[str] = []
+    for line in text.splitlines():
+        assert len(line) <= WIDTH, f"over {WIDTH} columns: {line!r}"
+        if line.startswith(CONTINUATION) and joined:
+            joined[-1] += " " + line.strip()
+        else:
+            joined.append(line)
+    return "".join(part + "\n" for part in joined)
+
+
+def split_stderr(stderr: str) -> tuple[list[dict[str, object]], list[str]]:
+    """stderr split into JSON log records (each must parse as an object) and the sentences between
+    them, each wrapped sentence joined back into one (every human readable line at most 100 columns)."""
+    records: list[dict[str, object]] = []
+    human: list[str] = []
+    for line in stderr.splitlines():
+        if line.startswith("{"):
+            record = json.loads(line)
+            assert isinstance(record, dict)
+            records.append(record)
+        else:
+            human.append(line)
+    return records, unwrap("\n".join(human)).splitlines()

@@ -65,8 +65,21 @@ def test_a_missing_file_writes_nothing_and_is_refused(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("content", "sentence"),
     [
-        (None, "cannot read {dir}/reference.json: no such file."),
-        ("{not json", "{dir}/reference.json is not a valid reference data file."),
+        (None, "{dir}/reference.json: no such file."),
+        ("{not json", "{dir}/reference.json: not valid JSON."),
+        ('{"lenders": [], "lenders": [], "facilities": []}', "{dir}/reference.json: not valid JSON."),
+        ('{"lenders": [], "facilities": [], "x": NaN}', "{dir}/reference.json: not valid JSON."),
+        (
+            '{"lenders": [], "facilities": [], "x": ' + "[" * 33 + "]" * 33 + "}",
+            "{dir}/reference.json: nests too deeply.",
+        ),
+        (
+            '{"lenders": [], "facilities": [], "x": ' + "[" * 100_000 + "]" * 100_000 + "}",
+            "{dir}/reference.json: nests too deeply.",
+        ),
+        ("\udcff\udcfe{}", "{dir}/reference.json: not valid JSON."),  # bytes ff fe: not UTF-8
+        ('{"lenders": {}, "facilities": []}', "{dir}/reference.json: not a reference data file."),
+        (" " * (5 * 1024 * 1024 + 1), "{dir}/reference.json: larger than 5 MiB."),
         ({"lenders": LENDERS, "facilities": []}, "reference.json has no facility for the bank code HARBOR."),
         (
             {"lenders": [], "facilities": [facility("HARBOR-SUMMIT", "HARBOR", "SUMMIT")]},
@@ -86,8 +99,9 @@ def test_a_missing_file_writes_nothing_and_is_refused(tmp_path: Path) -> None:
     ],
 )
 def test_an_unusable_file_is_one_sentence(tmp_path: Path, content: object, sentence: str) -> None:
+    """SPEC_DECISIONS 74: a file the command did not write is hostile input, bounded and named."""
     if isinstance(content, str):
-        (tmp_path / "reference.json").write_text(content, encoding="utf-8")
+        (tmp_path / "reference.json").write_bytes(content.encode("utf-8", "surrogateescape"))
     elif content is not None:
         write(tmp_path, content)
     with pytest.raises(ReferenceDataError) as raised:
@@ -99,4 +113,4 @@ def test_a_reference_path_that_is_a_directory_is_named_in_the_sentence(tmp_path:
     (tmp_path / "reference.json").mkdir()
     with pytest.raises(ReferenceDataError) as raised:
         ReferenceFileSource().load(tmp_path, "HARBOR")
-    assert raised.value.sentence == f"cannot read {tmp_path}/reference.json: is a directory."
+    assert raised.value.sentence == f"{tmp_path}/reference.json: is a directory."

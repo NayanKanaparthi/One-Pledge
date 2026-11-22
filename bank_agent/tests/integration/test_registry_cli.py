@@ -24,6 +24,7 @@ from bank_testkit.database import BankDatabase, pairs
 from bank_testkit.doubles import REGISTRY_URL, InProcessDoubles
 from bank_testkit.outside import InProcessOutsideRecords
 from bank_testkit.pipeline import BankAgentHarness, Services
+from bank_testkit.programs import unwrap
 from onepledge_bank_agent.domain.enums import TapeKind
 from onepledge_bank_agent.interface.cli.main import main
 from onepledge_bank_agent.interface.cli.output import Output
@@ -136,7 +137,7 @@ def test_a_registry_that_refuses_the_credentials_is_dependency_rejected(
     assert refused.code == 1
     assert refused.json() == {"ok": False, "error": {"code": "DEPENDENCY_REJECTED", "message": sentence}}
     plain = cli("registry", "sync")
-    assert (plain.code, plain.out, plain.err.splitlines()[-1]) == (1, "", sentence)
+    assert (plain.code, plain.out, unwrap(plain.err).splitlines()[-1]) == (1, "", sentence)
 
 
 def test_a_poison_checkpoint_neither_fails_registry_sync_nor_starves_worker_once(

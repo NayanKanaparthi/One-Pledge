@@ -22,13 +22,17 @@ from pydantic import BaseModel, ConfigDict, SecretStr
 
 from onepledge_bank_agent.domain.text_rules import ascii_upper
 from onepledge_bank_agent.infrastructure.operator_errors import CONFIGURATION_ERROR, OperatorError
-from onepledge_bank_agent.infrastructure.setting_reader import SettingReader, invalid
+from onepledge_bank_agent.infrastructure.setting_reader import (
+    LOG_LEVEL_RULE,
+    MAX_PORT,
+    SettingReader,
+    invalid,
+)
 
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 _ROLE_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 _BANK_CODE = re.compile(r"^[A-Z]{3,12}$")
 _BANK_NAME = re.compile(r"^[ -~]{1,100}$")
-MAX_PORT = 65535
 MAX_CHUNK = 1000
 MAX_TOKENIZE_CHUNK = 125  # 8 elements per loan, at most 1,000 elements per key holder request
 MAX_SUBMIT_BATCH = 500
@@ -90,7 +94,7 @@ def _tunables(read: SettingReader) -> Tunables:
 def _log_level(read: SettingReader) -> str:
     level = ascii_upper(read.text("LOG_LEVEL") or "INFO")
     if level not in _LOG_LEVELS:
-        raise invalid("LOG_LEVEL", "DEBUG, INFO, WARNING, ERROR or CRITICAL")
+        raise invalid("LOG_LEVEL", LOG_LEVEL_RULE)
     return level
 
 
@@ -196,7 +200,7 @@ class RuntimeSettings(BaseModel):
         return cls(
             bank_code=_required("BANK_CODE", _bank_code(read), str),
             bank_name=_required("BANK_NAME", _bank_name(read), str),
-            database_url=read.secret("DATABASE_URL"),
+            database_url=read.database_url("DATABASE_URL"),
             outside_records_url=read.http_url("OUTSIDE_RECORDS_URL"),
             outside_records_api_key=read.secret("OUTSIDE_RECORDS_API_KEY"),
             registry=RegistrySettings.read(read),
@@ -257,9 +261,9 @@ class AdminSettings(BaseModel):
         read = SettingReader(environ)
         return cls(
             bank_code=_bank_code(read),
-            database_url=read.secret("DATABASE_URL"),
-            migration_database_url=read.secret("MIGRATION_DATABASE_URL"),
-            admin_url=read.secret("PG_ADMIN_URL"),
+            database_url=read.database_url("DATABASE_URL"),
+            migration_database_url=read.database_url("MIGRATION_DATABASE_URL"),
+            admin_url=read.database_url("PG_ADMIN_URL", needs_database=False),
             db_app_role=read.matching("DB_APP_ROLE", _ROLE_NAME, "a lower case PostgreSQL role name"),
             log_level=_log_level(read),
         )

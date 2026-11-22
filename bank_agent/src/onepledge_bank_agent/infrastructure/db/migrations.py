@@ -30,6 +30,7 @@ from onepledge_bank_agent.infrastructure.db.failures import (
     migration_failed,
     query_refused,
     sqlstate,
+    tables_missing,
 )
 from onepledge_bank_agent.infrastructure.operator_errors import (
     CONFIGURATION_ERROR,
@@ -187,8 +188,11 @@ class SchemaInspector:
         return SchemaStatus(str(database), current, head_revision())
 
     def require_head(self) -> None:
-        """Refuse to run against a database that is not migrated to the newest revision."""
+        """Refuse to run against a database that is not migrated to the newest revision; a database that
+        was never migrated says its tables are missing (SPEC_DECISIONS 78: the real cause)."""
         status = self.status()
+        if status.current_revision is None:
+            raise tables_missing()
         if not status.at_head:
             raise OperatorError(
                 f"The database {status.database} is not at the latest revision; run db migrate.",

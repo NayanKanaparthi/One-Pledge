@@ -5,23 +5,75 @@ with `--json` (`"ok": true` and the facts, or `"ok": false` and the error). Log 
 and the one sentence of an error go to stderr (SPEC_DECISIONS 20, 27). Tables have a
 title line, column headers, aligned columns, a count line and a closing line. Hashes
 are shown as their first 12 characters followed by `...`.
+
+Human readable lines are at most 100 columns (SPEC_DECISIONS 78). The last column of a
+table, and the value of a name and value pair, wraps at spaces onto continuation lines
+that start under that column, so the other columns stay aligned and no word or
+identifier is ever cut; any other long line wraps onto lines indented two more spaces.
+A long identifier in a table is shortened like a hash (`shorten`). `--wide` turns the
+limit and the shortening off. The call frames `--debug` prints are diagnostic text and
+are printed as they are: a file path is never wrapped.
 """
 
 from __future__ import annotations
 
 import json
 import sys
+import textwrap
 from collections.abc import Mapping, Sequence
-from typing import TextIO
+from typing import Final, TextIO
 
 from onepledge_bank_agent.domain.canonical_json import JsonValue
 
 HASH_PREFIX = 12
+WIDTH = 100
+MIN_WRAP_COLUMN = 24
+"""Below this many columns left for the last cell, the row wraps as a whole line instead."""
+USAGE_STATUS = 2
+"""The exit status of a usage error (argparse)."""
+USAGE_CODE: Final = "USAGE"
+USAGE_MESSAGE: Final = "The command line is not valid. See the usage text."
+
+
+def _wrap(text: str, width: int, indent: str) -> list[str]:
+    return textwrap.wrap(
+        text, width, subsequent_indent=indent, break_long_words=False, break_on_hyphens=False
+    )
+
+
+def fit(text: str, wide: bool = False) -> str:
+    """Lines of at most 100 columns: a longer one wraps onto lines indented two more spaces."""
+    if wide:
+        return text
+    lines: list[str] = []
+    for line in text.split("\n"):
+        if len(line) <= WIDTH:
+            lines.append(line)
+            continue
+        indent = line[: len(line) - len(line.lstrip(" "))]
+        lines += _wrap(line, WIDTH, indent + "  ")
+    return "\n".join(lines)
+
+
+def hanging(prefix: str, last: str, wide: bool = False) -> list[str]:
+    """`prefix` followed by `last`; when that is over 100 columns, `last` wraps onto lines that start
+    under its first character, so the columns of `prefix` stay aligned."""
+    line = (prefix + last).rstrip()
+    available = WIDTH - len(prefix)
+    if wide or len(line) <= WIDTH or available < MIN_WRAP_COLUMN:
+        return fit(line, wide).split("\n")
+    wrapped = _wrap(last, available, "")
+    return [prefix + wrapped[0], *(" " * len(prefix) + part for part in wrapped[1:])]
 
 
 def short_hash(value: str) -> str:
     """The first 12 characters of a hash followed by `...`."""
     return value[:HASH_PREFIX] + "..."
+
+
+def shorten(value: str, wide: bool = False) -> str:
+    """A long identifier as SPEC 19 shows a hash (12 characters and `...`); in full with `--wide`."""
+    return value if wide or len(value) <= HASH_PREFIX + 3 else short_hash(value)
 
 
 def counted(count: int, singular: str, plural: str) -> str:
@@ -33,19 +85,36 @@ class Output:
     """Writes command results to stdout and one sentence errors to stderr."""
 
     def __init__(
-        self, out: TextIO | None = None, err: TextIO | None = None, *, as_json: bool = False
+        self,
+        out: TextIO | None = None,
+        err: TextIO | None = None,
+        *,
+        as_json: bool = False,
+        wide: bool = False,
     ) -> None:
         self._out = out if out is not None else sys.stdout
         self._err = err if err is not None else sys.stderr
         self.as_json = as_json
+        self.wide = wide
 
     def line(self, text: str) -> None:
-        """One line of text, without trailing spaces."""
-        self._out.write(text.rstrip() + "\n")
+        """One line of text, without trailing spaces, wrapped at 100 columns unless `--wide`."""
+        self._out.write(fit(text.rstrip(), self.wide) + "\n")
+
+    def _lines(self, lines: Sequence[str]) -> None:
+        self._out.write("".join(line.rstrip() + "\n" for line in lines))
+
+    def identifier(self, value: str) -> str:
+        """A long identifier shortened for a table, unless `--wide` (SPEC_DECISIONS 78)."""
+        return shorten(value, self.wide)
 
     def error(self, sentence: str) -> None:
-        """One sentence on stderr."""
-        self._err.write(sentence + "\n")
+        """One sentence on stderr, wrapped at 100 columns unless `--wide`."""
+        self._err.write(fit(sentence, self.wide) + "\n")
+
+    def usage_failure(self) -> None:
+        """The USAGE document on stdout after argparse printed its usage text (SPEC_DECISIONS 78)."""
+        self.json({"ok": False, "error": {"code": USAGE_CODE, "message": USAGE_MESSAGE}})
 
     def detail(self, text: str) -> None:
         """Diagnostic text on stderr (the traceback of `--debug`)."""
@@ -71,7 +140,7 @@ class Output:
         width = max((len(name) for name in items), default=0)
         self.line(title)
         for name, value in items.items():
-            self.line(f"  {name.ljust(width)}  {value}")
+            self._lines(hanging(f"  {name.ljust(width)}  ", value, self.wide))
 
     def table(
         self,
@@ -81,15 +150,15 @@ class Output:
         count_label: tuple[str, str],
         closing: str,
     ) -> None:
-        """A title, headers, aligned rows, a count line (singular and plural label) and a closing line."""
+        """A title, headers, aligned rows, a count line (singular and plural label) and a closing line.
+        The last column wraps under itself when a row would be over 100 columns."""
         widths = [len(header) for header in headers]
         for row in rows:
             widths = [max(width, len(cell)) for width, cell in zip(widths, row, strict=True)]
         self.line(title)
-        self.line(
-            "  " + "  ".join(header.ljust(width) for header, width in zip(headers, widths, strict=True))
-        )
-        for row in rows:
-            self.line("  " + "  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)))
+        for cells in (headers, *rows):
+            leading = zip(cells[:-1], widths[:-1], strict=True)
+            prefix = "  " + "".join(cell.ljust(width) + "  " for cell, width in leading)
+            self._lines(hanging(prefix, cells[-1], self.wide))
         self.line(counted(len(rows), *count_label))
         self.line(closing)
