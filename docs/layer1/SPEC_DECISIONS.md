@@ -512,3 +512,346 @@ Stated separately so WP4 cannot miss it: decisions 22 (findings 1, 3, 5, 6, 7) a
 | C6 | Table "Additions to SPEC 12.1" in `bank_agent/README.md` listing every extra constraint and index with its reason | 29 |
 | C7 | `unnamed` rule exactly as worded; `LOAN_STATE_CHANGED` on creation with `from` null | 29 |
 | C8 | Exception names, settings scope, error vocabulary, `service` value and single error log line follow the all-services rules | 8, 22, 31 |
+
+---
+
+# Round 3 (2026-11-21): WP1 review 2, WP2 review 1, WP3 questions
+
+Inputs: `docs/layer1/reviews/WP1-review-2.md` and `WP2-review-1.md` (both on commit `ed00b46`), and the WP3 implementer's questions (commits bb796f5 to e73cfdf). Decisions 34 to 62. The lists of required fixes are at the end of the round. "(all services)" and "(all packages)" rules bind every package, including those not yet built.
+
+## A. WP1 review 2
+
+### 34. The failures are confirmed
+
+All confirmed as the reviewer graded them: DATA-06, DX-05, CODE-03, F3, F8, F12.
+
+- F8 is read the strict way: every response with status 500 has exactly one `error` log record, and that record carries the `request_id`. A 500 with no error record, or an error record without the request id, fails.
+- F3: decision 23 (b) covers every request body a service parses, including `/_test/` bodies.
+- F12: an absent header or parameter is `REQUIRED`; a present one of the wrong shape is `PATTERN_MISMATCH`.
+- CODE-03 is literal. The fix is to rename the constant (`VERBATIM_COPY_KINDS`), not to hide it from the grep. The same grep hit in `bank_agent/tests/unit/test_architecture.py` is a pattern that searches for those names; there the pattern is rewritten so the grep does not match it (`EXACT_[C]OPY`, and so on), as decision 21 describes.
+
+### 35. No redirects, and trailing slashes (all services)
+
+No layer 1 service ever answers with a 3xx. Applications are built with slash redirection off. A path with a trailing slash that is not a declared route is an unknown route: 404 `NOT_FOUND` in the error envelope, no `Location` header, nothing of the request echoed in any header or body. Tests request every route with a trailing slash and with a canary in the path and query, and assert status 404 and that the canary is absent from the status line, all headers and the body.
+
+### 36. Request id on every log record of a request (all services)
+
+The request id stays bound in the log context until the response has been sent and every handler (including the catch-all and the named error handlers) has logged. The middleware unbinds it last. Header parsing that can fail (for example `Content-Length`) happens inside the guarded section, so a failure there is handled like any other and the context is always cleared. Tests assert that the `error` record of a provoked 500 carries the same `request_id` as the response, and that a request after a failed one does not inherit the previous id.
+
+### 37. Integer text: decision 23 (a) and 22.7 reconciled (all packages)
+
+This replaces the pattern in decision 23 (a). One rule for every integer read from text (query and path parameters, headers such as `Content-Length`, environment variables, CLI arguments, CSV cells where SPEC allows an integer):
+
+1. The text is a well formed integer only if it matches `^-?[0-9]{1,18}$` with ASCII digits. Anything else (a `+` sign, spaces, a decimal point, an exponent, non-ASCII digits, an empty value, more than 18 digits) is `INVALID_INTEGER`.
+2. A well formed integer outside its bounds, including any negative value where the minimum is 0 or 1, is `OUT_OF_RANGE`.
+
+So `-1` is `OUT_OF_RANGE` and `+1` is `INVALID_INTEGER`, as built.
+
+Enforcement: each package has exactly one function that turns text into an integer under this rule, and everything uses it. `str.isdigit`, `str.isdecimal`, `str.isnumeric`, and `\d` in a pattern compiled without `re.ASCII` are banned in every `src/` tree and in every independent oracle or test kit; an architecture test in each package fails on any of them. Settings loaders use the same function, so a malformed numeric setting stops startup with one line naming the variable (this also covers the key holder double's `FAKE_KH_KEYS` and `FAKE_KH_ACTIVE_VERSION`, and the bank agent's `_Reader.integer`).
+
+### 38. Malformed JSON bodies (all services)
+
+A new issue code is added to the vocabulary of decision 22.7: `INVALID_JSON`, reported once as `{"field": "body", "issue": "INVALID_JSON"}` with 422 `VALIDATION_ERROR`. It covers every body that is not one well formed JSON document acceptable to the service: a syntax error, invalid UTF-8, nesting deeper than 32 levels, a number literal longer than 30 characters, a duplicate key in any object, `NaN` or `Infinity`, or a top level value that is not an object. Parsing uses a bounded parser (depth and number length checked before values are built; duplicate keys detected with an object pairs hook), so none of these can raise an unhandled exception. `INVALID_VALUE` goes back to meaning "not one of the allowed values".
+
+A JSON `null` where a value is required is `INVALID_TYPE` (it is present and of the wrong type); only an absent key is `REQUIRED`.
+
+Content type: a request with a JSON body must declare `Content-Type: application/json` (parameters such as `charset` allowed). Otherwise 422 `VALIDATION_ERROR` with `{"field": "Content-Type", "issue": "INVALID_VALUE"}`.
+
+Test control issue codes folded into `INVALID_VALUE` (reviewer ruling c) are ratified.
+
+### 39. Reserved whole-dollar loans in datagen (reviewer ruling d)
+
+Ratified. To plant the `23450` and `$23,450` forms of `M_AMOUNT_ALT_FORMAT` without changing an amount, the generator reserves a deterministic set of honest loans whose original amount and balance have zero cents. This departs from SPEC 5.4 ("plus uniform random cents 0 to 99") for those loans only. Required: one sentence in `datagen/README.md` saying so and why, and `verify` keeps checking the rotation.
+
+### 40. Decision 20 reads "at least" (reviewer ruling e)
+
+A `--json` document contains at least `ok`, and on failure at least `error.code` and `error.message`. Further keys that carry the facts the text output shows are allowed. Within one document the fields must agree: a checker document with `"status": "FAILED"` must not carry a summary sentence that describes success.
+
+### 41. Health endpoints, test control routes, contract gaps (reviewer ruling f)
+
+- `/healthz` and `/readyz` ignore query parameters on every service (probes add cache busters). They never answer 422. This is the one exemption from decision 22.1.
+- Every other route applies the unknown parameter rule, including the `/_test/` GET routes of the doubles.
+- Contract: 422 is now listed on every operation of `bank_agent.yaml` and `registry.yaml` that lacked it, except the health paths (additive edit in this commit; `key_holder.yaml` and `outside_records.yaml` already had it everywhere).
+- A malformed path id answering 404 with the resource's specific code stays as built.
+
+### 42. Reviewer ruling (g): tests that replace a collaborator
+
+Ratified. Replacing a collaborator or a standard library boundary to reach a branch that cannot be reached otherwise (a permission error as root, the last resort handler) is acceptable when the test asserts on output. Where the collaborator can be injected through a constructor instead, it must be (see decision 53).
+
+### 43. The thirteen quality findings of WP1 review 2
+
+All fixed except two, which are settled by a rule.
+
+| # | Finding | Ruling |
+|---|---|---|
+| 1 | Oracle accepts non-ASCII digits in amounts and dates | **Fix.** Decision 45 (ASCII only) applies to the oracle and to `tape_format.py`. |
+| 2 | `verify` proves consistency, not conformance | **Fix.** `verify` gains a second stage after the 5.8 invariants: it regenerates the data set in memory from the manifest's `seed` and `profile` and requires every file on disk, including `manifest.json`, `reference.json` and the answer key, to be byte identical to the regenerated one. A difference is reported per file ("differs from what seed S, profile P generates"). If the manifest's `generator_version` is not the installed one, `verify` says so in one sentence and exits 1. A manifest whose `seed` or `profile` is missing or invalid is reported as such. Every tampering in the reviewer's list must then fail. |
+| 3 | The last resort sentence answers ordinary mistakes | **Fix.** The last resort sentence is for defects only. Each case the reviewer lists gets a specific sentence: a malformed data set file names the file and the problem; an invalid `BIND_HOST` names the variable; an admin URL whose role is not a superuser says so. Every setting is validated in the settings loader (type, range, format), so a bad value never reaches the code that uses it. |
+| 4 | `serve` starts with the owner role | **Fix (all services).** At startup, `serve` and `worker` check the role they are connected as and refuse to start, with one line naming `DATABASE_URL`, when the role is a superuser, owns any table in the schema, or holds a privilege it must not have. Outside records: any of INSERT, UPDATE, DELETE, TRUNCATE on any table. Bank agent: UPDATE, DELETE or TRUNCATE on any insert-only table, DELETE or TRUNCATE on any table, or CREATE on the schema. Tests start each service with the owner URL and expect exit 1. |
+| 5 | 405 without an `Allow` header | **Fix (all services).** Every 405 carries `Allow` listing the methods of that route. |
+| 6 | `library_log` records are empty | **Fix (all services).** Records from third party loggers below WARNING are dropped. WARNING and above are kept with `logger`, `level` and, when there is one, `exception_type`; the message is never rendered. A service that needs the information a library logged at INFO logs its own event: `db migrate` writes one `schema_migration_applied` record per applied revision. `revision` (pattern `^[0-9a-z_]{1,64}$`) is added to every log allow-list. |
+| 7 | Contract gaps | Decision 41. |
+| 8 | `Content-Length` parsed with `isdigit()` | **Fix.** Decisions 36 and 37. |
+| 9 | uvicorn's plain text 400 for a protocol error | **Accepted.** Decision 12's "no framework default body" applies to requests that reach the application. A byte stream that is not HTTP is answered by the server below it with a fixed text that contains nothing of the request. No handler is required. |
+| 10 | Duplicate JSON keys and any content type accepted | **Fix.** Decision 38. |
+| 11 | Python reprs in human output | **Fix (all packages).** No human readable output contains a Python repr. Lists are printed as comma separated plain values, pairs as `ROLE MATCH_KIND`, empty lists as `none`. A test greps the output of every failing `verify` and checker variant for `[`, `'` and `(`. |
+| 12 | CLI rough edges | **Fix.** An empty `--out` or `--data-dir` is a usage error (exit 2). The metavar for a data set directory is `DIR` in every command of every package. `--quiet` stays on every result-printing command for a uniform interface; where a command writes no log lines its help says "no effect: this command writes no log lines". |
+| 13 | A key holder scalar of 1 is accepted | **Fix.** The key holder double refuses to start when a configured scalar is zero or one (one line naming `FAKE_KH_KEYS`). |
+
+## B. WP2 review 1
+
+### 44. The failures are confirmed
+
+BANK-09, BANK-01, AUD-06, REL-05, CODE-03 and the SEC-13 extra finding are all confirmed as graded. The fixes are decisions 45 to 49 and 37.
+
+### 45. Digits are ASCII digits (all packages)
+
+Wherever SPEC writes a digit (`d`, `d+.dd`, `YYYY-MM-DD`, `MM/DD/YYYY`, "7 digits"), it means one of the ten ASCII characters `0` to `9`. A cell that uses any other Unicode digit is not in an accepted format:
+
+- amounts: `AMOUNT_UNPARSEABLE`; dates: `DATE_UNPARSEABLE`; VIN: `VIN_CHARACTER_INVALID`.
+- Month names in `DD-Mon-YYYY` are the twelve English abbreviations in ASCII letters, any case.
+- Borrower reference (tightens SPEC 9.1 and 10.4): only these separators are removed: space, `-`, `_`, `.`, `/`. Any other character outside `A-Za-z0-9` (including every non-ASCII character) gives `BORROWER_REF_INVALID`. Nothing else is silently dropped.
+- Whitespace trimming removes ASCII space, tab, carriage return and line feed only. A cell that begins or ends with any other Unicode space is not trimmed and then fails its field's format rule.
+
+This binds the bank agent's cleaning, the datagen oracle, and `bank_testkit/independent.py`. The fix is verified by the neutral case table of decision 50, which contains these inputs.
+
+### 46. The tape guard must make SPEC 8.3 the only path (BANK-09)
+
+`onepledge_tape_guard()` is tightened. On `UPDATE`:
+
+| Change | Allowed only when |
+|---|---|
+| status unchanged and not FAILED | `resume_status`, `failed_stage`, `failure_code` stay null. |
+| forward step (RECEIVED to CLEANED, ..., SUBMITTED to COMPLETED) | Exactly the next status of SPEC 8.3; the three failure columns stay null. |
+| into FAILED | `OLD.status` is one of the five non-terminal statuses; `NEW.resume_status = OLD.status`; `NEW.failed_stage` is the status that follows `OLD.status`; `NEW.failure_code` is not null. |
+| FAILED to FAILED | `resume_status`, `failed_stage` and `failure_code` are all unchanged. |
+| out of FAILED | `NEW.status = OLD.resume_status`, and the three failure columns become null. |
+| anything else | Refused. |
+
+Every refusal is SQLSTATE `OP004`. Tests: every pair of statuses for both roles, the two forged statements of the review (both refused), a rewrite of each failure column while FAILED, and an entry into FAILED with each wrong `resume_status` and `failed_stage`.
+
+### 47. Inserts go through the state machines too (quality finding 1)
+
+SPEC 8.3, 8.4 and 8.5 allow creation in one state only. The database enforces it:
+
+| Table | `BEFORE INSERT` requires | SQLSTATE |
+|---|---|---|
+| `loans` | `state = 'PENDING'` | `OP002` |
+| `tape_submissions` | `status = 'RECEIVED'`, `resume_status`, `failed_stage`, `failure_code`, `completed_at`, `next_attempt_at` null, `attempts = 0` | `OP004` |
+| `alerts` | `status = 'NEW'`, `case_status = 'OPEN'`, `bank_position`, `position_submitted_at`, `reviewed_by`, `reviewed_at` null | `OP006` |
+
+A new guard `onepledge_alerts_guard()` (`BEFORE INSERT OR UPDATE ON alerts`) also enforces SPEC 8.5 on update: only the transitions of that table; CLEARED and ESCALATED rows change in nothing; `registry_case_id`, `loan_id`, `role`, `match_kind`, `match_basis`, `kinds_matched`, `kinds_not_matched`, `received_at` never change; `bank_position` may go from null to a value once and never changes after; `case_status` may leave OPEN once. SQLSTATE `OP006`. The integrity report gains the control `ALERT_STATE_GUARD_TRIGGER_ENABLED`, and `LOAN_STATE_GUARD_TRIGGER_ENABLED` now also requires the insert guards on `loans` and `tape_submissions`.
+
+Test fixtures that need a loan in a later state reach it by legal updates, never by inserting it.
+
+### 48. `failed_checks` lists failures only (AUD-06)
+
+In `LOAN_STATE_CHANGED` detail, `failed_checks` is the list of check types whose outcome is FAIL, in the fixed order TITLE_EXISTS, LIENHOLDER_MATCH, PAYMENTS_RECEIVED, CONTRACT_PRESENT. An UNKNOWN is never listed, tolerated or not. The same definition applies to `counts.loans_held_local` reasoning, to the lineage, and to the scorecard's "failed check set".
+
+### 49. Every outbound HTTP failure is classified (REL-05)
+
+One classification for all four dependency clients (outside records, key holder 1, key holder 2, registry). Nothing raised by the HTTP library may reach the stage as an unexpected error.
+
+| What happened | Class | `reason` |
+|---|---|---|
+| Connection refused or reset, DNS failure, any other transport error | transient | `CONNECTION_FAILED` |
+| Connect, read, write or pool timeout | transient | `TIMEOUT` |
+| 429 | transient | `RATE_LIMITED` |
+| 500, 502, 503, 504 | transient | `SERVER_ERROR` |
+| 401 | permanent | `UNAUTHENTICATED` |
+| 403 | permanent | `FORBIDDEN` |
+| Any other 4xx that the contract does not give a meaning to for that call | permanent | `REQUEST_REFUSED` |
+| A 3xx; a body that cannot be decoded (content encoding, charset); not JSON; JSON that does not match the contract schema; a response about a different object than asked; a page that is not complete (decision 52) | permanent | `MALFORMED_RESPONSE` |
+
+Implementation rule: the client catches the HTTP library's base error class and maps by this table; an error class it does not recognise is `MALFORMED_RESPONSE`, never `INTERNAL_ERROR`. Redirects are not followed. Tests cover each row for each client, including a gzip header with a body that is not gzip.
+
+### 50. What "independent" means for an oracle (quality finding 3) (all packages)
+
+An independent implementation (the datagen oracle, `bank_testkit/independent.py`, and any future one) must satisfy all of these:
+
+1. It imports nothing from the code it checks.
+2. It does not share technique or text with it. The bank agent's cleaning may use regular expressions; the independent implementations parse amounts, dates, VINs and references by explicit character level code (walk the string, classify each character against literal ASCII sets, build the value by arithmetic). No regular expression at all in the oracle's cleaning module or in the test kit's independent module. An architecture test asserts the absence of `import re` there.
+3. All implementations are anchored to a neutral table that none of them produced: `contracts/examples/cleaning_cases.json`, a list of `{"field", "kind", "as_of_date", "input", "expected": {"action": "ACCEPT" | "FIXED" | "REJECTED", "problems": [...], "canonical": ...}}` written by hand from SPEC 10.4 and decisions 13 and 45. It has at least 120 cases and covers, for every field: each accepted form, each FIXED rule, each REJECTED rule, the boundaries (amount 99.99, 100.00, 250,000.00, 250,000.01; origination on and one day after the as-of date; 1999-12-31 and 2000-01-01; balance equal to original), and adversarial inputs (full width digits, Arabic-Indic digits, superscripts, a non-breaking space, a zero width space, a right-to-left mark, lower case `ſ`, `1e3`, `0x10`, `1_000`, `٢٣`, a 40 digit amount, leading `+`, thousands separators in wrong places, 30 February, month 13, two digit years, a VIN with a Cyrillic `А`).
+4. The bank agent's tests, the datagen oracle's tests and the test kit's tests each run the whole table and assert every case. The table is expected values, not an answer key; it may be read by any package.
+
+`onepledge-contracts check` validates the table's shape.
+
+### 51. Shutdown stops at the next unit, not at the end of the stage (quality finding 4)
+
+SPEC 13.1 stands. The worker checks its stop flag after every committed unit: after each check chunk, each tokenise chunk, each registry request and its stored response, each certificate, each outbox message. When the flag is set it commits nothing further, releases the advisory lock and exits 0. The stage is left where it is and resumes on the next start (every stage is already resumable at these points). The clean stage is one transaction and runs to its commit. An HTTP call in flight is allowed to finish or time out, so shutdown takes at most one unit plus `HTTP_READ_TIMEOUT_SECONDS`.
+
+Tests: a stop requested after the first check chunk of a four chunk tape leaves the status CLEANED with one chunk committed, and a second run completes with the same final state as an uninterrupted run. The same for the tokenise and submit stages. The README sentence is corrected.
+
+### 52. A payments page must be provably complete (quality finding 9)
+
+The payments client reads the whole window. It requests `limit=200` and pages with `offset` until it holds `total` items. It treats the response as `MALFORMED_RESPONSE` (decision 49) when: a page has more items than `limit`; a page is empty while fewer than `total` items are held; `total` differs between pages; an item's `vin` is not the one asked for; an item's `paid_on` is outside the requested window; items are not ordered newest first; or `total` exceeds 10,000. Evidence `payments_in_window` is the number of items actually held, which then equals `total`. Tests cover each condition with a stand-in service.
+
+### 53. The remaining quality findings of WP2 review 1
+
+| # | Finding | Ruling |
+|---|---|---|
+| 1 | Inserts bypass the state machines | **Fix.** Decision 47. |
+| 2 | Survived mutation on the duplicate lookup | **Fix.** Add tests: the same bytes uploaded under a different kind, and under a different facility, are accepted as new submissions; the same bytes for the same facility and kind are refused. |
+| 3 | Oracles share pattern text | **Fix.** Decision 50. |
+| 4 | SIGTERM waits for the whole stage | **Fix.** Decision 51. |
+| 5 | Two vocabularies for one failure | **Fix.** Decision 58 (one shape, one vocabulary). `OUTSIDE_RECORDS_PROTOCOL` disappears. |
+| 6 | README cites SPEC 8.3 for loans | **Fix.** SPEC 8.4. |
+| 7 | Contentless log lines from Alembic | **Fix.** Decision 43, finding 6. |
+| 8 | Keys starting with `_` dropped without being named | **Fix.** Keys that the logging framework itself injects are removed by an earlier processor that lists them by exact name. `RedactionProcessor` then names every key it drops in `redacted_keys`, whatever its first character. |
+| 9 | Payments page trusted to be complete | **Fix.** Decision 52. |
+| 10 | The reconstruction guard is reachable only by patching the module under test | **Fix.** The record splitter becomes a collaborator injected through the constructor of the intake component. The `TAPE_MALFORMED` branch is tested by injecting a faulty splitter, with no patching. The guard itself stays (defence in depth). |
+| 11 | Packaging notes | **Fix** the dependency: `bank_agent[dev]` declares every layer 1 package its tests import. **Accepted**: `0001_schema.py` at 663 lines. A migration is a frozen linear script outside `src/`; the 400 line limit does not apply to files under `migrations/versions/`, and splitting one would make it harder to read, not easier. |
+| 12 | `--debug` tracebacks can carry values and land in the log stream | **Fix (all packages).** `--debug` prints the exception type and the frames (file, line, function) only: no exception message, no source line, no locals. This is the same rule as the `stack` log key, so the output is safe on any stream. |
+| 13 | README hand run leaves the owner URL exported | **Fix.** Every README shows administrative commands with their variables set for that one command (inline or in a subshell), so the shell that later starts `serve` or `worker` never has `MIGRATION_DATABASE_URL` or `PG_ADMIN_URL` exported. |
+| 14 | Note for WP4: audit actor of a failed login | **Ruling.** `LOGIN_FAILED` and `LOGIN_RATE_LIMITED` are written with `actor_type` SYSTEM and `actor_user_id` null. `object_type` is USER; `object_id` is the user id when the email belongs to an existing user and null otherwise. `LOGIN_SUCCEEDED` is written with `actor_type` USER and the user id. |
+| 15 | A forged append with a correct `seq` and `prev_hash` and an arbitrary `entry_hash` is accepted | **Accepted**, with the reason stated: the hash is computed over canonical JSON, which cannot be reproduced reliably inside a trigger, and the chain is unsigned by design. A forged entry is found by deep verification (its hash does not recompute). WP5 lists this next to limitation 13 of SPEC 23 in `THREAT_MODEL_L1.md`. |
+
+## C. WP3 questions
+
+### 54. `checkpoints_seen.body` stored verbatim (migration 0004)
+
+Ratified. The signed body is kept exactly as received (`body jsonb not null`) because the signature is over the canonical JSON of that body and a timestamp column cannot reproduce the original `signed_at` text. Deep verification re-verifies signatures from `body`. The column is covered by the insert-only trigger and is listed in the README table of additions.
+
+### 55. `registry_requests.attempts` counts every POST
+
+Ratified: `attempts` is the number of HTTP POSTs actually sent for that request, each counted in the database before it is sent, including the client's immediate retries. This is what RUBRIC REL-04 expects (one injected lost answer gives `attempts` 2). `tape_submissions.attempts` keeps its meaning: failed attempts at the current stage.
+
+### 56. The halt rule covers every state-changing call to the registry
+
+Ratified and widened. When the halt rule of SPEC 15.4 is active, the bank agent sends no submission (tape or resubmission) and no case position. It keeps reading (outbox, event headers, certificates, checkpoints).
+
+The halt rule is active when `HALT_ON_REGISTRY_INTEGRITY_FAILURE` is true and any of these holds: a `checkpoints_seen` row has `verified = false`; a registry request has a failed certificate row and no verified one (decision 61); a quarantined registry message of type CHECKPOINT exists (decision 57).
+
+Behaviour: a pipeline submit stage fails the tape with `REGISTRY_INTEGRITY_BROKEN` (as SPEC says). `POST /v1/loans/{id}/resubmit` and `POST /v1/alerts/{id}/review` with `SUBMIT_POSITION` answer 409 with the new error code `REGISTRY_INTEGRITY_BROKEN` (added to the `ErrorResponse` enum of `bank_agent.yaml`; fixed message: "The registry failed an integrity check. Nothing was sent. See the integrity report."). `POST /v1/releases` is accepted and its tape then fails at the submit stage, as any tape does.
+
+### 57. A known outbox message with an invalid payload is quarantined, not left blocking
+
+A message whose `type` is known but whose payload does not match the contract must not block the outbox and must not vanish.
+
+- New insert-only table `registry_messages_quarantined`: `quarantine_id uuid` PK; `message_id uuid` unique; `position bigint`; `message_type text`; `payload jsonb` (as received, truncated to nothing: if the serialised payload exceeds 64 KiB only `payload_sha256` is kept and `payload` is null); `payload_sha256 char(64)`; `reason text` in (`SCHEMA_MISMATCH`, `UNKNOWN_ASSET_TOKEN_FORMAT`, `OVERSIZED`); `received_at`. App role: SELECT, INSERT. Same statement level insert-only trigger as the other evidence tables.
+- Handling, in one transaction: insert the row, audit `REGISTRY_MESSAGE_QUARANTINED` (object type REGISTRY_MESSAGE, outcome FAILURE, detail: message type, reason, payload hash), commit, then acknowledge and continue with the next message.
+- Integrity report: new section `registry_messages` with `status` and `quarantined` (added to `bank_agent.yaml` as an optional property in this commit; the bank agent always returns it). BROKEN when any quarantined row exists. A quarantined CHECKPOINT message also activates the halt rule (decision 56).
+- An unknown message `type` keeps the behaviour of SPEC 14.1 (acknowledge, audit `REGISTRY_MESSAGE_IGNORED`): a new type is additive evolution, not a fault.
+
+The table is the 19th of the bank database. RUBRIC SEC-01's table list gains it; RUBRIC CODE-05's "18 tables" reads 19; RUBRIC AUD-05's "five sections" reads six.
+
+### 58. One shape for failure details, one vocabulary
+
+`TAPE_STAGE_ATTEMPT_FAILED` and `TAPE_FAILED` carry the same keys, always all present (null where not applicable):
+
+| Key | Content |
+|---|---|
+| `stage` | The stage being attempted (a `TapeStatus` value). |
+| `failure_code` | A `FailureCode` value: for an attempt, the code the tape will get if attempts run out. |
+| `attempts` | Failed attempts at this stage so far. |
+| `dependency` | `outside_records`, `key_holder_1`, `key_holder_2`, `registry`, or null. |
+| `http_status` | Integer or null. |
+| `reason` | One of the `reason` values of decision 49, or `KEY_VERSION_MISMATCH`, `CERTIFICATE_INVALID`, `INTEGRITY_HALT`, `PROTOCOL_VIOLATION` (a key holder element or count that fails SPEC 9.3 step 4), `UNEXPECTED` (failure code `INTERNAL_ERROR`). |
+
+`TAPE_FAILED` adds `resume_status`. The key `error_code` is not used in these details. The same six facts appear, under the same names, in the `error_code`-free log record of the event (`failure_code`, `dependency`, `http_status`, `reason`, `stage`, `attempts` are on the allow-list; add `reason` and `dependency` if missing) and in the worker's result table. No other name for a failure exists anywhere: `OUTSIDE_RECORDS_PROTOCOL` and any similar internal label are removed.
+
+### 59. Synchronous actions when a dependency refuses
+
+`DEPENDENCY_REFUSED` is replaced by `DEPENDENCY_REJECTED`, which is now in the contract: status 502, fixed message "A service this action depends on refused the request. Nothing was changed. Check the service credentials and configuration." It is added to the `ErrorResponse` enum and as a 502 response on `POST /v1/alerts/{id}/review`, `POST /v1/loans/{id}/resubmit`, `POST /v1/registry/sync` and `POST /v1/integrity/verify`.
+
+Mapping for every synchronous use case and its CLI command: a transient class of decision 49 gives `DEPENDENCY_UNAVAILABLE` (503); a permanent class gives `DEPENDENCY_REJECTED` (502). The CLI prints the code's fixed message and exits 1; with `--json` the code is in `error.code`. Both codes go into the single message table.
+
+### 60. Smaller WP3 points
+
+| Point | Ruling |
+|---|---|
+| Deep verification reports a chain finding against the stored checkpoint that covers the bad seq (question 4) | Ratified: the failure entry carries the `checkpoint_id` and `checkpoint_seq` of the first stored verified checkpoint whose `last_event_seq` is at or after the bad seq. `first_bad_event_seq` is the exact seq for `CHAIN_BREAK`, and the previous good checkpoint's `last_event_seq + 1` for `HEAD_MISMATCH` (SPEC 15.6). |
+| An unknown item result is stored as REJECTED with reason `UNKNOWN_RESULT` (question 6) | Ratified. It is SPEC 13.5. |
+| Dependency names `key_holder_1`, `key_holder_2`, `registry` (question 9) | Ratified, with `outside_records`, as the closed set for `dependency` in audit details and logs. The application layer may split a port of SPEC 8.6 into narrower ports, or keep one port with two named instances for the key holders, as long as every class named in SPEC 8.6 exists and no use case depends on an implementation. |
+| RUBRIC BANK-04 names `InvalidVin` (question 10) | Confirmed: reviewers read `InvalidVinError` (decision 8). |
+| Certificate reason tests run with the halt rule off (question 11, first part) | Ratified for unit and integration tests of `VerifyCertificate`. A wrong `REGISTRY_PUBLIC_KEYS` is rightly caught first by checkpoint verification. At least one test keeps the halt rule on and shows the order: the checkpoint fails first and nothing is submitted. |
+
+### 61. A tape whose certificate fails verification (question 11, second part)
+
+The end state the implementer describes (loans in their new state, tape FAILED with `CERTIFICATE_INVALID`, no way forward) is not acceptable: a bank would be left with collateral records it cannot prove and cannot repair. Required behaviour:
+
+1. Item results are applied as the registry answered them, as today. The loan states say what the registry said; the missing proof is shown separately and loudly.
+2. The failed certificate is stored as evidence and never removed. `certificates` changes shape: new surrogate primary key `certificate_row_id uuid`; `certificate_id` and `request_id` are no longer unique on their own; partial unique indexes `(certificate_id) WHERE verified` and `(request_id) WHERE verified`; unique `(certificate_id, body_hash, signature)` so the same bad certificate fetched twice is stored once. Still insert-only.
+3. The tape becomes FAILED with `CERTIFICATE_INVALID` (resume status SUBMITTED), the integrity report's `certificates` section is BROKEN, and the halt rule is active (decision 56), so nothing more is sent to a registry that cannot prove what it did.
+4. `CERTIFICATE_INVALID` is retryable (this amends decision 26: the only failure code that cannot be retried is `KEY_VERSION_MISMATCH`). A retry runs the certify stage again: it fetches the certificate again for every request that has no verified row. A verified certificate is stored as a new row and the tape can complete. A certificate that fails again in the same way stores nothing new and the tape fails again.
+5. Integrity report, `certificates` section: `total` counts requests that should have a certificate; `verified` counts requests with a verified row; `failures` lists every failed row ever stored (evidence). `status` is BROKEN only while some request has a failed row and no verified row. Once every such request has a verified row, the section is OK again, the halt rule releases, and the failed rows stay listed.
+6. Visibility until then: the tape item and the lineage show the request's certificate as not verified (`certificate_id` set, `verified` false, `failure_reason` set). `GET /v1/certificates?verified=false` lists it.
+7. This applies to every kind. For a release it means: the loans are RELEASED because the registry said so, the bank holds no valid proof of the release yet, and the report says exactly that until a valid certificate is fetched.
+
+Tests: a tampered certificate (`CERTIFICATE_BODY` on the double) fails the tape, breaks the section and activates the halt rule; after the double's stored certificate is restored, a retry completes the tape, the section is OK, the failed row is still listed, and a new submission goes through. RUBRIC SEC-11 is unchanged in what it observes (the tape ends FAILED with `CERTIFICATE_INVALID`; a database edit is found by deep verification). RUBRIC PRES-04 provokes `TAPE_NOT_RETRYABLE` with a tape that is not FAILED or one FAILED with `KEY_VERSION_MISMATCH`.
+
+### 62. Contract and rubric-reading changes of this round
+
+Contract (draft, additive, made in this commit; `onepledge-contracts check` passes):
+
+- `bank_agent.yaml`: 422 on every operation that lacked it except `/healthz` and `/readyz`; 409 on `POST /v1/releases`, review and resubmit where it was only described; 502 on review, resubmit, registry sync and integrity verify; error codes `REGISTRY_INTEGRITY_BROKEN` and `DEPENDENCY_REJECTED`; optional `registry_messages` section in `IntegrityReport`.
+- `registry.yaml`: 422 on every operation that lacked it except `/healthz`.
+
+How reviewers read the rubric from now on:
+
+| Rubric text | Read as |
+|---|---|
+| BANK-04 "raises `InvalidVin`" | `InvalidVinError`. |
+| SEC-01 list of nine insert-only tables | Ten: add `registry_messages_quarantined`. Owner `TRUNCATE` per decision 24. |
+| CODE-05 "all 18 tables" | 19 tables. `certificates` and `checkpoints_seen` as amended by decisions 54 and 61. |
+| AUD-05 "the five sections", "exactly the eleven control names" | Six sections; twelve control names (add `ALERT_STATE_GUARD_TRIGGER_ENABLED`). |
+| BANK-09 | Also the forged resume of decision 46 and the insert guards of decision 47 (each refused with the stated SQLSTATE). |
+| BANK-01 | Also the non-ASCII inputs of decision 45 (each REJECTED with the stated problem). |
+| PRES-04 `TAPE_NOT_RETRYABLE` | Provoked per decision 61. Also provoke `REGISTRY_INTEGRITY_BROKEN` (409) and `DEPENDENCY_REJECTED` (502) and check them like the other codes. |
+| CODE-03 third grep | Unchanged and literal. Test patterns that search for case names are written so the grep does not match them. |
+| Any criterion on error bodies | Vocabulary of decisions 22.7, 37 and 38. No 3xx from any service (decision 35). |
+
+---
+
+## Round 3: required fixes in WP1 (doubles, datagen, outside records)
+
+| # | Fix | Decision |
+|---|---|---|
+| G1 | No redirects: slash redirection off on all three services; trailing slash is 404 in the envelope; canary tests | 35 |
+| G2 | Request id bound until the last handler has logged; exactly one `error` record with `request_id` per 500, including 500s raised as named errors | 34, 36 |
+| G3 | Bounded JSON parsing with `INVALID_JSON`; `null` is `INVALID_TYPE`; duplicate keys refused; `Content-Type` required; applies to `/_test/` bodies too | 38 |
+| G4 | One integer-from-text function per package; ban on `isdigit`, `isdecimal`, `isnumeric` and non-ASCII `\d` with an architecture test; settings name the variable; `Content-Length` inside the guarded section | 37 |
+| G5 | Missing `Idempotency-Key` is `REQUIRED` | 34 |
+| G6 | Rename `EXACT_COPY_KINDS` (for example `VERBATIM_COPY_KINDS`) | 34 |
+| G7 | `/healthz` ignores query parameters; `/_test/` GET routes apply the unknown parameter rule | 41 |
+| G8 | Oracle and `tape_format.py`: ASCII digits only, borrower separator set, ASCII trimming; no regular expression in the oracle's cleaning module; run `contracts/examples/cleaning_cases.json` | 45, 50 |
+| G9 | Write `contracts/examples/cleaning_cases.json` (at least 120 hand written cases) and have the contract checker validate its shape | 50 |
+| G10 | `verify` regenerates from seed and profile and compares every file byte for byte | 43.2 |
+| G11 | Specific sentences for the listed ordinary mistakes; every setting validated in the loader | 43.3 |
+| G12 | Outside records `serve` refuses to start as owner, superuser or with any write privilege | 43.4 |
+| G13 | `Allow` header on every 405 | 43.5 |
+| G14 | Library log records: drop below WARNING, keep logger and exception type above; own `schema_migration_applied` event with `revision` | 43.6 |
+| G15 | No Python repr in human output; consistent fields inside one `--json` document | 43.11, 40 |
+| G16 | Empty `--out` or `--data-dir` is a usage error; metavar `DIR` everywhere; `--quiet` help text | 43.12 |
+| G17 | Key holder double refuses a scalar of zero or one | 43.13 |
+| G18 | `datagen/README.md`: one sentence on the reserved whole-dollar loans | 39 |
+| G19 | `--debug` prints exception type and frames only | 53.12 |
+
+## Round 3: required fixes in the bank agent (WP2 and WP3 together)
+
+| # | Fix | Decision |
+|---|---|---|
+| H1 | Tape guard: the table of decision 46, with tests for every forged path | 46 |
+| H2 | Insert guards on `loans` and `tape_submissions`; new `alerts` guard for insert and update; new integrity control; fixtures use legal transitions | 47 |
+| H3 | Cleaning: ASCII digits only, borrower separator set, ASCII trimming; run the neutral case table; `bank_testkit/independent.py` rewritten without regular expressions | 45, 50 |
+| H4 | `failed_checks` lists FAIL outcomes only, in fixed order | 48 |
+| H5 | One classification of outbound HTTP failures in all four clients; no library error reaches a stage as `INTERNAL_ERROR`; no redirects followed | 49 |
+| H6 | Payments client pages to `total` and rejects an incomplete or inconsistent page | 52 |
+| H7 | Settings: the single integer function; a malformed setting names its variable; ban on `isdigit` and non-ASCII `\d` with an architecture test | 37 |
+| H8 | Rewrite the case name pattern in `test_architecture.py` so the CODE-03 grep prints nothing | 34 |
+| H9 | Worker stops after the current unit; tests for check, tokenise and submit stages; README corrected | 51 |
+| H10 | Tests for the duplicate lookup: other kind and other facility accepted | 53.2 |
+| H11 | Failure details: one shape and one vocabulary in audit, logs and worker output | 58 |
+| H12 | Framework keys stripped by name before redaction; every dropped key named | 53.8 |
+| H13 | Record splitter injected; no patching of the module under test | 53.10 |
+| H14 | `bank_agent[dev]` declares the layer 1 packages its tests import; README section reference; README hand run without exported owner URL | 53.6, 53.11, 53.13 |
+| H15 | Library log records and `schema_migration_applied` as in WP1 | 43.6 |
+| H16 | `serve` and `worker` refuse to start as owner, superuser or with a forbidden privilege | 43.4 |
+| H17 | `--debug` prints exception type and frames only | 53.12 |
+| H18 | Halt rule covers resubmission and case positions; three activation conditions; 409 `REGISTRY_INTEGRITY_BROKEN` | 56 |
+| H19 | Quarantine table, audit action, integrity section, halt on a quarantined checkpoint message | 57 |
+| H20 | `DEPENDENCY_REJECTED` (502) replaces `DEPENDENCY_REFUSED`; transient versus permanent mapping for synchronous actions | 59 |
+| H21 | `certificates` with a surrogate key and partial unique indexes; `CERTIFICATE_INVALID` retryable; section status and halt as in decision 61; tests for fail, restore, retry, complete | 61 |
+| H22 | No redirects, request id binding, bounded JSON, `Allow` on 405: built into the HTTP layer when WP4 writes it | 35, 36, 38, 43.5 |
+
+Ratified as built in WP3, no change: `checkpoints_seen.body` (54), `attempts` counting every POST (55), the deep verification checkpoint reference, `UNKNOWN_RESULT`, the dependency names (60).

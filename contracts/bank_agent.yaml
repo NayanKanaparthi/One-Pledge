@@ -119,6 +119,8 @@ paths:
                   externalValue: examples/bank_agent/me.response.json
         '401':
           $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
   /v1/facilities:
     get:
       tags: [facilities]
@@ -141,6 +143,8 @@ paths:
         '401':
           $ref: '#/components/responses/Error'
         '403':
+          $ref: '#/components/responses/Error'
+        '422':
           $ref: '#/components/responses/Error'
   /v1/tapes:
     post:
@@ -239,6 +243,8 @@ paths:
           $ref: '#/components/responses/Error'
         '403':
           $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
   /v1/tapes/{submission_id}:
     get:
       tags: [tapes]
@@ -262,6 +268,8 @@ paths:
         '403':
           $ref: '#/components/responses/Error'
         '404':
+          $ref: '#/components/responses/Error'
+        '422':
           $ref: '#/components/responses/Error'
   /v1/tapes/{submission_id}/items:
     get:
@@ -294,6 +302,8 @@ paths:
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
   /v1/tapes/{submission_id}/retry:
     post:
       tags: [tapes]
@@ -324,6 +334,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          $ref: '#/components/responses/Error'
   /v1/releases:
     post:
       tags: [tapes]
@@ -405,6 +417,8 @@ paths:
           $ref: '#/components/responses/Error'
         '403':
           $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
   /v1/loans/search:
     post:
       tags: [loans]
@@ -457,6 +471,8 @@ paths:
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
   /v1/loans/{loan_id}/lineage:
     get:
       tags: [loans]
@@ -481,6 +497,8 @@ paths:
         '403':
           $ref: '#/components/responses/Error'
         '404':
+          $ref: '#/components/responses/Error'
+        '422':
           $ref: '#/components/responses/Error'
   /v1/loans/{loan_id}/resubmit:
     post:
@@ -512,6 +530,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          $ref: '#/components/responses/Error'
+        '502':
+          $ref: '#/components/responses/Error'
         '503':
           description: DEPENDENCY_UNAVAILABLE. Nothing changed; repeat the call (it is idempotent).
           content:
@@ -557,6 +579,8 @@ paths:
           $ref: '#/components/responses/Error'
         '403':
           $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
   /v1/alerts/{alert_id}:
     get:
       tags: [alerts]
@@ -580,6 +604,8 @@ paths:
         '403':
           $ref: '#/components/responses/Error'
         '404':
+          $ref: '#/components/responses/Error'
+        '422':
           $ref: '#/components/responses/Error'
   /v1/alerts/{alert_id}/review:
     post:
@@ -628,6 +654,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
           $ref: '#/components/responses/Error'
+        '502':
+          $ref: '#/components/responses/Error'
         '503':
           $ref: '#/components/responses/Error'
   /v1/certificates:
@@ -664,6 +692,8 @@ paths:
           $ref: '#/components/responses/Error'
         '403':
           $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
   /v1/certificates/{certificate_id}:
     get:
       tags: [certificates]
@@ -693,6 +723,8 @@ paths:
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
   /v1/integrity:
     get:
       tags: [integrity]
@@ -712,6 +744,8 @@ paths:
                 broken:
                   externalValue: examples/bank_agent/integrity.broken.response.json
         '401':
+          $ref: '#/components/responses/Error'
+        '422':
           $ref: '#/components/responses/Error'
   /v1/integrity/verify:
     post:
@@ -734,6 +768,10 @@ paths:
           $ref: '#/components/responses/Error'
         '403':
           $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        '502':
+          $ref: '#/components/responses/Error'
         '503':
           $ref: '#/components/responses/Error'
   /v1/registry/sync:
@@ -755,6 +793,10 @@ paths:
         '401':
           $ref: '#/components/responses/Error'
         '403':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        '502':
           $ref: '#/components/responses/Error'
         '503':
           $ref: '#/components/responses/Error'
@@ -812,6 +854,8 @@ paths:
           $ref: '#/components/responses/Error'
         '403':
           $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
   /v1/users:
     get:
       tags: [users]
@@ -834,6 +878,8 @@ paths:
         '401':
           $ref: '#/components/responses/Error'
         '403':
+          $ref: '#/components/responses/Error'
+        '422':
           $ref: '#/components/responses/Error'
     post:
       tags: [users]
@@ -2126,6 +2172,17 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DatabaseControl'
+    RegistryMessagesSection:
+      type: object
+      additionalProperties: false
+      required: [status, quarantined]
+      properties:
+        status:
+          $ref: '#/components/schemas/IntegrityStatus'
+        quarantined:
+          type: integer
+          minimum: 0
+          description: Registry outbox messages of a known type whose payload did not match the contract. They are kept as evidence and acknowledged.
     IntegrityReport:
       type: object
       additionalProperties: false
@@ -2151,6 +2208,8 @@ components:
           $ref: '#/components/schemas/RawDataSection'
         database_controls:
           $ref: '#/components/schemas/DatabaseControlsSection'
+        registry_messages:
+          $ref: '#/components/schemas/RegistryMessagesSection'
     SyncResult:
       type: object
       additionalProperties: false
@@ -2230,6 +2289,8 @@ components:
                 - POSITION_ALREADY_RECORDED
                 - USER_EMAIL_TAKEN
                 - LAST_ADMIN
+                - REGISTRY_INTEGRITY_BROKEN
+                - DEPENDENCY_REJECTED
                 - DEPENDENCY_UNAVAILABLE
                 - NOT_READY
                 - INTERNAL_ERROR
