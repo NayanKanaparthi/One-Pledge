@@ -27,7 +27,7 @@ from onepledge_outside_records.domain.records import (
     TitleRecord,
     VinText,
 )
-from onepledge_outside_records.interface.http.plumbing import AccessLogMiddleware, install_error_handlers
+from onepledge_outside_records.interface.http.plumbing import new_service_app
 from onepledge_outside_records.interface.http.query import MAX_OFFSET, QueryParameters
 
 
@@ -96,9 +96,7 @@ def create_app(reader: RecordsReader) -> FastAPI:
     """The app around one records reader."""
     authenticate = AuthenticateClient(reader)
     get_title, list_payments, get_contracts = GetTitle(reader), ListPayments(reader), GetContracts(reader)
-    app = FastAPI(title="OnePledge outside records", docs_url=None, redoc_url=None, openapi_url=None)
-    install_error_handlers(app)
-    app.add_middleware(AccessLogMiddleware)
+    app = new_service_app("OnePledge outside records")
 
     def client(request: Request) -> None:
         found = authenticate.run(request.headers.get("x-api-key"))
@@ -130,8 +128,8 @@ def create_app(reader: RecordsReader) -> FastAPI:
         return JSONResponse({"vin": found[0].vin, "contracts": [_contract_json(c) for c in found]})
 
     @app.get("/healthz")
-    def healthz(request: Request) -> JSONResponse:
-        no_parameters(request)
+    def healthz() -> JSONResponse:
+        # Probes add cache busters: health ignores its query (SPEC_DECISIONS 41).
         return JSONResponse({"status": "ok", "service": "outside_records"})
 
     return app

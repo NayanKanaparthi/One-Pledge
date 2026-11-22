@@ -58,7 +58,8 @@ class Composition:
         return RegisterClient(SqlClientRegistry(self._engines.engine(settings.require_migration_url())))
 
     def service(self, settings: ServeSettings) -> FastAPI:
-        """The API on the read-only app role, after checking the schema is in place."""
+        """The API on the app role, once the schema is in place and the role is shown unable to write."""
         reader = SqlRecordsReader(self._engines.engine(settings.require_database_url()))
         reader.ensure_readable()
+        reader.ensure_read_only()
         return create_app(reader)

@@ -9,6 +9,7 @@ command needs. Database URLs carry passwords: they are held as secrets and never
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 from collections.abc import Mapping
@@ -18,11 +19,14 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, SecretStr
 
 from onepledge_outside_records.domain.errors import OperatorError
+from onepledge_outside_records.domain.text_values import IntegerIssue, parse_integer_text
 
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 _ROLE_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
-_PORT = re.compile(r"[0-9]{1,5}", re.ASCII)
 MAX_PORT = 65535
+DEFAULT_BIND_HOST = "127.0.0.1"
+# Settings are trimmed of ASCII whitespace only; any other space is part of the value and fails it.
+ASCII_WHITESPACE = " \t\r\n"
 
 # The variables each administrative command reads; nothing else is parsed.
 ADMIN_VARIABLES: Mapping[str, frozenset[str]] = MappingProxyType(
@@ -49,13 +53,21 @@ def _invalid(sentence: str) -> OperatorError:
 
 
 def _value(environ: Mapping[str, str], name: str) -> str | None:
-    text = environ.get(name, "").strip()
+    text = environ.get(name, "").strip(ASCII_WHITESPACE)
     return text or None
 
 
 def _secret(environ: Mapping[str, str], name: str) -> SecretStr | None:
     text = _value(environ, name)
     return SecretStr(text) if text is not None else None
+
+
+def _bind_host(environ: Mapping[str, str]) -> str:
+    text = _value(environ, "BIND_HOST") or DEFAULT_BIND_HOST
+    try:
+        return str(ipaddress.ip_address(text))
+    except ValueError:
+        raise _invalid("BIND_HOST must be an IP address such as 127.0.0.1 or 0.0.0.0.") from None
 
 
 def _log_level(environ: Mapping[str, str]) -> str:
@@ -79,11 +91,12 @@ class ServeSettings(BaseModel):
     def from_env(cls, environ: Mapping[str, str]) -> Self:
         """Parse the four serving variables; requirements are checked when serving starts."""
         port_text = _value(environ, "PORT")
-        if port_text is not None and (not _PORT.fullmatch(port_text) or not 1 <= int(port_text) <= MAX_PORT):
-            raise _invalid("PORT must be a TCP port number.")
+        port = parse_integer_text(port_text, 1, MAX_PORT) if port_text is not None else None
+        if isinstance(port, IntegerIssue):
+            raise _invalid("PORT must be a TCP port number from 1 to 65535, in ASCII digits.")
         return cls(
-            bind_host=_value(environ, "BIND_HOST") or "127.0.0.1",
-            port=int(port_text) if port_text is not None else None,
+            bind_host=_bind_host(environ),
+            port=port,
             database_url=_secret(environ, "DATABASE_URL"),
             log_level=_log_level(environ),
         )

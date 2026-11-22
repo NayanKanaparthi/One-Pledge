@@ -26,7 +26,10 @@ def run_migrations() -> None:
     try:
         with engine.connect() as connection:
             context.configure(
-                connection=connection, target_metadata=Base.metadata, transaction_per_migration=True
+                connection=connection,
+                target_metadata=Base.metadata,
+                transaction_per_migration=True,
+                on_version_apply=config.attributes.get("on_version_apply"),
             )
             with context.begin_transaction():
                 context.run_migrations()

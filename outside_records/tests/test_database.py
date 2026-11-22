@@ -170,14 +170,15 @@ def test_a_failed_seed_changes_nothing(
 ) -> None:
     before = contents(owner_engine)
     directory = copy_records(tmp_path)
-    payments = directory / "outside_records" / "payments.csv"
-    lines = payments.read_text().splitlines()
+    # A title status outside the CHECK constraint: the file is well formed, the database refuses it.
+    titles = directory / "outside_records" / "titles.csv"
+    lines = titles.read_text().splitlines()
     cells = lines[1].split(",")
-    cells[3] = "0"
-    payments.write_text("\n".join([lines[0], ",".join(cells), *lines[2:]]) + "\n")
+    cells[2] = "WRECKED"
+    titles.write_text("\n".join([lines[0], ",".join(cells), *lines[2:]]) + "\n")
     with pytest.raises(OperatorError, match="nothing was changed") as raised:
         SeedRecords(CsvRecordsSource(), SqlRecordsWriter(owner_engine)).run(directory)
-    assert cells[1] not in raised.value.sentence
+    assert cells[0] not in raised.value.sentence and "WRECKED" not in raised.value.sentence
     assert contents(owner_engine) == before
 
 

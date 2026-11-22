@@ -290,9 +290,7 @@ def test_repeated_and_unknown_parameters_are_refused_without_echo(
     assert CANARY not in response.text
 
 
-@pytest.mark.parametrize(
-    "url", ["/v1/titles/{vin}?{canary}=1", "/v1/contracts/{vin}?{canary}=1", "/healthz?{canary}=1"]
-)
+@pytest.mark.parametrize("url", ["/v1/titles/{vin}?{canary}=1", "/v1/contracts/{vin}?{canary}=1"])
 def test_routes_without_parameters_refuse_any(
     authorised: Call, contract: Contract, seeded_vin: str, url: str
 ) -> None:

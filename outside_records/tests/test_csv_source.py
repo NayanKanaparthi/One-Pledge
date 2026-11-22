@@ -36,14 +36,61 @@ def second_line(text: str) -> str:
     return text.splitlines()[1]
 
 
+def replace_cell(column: int, value: str) -> Callable[[str], str]:
+    """Replace one cell of the first data row."""
+
+    def change(text: str) -> str:
+        lines = text.splitlines(keepends=True)
+        cells = lines[1].rstrip("\n").split(",")
+        cells[column] = value
+        lines[1] = ",".join(cells) + "\n"
+        return "".join(lines)
+
+    return change
+
+
+# SPEC_DECISIONS 43.3 and 45: a malformed file names the file and the problem; digits are ASCII.
 @pytest.mark.parametrize(
     ("name", "change", "fragment"),
     [
-        ("titles.csv", lambda t: t.replace("vin,state", "vin,st", 1), "layout"),
-        ("payments.csv", lambda t: t + "extra,cells\n", "layout"),
-        ("titles.csv", lambda t: t.replace(second_line(t)[:17], second_line(t)[:16] + "O", 1), "VIN"),
-        ("payments.csv", lambda t: t.replace(second_line(t).split(",")[2], "2025-13-01", 1), "malformed"),
-        ("contracts.csv", lambda t: t.replace(second_line(t).split(",")[3], "12.5", 1), "malformed"),
+        (
+            "titles.csv",
+            lambda t: t.replace("vin,state", "vin,st", 1),
+            "does not start with the header vin, state",
+        ),
+        ("payments.csv", lambda t: t + "extra,cells\n", "line .* has 2 cells instead of 5"),
+        (
+            "titles.csv",
+            lambda t: t.replace(second_line(t)[:17], second_line(t)[:16] + "O", 1),
+            "titles.csv line 2 column vin",
+        ),
+        (
+            "payments.csv",
+            replace_cell(2, "2025-13-01"),
+            "payments.csv line 2 column paid_on is not a YYYY-MM-DD date",
+        ),
+        ("payments.csv", replace_cell(2, "2025-W01-1"), "column paid_on is not a YYYY-MM-DD date"),
+        (
+            "payments.csv",
+            replace_cell(2, "\u0662\u0660\u0662\u0665-01-01"),
+            "column paid_on is not a YYYY-MM-DD date",
+        ),
+        (
+            "contracts.csv",
+            replace_cell(3, "12.5"),
+            "contracts.csv line 2 column amount_cents is not a positive",
+        ),
+        ("contracts.csv", replace_cell(3, "\u00b2345"), "column amount_cents is not a positive whole number"),
+        (
+            "payments.csv",
+            replace_cell(3, "\uff11\uff12"),
+            "column amount_cents is not a positive whole number",
+        ),
+        ("payments.csv", replace_cell(3, "9" * 5000), "column amount_cents is not a positive whole number"),
+        ("payments.csv", replace_cell(3, "0"), "column amount_cents is not a positive whole number"),
+        ("payments.csv", replace_cell(3, "+5"), "column amount_cents is not a positive whole number"),
+        ("titles.csv", replace_cell(4, "2026-02-30"), "titles.csv line 2 column lien_recorded_on"),
+        ("titles.csv", lambda t: t + '"unterminated\n', "is not well formed CSV"),
     ],
 )
 def test_malformed_files_stop_with_one_sentence(
@@ -58,6 +105,7 @@ def test_malformed_files_stop_with_one_sentence(
     with pytest.raises(OperatorError, match=fragment) as raised:
         CsvRecordsSource().load(directory)
     assert "\n" not in raised.value.sentence
+    assert "Unexpected" not in raised.value.sentence
 
 
 def test_a_file_with_only_its_header_holds_no_records(

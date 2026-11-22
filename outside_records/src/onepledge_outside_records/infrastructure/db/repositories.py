@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 import psycopg
-from sqlalchemy import Connection, Engine, delete, func, select
+from sqlalchemy import Connection, Engine, delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import DBAPIError, OperationalError, ProgrammingError
 
@@ -67,6 +67,27 @@ def _owner_transaction(engine: Engine) -> Iterator[Connection]:
         ) from None
 
 
+# What the connected role is: superuser, owner of a table of the schema, holder of a write privilege.
+_ROLE_PRIVILEGES = """
+SELECT
+    (SELECT rolsuper FROM pg_roles WHERE rolname = current_user),
+    EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = current_schema() AND tableowner = current_user),
+    EXISTS (
+        SELECT 1 FROM pg_tables AS t, unnest(ARRAY['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE']) AS p(privilege)
+        WHERE t.schemaname = current_schema()
+          AND has_table_privilege(current_user, quote_ident(t.schemaname) || '.' || quote_ident(t.tablename),
+                                  p.privilege)
+    )
+"""
+
+
+def _unsafe_role(problem: str) -> OperatorError:
+    return OperatorError(
+        f"The role of DATABASE_URL {problem}; serve must connect as the read-only app role.",
+        "UNSAFE_DATABASE_ROLE",
+    )
+
+
 class SqlRecordsReader:
     """Reads records and clients. Built on the app role engine, which can only SELECT."""
 
@@ -83,6 +104,22 @@ class SqlRecordsReader:
                 "The database at DATABASE_URL cannot be read; run db provision and db migrate first.",
                 "NOT_MIGRATED",
             ) from None
+
+    def ensure_read_only(self) -> None:
+        """Refuse to serve as a role that could write (SPEC 6.1, SPEC_DECISIONS 43.4).
+
+        The serving role must not be a superuser, must own no table of the schema, and must
+        hold none of INSERT, UPDATE, DELETE or TRUNCATE on any table, so "cannot write even if
+        the code tried" is a property checked at startup, not only of the deployment.
+        """
+        with _connection(self._engine) as connection:
+            superuser, owner, writer = connection.execute(text(_ROLE_PRIVILEGES)).one()
+        if superuser:
+            raise _unsafe_role("is a superuser")
+        if owner:
+            raise _unsafe_role("owns tables of the outside records schema")
+        if writer:
+            raise _unsafe_role("may insert, update, delete or truncate rows")
 
     def title(self, vin: VinText) -> TitleRecord | None:
         """The title record of a VIN."""

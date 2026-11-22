@@ -125,3 +125,42 @@ def test_every_module_has_a_docstring_and_never_names_the_scoring_file() -> None
 def test_no_type_check_is_suppressed() -> None:
     for path in [*PACKAGE.rglob("*.py")]:
         assert "type: " + "ignore" not in path.read_text(encoding="utf-8"), path.name
+
+
+def parsed(path: Path) -> list[ast.AST]:
+    return list(ast.walk(ast.parse(path.read_text(encoding="utf-8"))))
+
+
+# SPEC_DECISIONS 37 and 45: one module turns text into integers and dates, by arithmetic over
+# the ten ASCII digits. Nothing else calls `int()`, asks Unicode whether a character is a digit,
+# writes the Unicode digit class `\d`, or parses an ISO date with the permissive standard parser.
+TEXT_VALUES = SOURCE / "domain" / "text_values.py"
+UNICODE_DIGIT_PREDICATES = frozenset({"isdigit", "isdecimal", "isnumeric"})
+
+
+def test_no_text_becomes_a_number_or_date_outside_the_one_module() -> None:
+    for path in [*modules(), *sorted(MIGRATIONS.rglob("*.py"))]:
+        nodes = parsed(path)
+        name = path.relative_to(PACKAGE)
+        called = {n.func.id for n in nodes if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        attributes = {n.attr for n in nodes if isinstance(n, ast.Attribute)}
+        strings = [n.value for n in nodes if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+        assert "int" not in called, f"{name} calls int(); use domain.text_values"
+        assert not attributes & UNICODE_DIGIT_PREDICATES, (
+            f"{name} asks Unicode whether a character is a digit"
+        )
+        assert not [s for s in strings if "\\d" in s], f"{name} writes the Unicode digit class in a pattern"
+        if path != TEXT_VALUES:
+            assert "fromisoformat" not in attributes, f"{name} parses a date outside domain.text_values"
+
+
+# SPEC_DECISIONS 35: the app is built in one place, with slash redirection off.
+def test_the_app_is_built_only_with_slash_redirection_off() -> None:
+    builders = []
+    for path in modules():
+        for node in parsed(path):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "FastAPI":
+                flag = {k.arg: k.value for k in node.keywords}.get("redirect_slashes")
+                assert isinstance(flag, ast.Constant) and flag.value is False, path.name
+                builders.append(path.name)
+    assert builders == ["plumbing.py"]

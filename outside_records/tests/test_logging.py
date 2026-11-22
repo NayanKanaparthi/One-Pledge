@@ -94,11 +94,12 @@ def keys_written_by_the_source() -> set[str]:
 
 
 @pytest.mark.unit
-def test_the_allow_list_is_the_spec_keys_this_service_writes_plus_client() -> None:
+def test_the_allow_list_is_the_spec_keys_this_service_writes_plus_client_and_revision() -> None:
     written = keys_written_by_the_source()
     assert set(ALLOWED_KEYS) == PROCESSOR_KEYS | EXCEPTION_KEYS | written
-    assert set(ALLOWED_KEYS) - {"client"} <= SPEC_16_5_KEYS
-    assert "client" in ALLOWED_KEYS
+    # `client` is SPEC_DECISIONS 5; `revision` is SPEC_DECISIONS 43.6 (one record per migration).
+    assert set(ALLOWED_KEYS) - {"client", "revision"} <= SPEC_16_5_KEYS
+    assert {"client", "revision"} <= set(ALLOWED_KEYS)
     assert "user_id" not in ALLOWED_KEYS
 
 
@@ -242,12 +243,54 @@ def test_a_served_failure_writes_exactly_one_error_record(
         if server.started:
             break
         time.sleep(0.05)
-    response = httpx.get(f"http://127.0.0.1:{port}/v1/boom", timeout=5)
+    request_id = "44444444-4444-4444-8444-444444444444"
+    response = httpx.get(f"http://127.0.0.1:{port}/v1/boom", headers={"X-Request-ID": request_id}, timeout=5)
     server.should_exit = True
     thread.join(timeout=10)
     assert (response.status_code, response.json()["error"]["code"]) == (500, "INTERNAL_ERROR")
     records = log_lines()
     errors = [record for record in records if record["level"] == "error"]
     assert [record["event"] for record in errors] == ["unhandled_exception"]
+    assert errors[0]["request_id"] == request_id
     assert {record["service"] for record in records} == {"outside_records"}
     assert CANARY_VIN not in json.dumps(records) and "failed" not in json.dumps(records)
+
+
+@pytest.mark.unit
+def test_every_dropped_key_is_named_whatever_its_first_character() -> None:
+    result = RedactionProcessor()(None, "info", {"event": "x", "_private": 1, "__dunder": 2})
+    assert dict(result) == {"event": "x", "redacted_keys": ["__dunder", "_private"]}
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("value", "kept"), [("0002_grants", True), ("0002-grants", False), ("A1", False)])
+def test_a_revision_keeps_only_its_shape(value: str, kept: bool) -> None:
+    result = RedactionProcessor()(None, "info", {"event": "schema_migration_applied", "revision": value})
+    assert result["revision"] == (value if kept else "[REDACTED]")
+
+
+# SPEC_DECISIONS 43.6: library records below WARNING are dropped; above it only logger, level
+# and exception type are kept.
+@pytest.mark.integration
+def test_library_records_below_warning_are_dropped(log_lines: Callable[[], list[dict[str, Any]]]) -> None:
+    log_lines()
+    for name in ("alembic.runtime.migration", "uvicorn.error", "sqlalchemy.engine"):
+        logging.getLogger(name).info("Running upgrade  -> 0001_schema, %s", CANARY_VIN)
+        logging.getLogger(name).debug("debug %s", CANARY_VIN)
+    assert log_lines() == []
+
+
+@pytest.mark.integration
+def test_library_warnings_keep_logger_level_and_exception_type_only(
+    log_lines: Callable[[], list[dict[str, Any]]],
+) -> None:
+    log_lines()
+    try:
+        raise ValueError(CANARY_VIN)
+    except ValueError:
+        logging.getLogger("uvicorn.error").error("failed %s", CANARY_VIN, exc_info=True)
+    (record,) = log_lines()
+    assert (record["event"], record["logger"], record["level"]) == ("library_log", "uvicorn.error", "error")
+    assert record["exception_type"] == "ValueError"
+    assert set(record) <= {"ts", "level", "event", "service", "logger", "exception_type", "stack"}
+    assert CANARY_VIN not in json.dumps(record)

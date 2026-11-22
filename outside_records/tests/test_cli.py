@@ -14,7 +14,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
+import psycopg
 import pytest
+from psycopg import sql
+from sqlalchemy.engine import make_url
 
 from onepledge_outside_records.infrastructure.db.migrations import MigrationRunner
 from onepledge_outside_records.interface.cli import main
@@ -158,7 +161,9 @@ def test_an_unexpected_error_is_one_sentence_and_debug_adds_the_traceback(
     assert (code, out, err.splitlines()[-1]) == (1, "", "Unexpected error. Run with --debug for details.")
     assert "Traceback" not in err
     code, _, err = run(["db", "migrate", "--debug"], **database.environment())
-    assert code == 1 and "Traceback (most recent call last)" in err and "RuntimeError: boom" in err
+    # SPEC_DECISIONS 53.12: the type and the frames, never the message or a source line.
+    assert code == 1 and "RuntimeError, raised at:\n" in err and " explode\n" in err
+    assert "boom" not in err and "Traceback" not in err and 'raise RuntimeError("boom")' not in err
 
 
 def test_serve_refuses_json_as_a_usage_error(run: Run, capsys: pytest.CaptureFixture[str]) -> None:
@@ -212,7 +217,7 @@ def test_serving_on_a_busy_port_says_so(run: Run, database: Database) -> None:
         port = busy.getsockname()[1]
         code, _, err = run(["serve"], **database.environment(PORT=str(port)))
     assert code == 1
-    assert err == f"Port {port} on 127.0.0.1 is already in use or not available; set another PORT.\n"
+    assert err == f"Port {port} on 127.0.0.1 is already in use or not permitted; set another PORT.\n"
 
 
 def test_adding_a_client_needs_the_key_variable_and_the_key_format(run: Run, database: Database) -> None:
@@ -235,6 +240,133 @@ def test_seeding_a_directory_that_is_not_a_data_set_says_so(
     code, _, err = run(["seed", "--data-dir", str(tmp_path)], **database.environment())
     assert code == 1
     assert err.endswith("cannot be read; pass the directory written by onepledge-datagen.\n")
+
+
+# SPEC_DECISIONS 43.4: serve refuses a role that could write, with one line naming DATABASE_URL.
+
+
+def test_serving_as_the_owner_role_is_refused(run: Run, database: Database) -> None:
+    env = database.environment(PORT=str(free_port()), DATABASE_URL=database.owner_url)
+    assert run(["serve"], **env) == (
+        1,
+        "",
+        "The role of DATABASE_URL owns tables of the outside records schema; "
+        "serve must connect as the read-only app role.\n",
+    )
+
+
+def test_serving_as_a_superuser_is_refused(run: Run, database: Database) -> None:
+    admin_on_database = str(make_url(database.admin_url).set(database=database.target.database))
+    env = database.environment(PORT=str(free_port()), DATABASE_URL=admin_on_database)
+    code, out, err = run(["serve"], **env)
+    assert (code, out) == (1, "")
+    assert err == "The role of DATABASE_URL is a superuser; serve must connect as the read-only app role.\n"
+
+
+@pytest.mark.parametrize("privilege", ["INSERT", "UPDATE", "DELETE", "TRUNCATE"])
+def test_serving_as_a_role_with_a_write_privilege_is_refused(
+    run: Run, database: Database, privilege: str
+) -> None:
+    grant = sql.SQL("GRANT {} ON payments TO {}").format(
+        sql.SQL(privilege), sql.Identifier(database.app_role)
+    )
+    revoke = sql.SQL("REVOKE {} ON payments FROM {}").format(
+        sql.SQL(privilege), sql.Identifier(database.app_role)
+    )
+    with psycopg.connect(database.admin_url, autocommit=True, dbname=database.target.database) as admin:
+        admin.execute(grant)
+        try:
+            code, _, err = run(["serve"], **database.environment(PORT=str(free_port())))
+        finally:
+            admin.execute(revoke)
+    assert code == 1
+    assert err == (
+        "The role of DATABASE_URL may insert, update, delete or truncate rows; "
+        "serve must connect as the read-only app role.\n"
+    )
+
+
+# SPEC_DECISIONS 43.3: ordinary mistakes get their own sentence, never the last resort one.
+
+
+def test_provisioning_with_an_admin_url_that_is_not_a_superuser_says_so(run: Run, database: Database) -> None:
+    code, out, err = run(["db", "provision"], **database.environment(PG_ADMIN_URL=database.owner_url))
+    assert (code, out) == (1, "")
+    assert err == "PG_ADMIN_URL connects as a role that is not a superuser; db provision needs one.\n"
+
+
+@pytest.mark.parametrize(
+    ("variable", "value", "sentence"),
+    [
+        (
+            "BIND_HOST",
+            "999.1.1.1",
+            "Configuration error: BIND_HOST must be an IP address such as 127.0.0.1 or 0.0.0.0.\n",
+        ),
+        (
+            "BIND_HOST",
+            "localhost",
+            "Configuration error: BIND_HOST must be an IP address such as 127.0.0.1 or 0.0.0.0.\n",
+        ),
+        (
+            "PORT",
+            "\u00b2",
+            "Configuration error: PORT must be a TCP port number from 1 to 65535, in ASCII digits.\n",
+        ),
+        (
+            "PORT",
+            "9" * 5000,
+            "Configuration error: PORT must be a TCP port number from 1 to 65535, in ASCII digits.\n",
+        ),
+        (
+            "PORT",
+            "+80",
+            "Configuration error: PORT must be a TCP port number from 1 to 65535, in ASCII digits.\n",
+        ),
+        (
+            "PORT",
+            "65536",
+            "Configuration error: PORT must be a TCP port number from 1 to 65535, in ASCII digits.\n",
+        ),
+    ],
+)
+def test_a_malformed_serving_setting_is_one_sentence_naming_it(
+    run: Run, database: Database, variable: str, value: str, sentence: str
+) -> None:
+    env = database.environment(PORT=str(free_port()))
+    assert run(["serve"], **{**env, variable: value}) == (1, "", sentence)
+
+
+def test_a_bind_host_that_is_not_local_is_one_sentence(run: Run, database: Database) -> None:
+    env = database.environment(PORT=str(free_port()), BIND_HOST="192.0.2.77")
+    assert run(["serve"], **env) == (
+        1,
+        "",
+        "BIND_HOST 192.0.2.77 is not an address of this machine; set BIND_HOST to 127.0.0.1 or 0.0.0.0.\n",
+    )
+
+
+def test_an_empty_data_dir_is_a_usage_error(run: Run, capsys: pytest.CaptureFixture[str]) -> None:
+    for value in ("", "  "):
+        with pytest.raises(SystemExit) as raised:
+            run(["seed", "--data-dir", value])
+        assert raised.value.code == 2
+    assert "--data-dir: must name a directory, not be empty" in capsys.readouterr().err
+
+
+# SPEC_DECISIONS 43.6: Alembic's own INFO lines are dropped; migrate writes one record per revision.
+
+
+def test_migrate_writes_one_record_per_applied_revision(run: Run, provisioned_database: Database) -> None:
+    code, _, err = run(["db", "migrate"], **provisioned_database.environment(LOG_LEVEL="INFO"))
+    assert code == 0
+    lines = json_lines(err)
+    applied = [line for line in lines if line["event"] == "schema_migration_applied"]
+    assert [line["revision"] for line in applied] == ["0001_schema", "0002_grants"]
+    assert not [line for line in lines if line["event"] == "library_log"]
+    assert all(set(line) <= {"ts", "level", "event", "service", "revision", "logger"} for line in lines)
+    code, _, err = run(["db", "migrate"], **provisioned_database.environment(LOG_LEVEL="INFO"))
+    assert code == 0 and not [line for line in json_lines(err) if line["event"] == "schema_migration_applied"]
 
 
 def get(url: str, key: str | None = None) -> tuple[int, dict[str, object]]:

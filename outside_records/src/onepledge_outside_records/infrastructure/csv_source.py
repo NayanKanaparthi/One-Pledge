@@ -12,6 +12,12 @@ from types import MappingProxyType
 from onepledge_outside_records.application.ports import RecordSet
 from onepledge_outside_records.domain.errors import OperatorError
 from onepledge_outside_records.domain.records import VIN_PATTERN, Contract, Payment, TitleRecord
+from onepledge_outside_records.domain.text_values import (
+    MAX_INTEGER,
+    IntegerIssue,
+    parse_integer_text,
+    parse_iso_date,
+)
 
 HEADERS: Mapping[str, tuple[str, ...]] = MappingProxyType(
     {
@@ -37,42 +43,78 @@ def _rows(directory: Path, name: str) -> list[list[str]]:
         raise OperatorError(
             f"{path} cannot be read; pass the directory written by onepledge-datagen.", "INVALID_INPUT"
         ) from None
-    rows = list(csv.reader(io.StringIO(text, newline=""), strict=True))
-    if not rows or tuple(rows[0]) != HEADERS[name] or any(len(row) != len(HEADERS[name]) for row in rows[1:]):
-        raise OperatorError(f"{path} does not have the outside records layout.", "INVALID_INPUT")
+    try:
+        rows = list(csv.reader(io.StringIO(text, newline=""), strict=True))
+    except csv.Error:
+        raise OperatorError(f"{path} is not well formed CSV.", "INVALID_INPUT") from None
+    if not rows or tuple(rows[0]) != HEADERS[name]:
+        raise OperatorError(
+            f"{path} does not start with the header {', '.join(HEADERS[name])}.", "INVALID_INPUT"
+        )
+    for line, row in enumerate(rows[1:], start=2):
+        if len(row) != len(HEADERS[name]):
+            raise OperatorError(
+                f"{path} line {line} has {len(row)} cells instead of {len(HEADERS[name])}.", "INVALID_INPUT"
+            )
     return rows[1:]
 
 
-def _vin(text: str, name: str) -> str:
-    if not VIN_PATTERN.fullmatch(text):
-        raise OperatorError(f"{name} holds a VIN that does not match the contract pattern.", "INVALID_INPUT")
-    return text
+class _Cells:
+    """The cells of one CSV row, each parsed with an error naming the file, line and column."""
+
+    def __init__(self, name: str, line: int, row: list[str]) -> None:
+        self._name, self._line, self._row = name, line, row
+
+    def _refuse(self, column: int, problem: str) -> OperatorError:
+        column_name = HEADERS[self._name][column]
+        return OperatorError(
+            f"{self._name} line {self._line} column {column_name} {problem}.", "INVALID_INPUT"
+        )
+
+    def text(self, column: int) -> str:
+        return self._row[column]
+
+    def vin(self, column: int) -> str:
+        value = self._row[column]
+        if not VIN_PATTERN.fullmatch(value):
+            raise self._refuse(column, "does not match the VIN pattern of the contract")
+        return value
+
+    def day(self, column: int) -> date:
+        value = parse_iso_date(self._row[column])
+        if value is None:
+            raise self._refuse(column, "is not a YYYY-MM-DD date")
+        return value
+
+    def optional_day(self, column: int) -> date | None:
+        return self.day(column) if self._row[column] else None
+
+    def cents(self, column: int) -> int:
+        value = parse_integer_text(self._row[column], 1, MAX_INTEGER)
+        if isinstance(value, IntegerIssue):
+            raise self._refuse(column, "is not a positive whole number of cents")
+        return value
 
 
-def _optional_date(text: str) -> date | None:
-    return date.fromisoformat(text) if text else None
+def _cells(directory: Path, name: str) -> list[_Cells]:
+    return [_Cells(name, line, row) for line, row in enumerate(_rows(directory, name), start=2)]
 
 
 class CsvRecordsSource:
     """The three CSV files of a data directory."""
 
     def load(self, data_dir: Path) -> RecordSet:
-        """Parse and validate every row."""
-        try:
-            titles = tuple(
-                TitleRecord(_vin(r[0], "titles.csv"), r[1], r[2], r[3] or None, _optional_date(r[4]))
-                for r in _rows(data_dir, "titles.csv")
-            )
-            payments = tuple(
-                Payment(r[0], _vin(r[1], "payments.csv"), date.fromisoformat(r[2]), int(r[3]), r[4])
-                for r in _rows(data_dir, "payments.csv")
-            )
-            contracts = tuple(
-                Contract(r[0], _vin(r[1], "contracts.csv"), r[2], int(r[3]), date.fromisoformat(r[4]), r[5])
-                for r in _rows(data_dir, "contracts.csv")
-            )
-        except ValueError:
-            raise OperatorError(
-                "An outside records file holds a malformed date or amount.", "INVALID_INPUT"
-            ) from None
+        """Parse and validate every row; a bad cell stops the load naming its file, line and column."""
+        titles = tuple(
+            TitleRecord(c.vin(0), c.text(1), c.text(2), c.text(3) or None, c.optional_day(4))
+            for c in _cells(data_dir, "titles.csv")
+        )
+        payments = tuple(
+            Payment(c.text(0), c.vin(1), c.day(2), c.cents(3), c.text(4))
+            for c in _cells(data_dir, "payments.csv")
+        )
+        contracts = tuple(
+            Contract(c.text(0), c.vin(1), c.text(2), c.cents(3), c.day(4), c.text(5))
+            for c in _cells(data_dir, "contracts.csv")
+        )
         return RecordSet(titles, payments, contracts)

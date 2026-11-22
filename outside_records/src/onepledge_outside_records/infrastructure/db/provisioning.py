@@ -49,6 +49,12 @@ class DatabaseProvisioner:
         """Create or update both roles, create the database, and set its privileges."""
         _check_names(target)
         with self._connect() as connection:
+            row = connection.execute("SELECT rolsuper FROM pg_roles WHERE rolname = current_user").fetchone()
+            if row is None or row[0] is not True:
+                raise OperatorError(
+                    "PG_ADMIN_URL connects as a role that is not a superuser; db provision needs one.",
+                    "CONFIGURATION_ERROR",
+                )
             for role, password in (
                 (target.owner_role, target.owner_password),
                 (target.app_role, target.app_password),

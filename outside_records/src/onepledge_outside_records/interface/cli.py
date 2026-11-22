@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import ipaddress
 import socket
 from collections.abc import Sequence
 from pathlib import Path
@@ -28,6 +29,7 @@ from onepledge_outside_records.interface.output import Console, common_options, 
 
 # The `service` value in log lines is the contract's health value (SPEC_DECISIONS 22.6).
 SERVICE_NAME = "outside_records"
+IPV6 = 6
 QUIET_LEVEL = "WARNING"
 
 
@@ -43,7 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_clients_commands(commands)
     commands.add_parser(
         "serve",
-        parents=[common_options(result=False)],
+        parents=[common_options(result=False, logs=True)],
         help="serve the API on BIND_HOST:PORT",
         description="Serve the API as the read-only app role (DATABASE_URL, PORT, BIND_HOST, LOG_LEVEL).",
     )
@@ -60,14 +62,14 @@ def _add_db_commands(commands: Commands) -> None:
     db_commands = db.add_subparsers(dest="db_command", required=True, metavar="ACTION")
     db_commands.add_parser(
         "provision",
-        parents=[common_options(result=True)],
+        parents=[common_options(result=True, logs=True)],
         help="create the roles and the database (needs PG_ADMIN_URL), idempotent",
         description="Create {db}_owner and {db}_app and the database named in DATABASE_URL and "
         "MIGRATION_DATABASE_URL, using the superuser PG_ADMIN_URL. Safe to repeat.",
     )
     db_commands.add_parser(
         "migrate",
-        parents=[common_options(result=True)],
+        parents=[common_options(result=True, logs=True)],
         help="run the migrations to head as the owner role",
         description="Run Alembic to head with MIGRATION_DATABASE_URL; grants go to DB_APP_ROLE.",
     )
@@ -76,13 +78,17 @@ def _add_db_commands(commands: Commands) -> None:
 def _add_seed_command(commands: Commands) -> None:
     seed = commands.add_parser(
         "seed",
-        parents=[common_options(result=True)],
+        parents=[common_options(result=True, logs=True)],
         help="replace the records from a data directory in one transaction",
         description="Replace title_records, payments and contracts from DIR/outside_records/*.csv "
         "as the owner role.",
     )
     seed.add_argument(
-        "--data-dir", type=Path, required=True, metavar="DIR", help="a directory written by onepledge-datagen"
+        "--data-dir",
+        type=non_empty_path,
+        required=True,
+        metavar="DIR",
+        help="a directory written by onepledge-datagen",
     )
 
 
@@ -93,7 +99,7 @@ def _add_clients_commands(commands: Commands) -> None:
     client_commands = clients.add_subparsers(dest="clients_command", required=True, metavar="ACTION")
     add = client_commands.add_parser(
         "add",
-        parents=[common_options(result=True)],
+        parents=[common_options(result=True, logs=True)],
         help="add a client or replace its key",
         description="Store the SHA-256 of the key read from an environment variable; "
         "the key itself is never stored.",
@@ -109,15 +115,30 @@ def _add_clients_commands(commands: Commands) -> None:
     )
 
 
+def non_empty_path(text: str) -> Path:
+    """A directory argument: an empty value is a usage error, not the current directory."""
+    if not text.strip():
+        raise argparse.ArgumentTypeError("must name a directory, not be empty")
+    return Path(text)
+
+
 def _port_free(host: str, port: int) -> None:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+    """One sentence when the address cannot be bound: taken, not permitted, or not of this machine."""
+    family = socket.AF_INET6 if ipaddress.ip_address(host).version == IPV6 else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as probe:
         probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             probe.bind((host, port))
         except OSError as error:
-            if error.errno in (errno.EADDRINUSE, errno.EACCES, errno.EADDRNOTAVAIL):
+            if error.errno == errno.EADDRNOTAVAIL:
                 raise OperatorError(
-                    f"Port {port} on {host} is already in use or not available; set another PORT.",
+                    f"BIND_HOST {host} is not an address of this machine; "
+                    "set BIND_HOST to 127.0.0.1 or 0.0.0.0.",
+                    "CONFIGURATION_ERROR",
+                ) from None
+            if error.errno in (errno.EADDRINUSE, errno.EACCES):
+                raise OperatorError(
+                    f"Port {port} on {host} is already in use or not permitted; set another PORT.",
                     "PORT_UNAVAILABLE",
                 ) from None
             raise

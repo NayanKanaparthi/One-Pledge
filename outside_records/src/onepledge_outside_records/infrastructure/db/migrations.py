@@ -7,14 +7,29 @@ from importlib import resources
 
 from alembic import command
 from alembic.config import Config
+from alembic.runtime.migration import MigrationInfo
 from alembic.script import ScriptDirectory
 from alembic.util import CommandError
 from sqlalchemy.exc import OperationalError
 
 from onepledge_outside_records.domain.errors import OperatorError
 from onepledge_outside_records.infrastructure.db.engines import sqlalchemy_url
+from onepledge_outside_records.infrastructure.logging_setup import LogEvent, get_logger
+
+_log = get_logger(__name__)
 
 MIGRATIONS_PACKAGE = "onepledge_outside_records_migrations"
+
+
+def _log_applied_step(*, step: MigrationInfo, **_: object) -> None:
+    """One record per revision Alembic applies or reverts (SPEC_DECISIONS 43.6).
+
+    Alembic's own INFO lines are dropped as library records, so this is the service's own
+    event for the fact they carried.
+    """
+    event = LogEvent.SCHEMA_MIGRATION_APPLIED if step.is_upgrade else LogEvent.SCHEMA_MIGRATION_REVERTED
+    for revision in sorted(step.up_revision_ids):
+        _log.info(event, revision=revision)
 
 
 def alembic_config(migration_url: str, app_role: str) -> Config:
@@ -23,6 +38,7 @@ def alembic_config(migration_url: str, app_role: str) -> Config:
     config.set_main_option("script_location", str(resources.files(MIGRATIONS_PACKAGE)))
     config.attributes["url"] = sqlalchemy_url(migration_url)
     config.attributes["app_role"] = app_role
+    config.attributes["on_version_apply"] = _log_applied_step
     return config
 
 

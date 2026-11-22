@@ -7,16 +7,13 @@ ASCII digits inside its bounds, so nothing unvalidated reaches a SQL parameter.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Collection, Sequence
 from datetime import date
 
 from onepledge_outside_records.domain.errors import ErrorDetail, ValidationFailedError
+from onepledge_outside_records.domain.text_values import IntegerIssue, parse_integer_text, parse_iso_date
 
 MAX_OFFSET = 1_000_000
-_UNSIGNED = re.compile(r"[0-9]{1,18}", re.ASCII)
-_NEGATIVE = re.compile(r"-[0-9]{1,18}", re.ASCII)
-_ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", re.ASCII)
 
 
 class QueryParameters:
@@ -51,15 +48,9 @@ class QueryParameters:
         text = self._values.get(name)
         if text is None:
             return default
-        if _NEGATIVE.fullmatch(text):
-            self.add(name, "OUT_OF_RANGE")
-            return default
-        if not _UNSIGNED.fullmatch(text):
-            self.add(name, "INVALID_INTEGER")
-            return default
-        number = int(text)
-        if not minimum <= number <= maximum:
-            self.add(name, "OUT_OF_RANGE")
+        number = parse_integer_text(text, minimum, maximum)
+        if isinstance(number, IntegerIssue):
+            self.add(name, number.value)
             return default
         return number
 
@@ -68,14 +59,10 @@ class QueryParameters:
         text = self._values.get(name)
         if text is None:
             return None
-        if _ISO_DATE.fullmatch(text):
-            try:
-                return date.fromisoformat(text)
-            except ValueError:
-                self.add(name, "INVALID_DATE")
-                return None
-        self.add(name, "INVALID_DATE")
-        return None
+        day = parse_iso_date(text)
+        if day is None:
+            self.add(name, "INVALID_DATE")
+        return day
 
     def finish(self) -> None:
         """Raise one validation error naming every problem found."""
