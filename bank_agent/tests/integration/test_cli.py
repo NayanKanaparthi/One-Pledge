@@ -308,14 +308,20 @@ def unreachable(request: httpx.Request) -> httpx.Response:
     raise httpx.ConnectError("unreachable", request=request)
 
 
-def test_a_missing_variable_is_one_sentence_on_stderr_and_exit_1(bank_db: BankDatabase) -> None:
-    environment = bank_db.environment()
+def test_a_missing_variable_is_one_sentence_on_stderr_and_exit_1(
+    bank_db: BankDatabase, doubles: InProcessDoubles
+) -> None:
+    environment = {**bank_db.environment(), **unreachable_services(doubles)}
     for command, missing in (
         (["db", "status"], "DATABASE_URL"),
         (["db", "migrate"], "MIGRATION_DATABASE_URL"),
         (["db", "provision"], "PG_ADMIN_URL"),
         (["seed-reference", "--data-dir", "."], "BANK_CODE"),
         (["worker", "--once"], "OUTSIDE_RECORDS_URL"),
+        (["worker", "--once"], "REGISTRY_URL"),
+        (["worker", "--once"], "KEY_HOLDER_2_API_KEY"),
+        (["registry", "sync"], "REGISTRY_API_KEY"),
+        (["integrity", "verify"], "REGISTRY_PUBLIC_KEYS"),
     ):
         finished = run_program(
             "onepledge-bank", command, {k: v for k, v in environment.items() if k != missing}

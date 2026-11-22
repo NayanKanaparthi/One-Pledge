@@ -167,7 +167,8 @@ def test_each_tamper_mode_turns_the_report_broken_with_its_reason(banks: ThreeBa
         )
     submissions = banks.doubles.member_stats("HARBOR")["submissions"]
     loan = scalar(database, "SELECT loan_id FROM loans WHERE state = 'LOCKED' ORDER BY loan_id LIMIT 1")
-    assert isinstance(loan, uuid.UUID)
+    facility = scalar(database, "SELECT facility_id FROM loans WHERE loan_id = %s", (loan,))
+    assert isinstance(loan, uuid.UUID) and isinstance(facility, uuid.UUID)
     halted = harbor.release(facility, [loan], date(2026, 11, 19))
     harbor.run_worker()
     assert rows(database, outcome, (halted.submission_id,)) == [("FAILED", "REGISTRY_INTEGRITY_BROKEN")]
