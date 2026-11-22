@@ -5,6 +5,8 @@ from __future__ import annotations
 import uuid
 from dataclasses import replace
 
+import pytest
+
 from bank_testkit.backends import PortWorld
 from bank_testkit.memory.bank import vins
 from bank_testkit.records import (
@@ -23,6 +25,7 @@ from onepledge_bank_agent.domain.enums import (
     IntegrityRunStatus,
     QuarantineReason,
 )
+from onepledge_bank_agent.domain.store_errors import StoreRefusedError
 
 
 def requests(ports: PortWorld, count: int) -> list[RegistryRequest]:
@@ -176,3 +179,23 @@ class TestIntegrityRuns:
             unit.commit()
         with ports.units() as unit:
             assert unit.evidence.runs.latest() == later
+
+
+class TestEvidenceRefusals:
+    """A second write of the same proof is refused or ignored the same way by both stores."""
+
+    def test_the_same_checkpoint_delivery_twice_is_refused(self, ports: PortWorld) -> None:
+        seen = checkpoint(8)
+        with ports.units() as unit:
+            unit.evidence.checkpoints.add(seen)
+            unit.commit()
+        again = replace(seen, checkpoint_id=uuid.uuid4())
+        with pytest.raises(StoreRefusedError) as raised, ports.units() as unit:
+            unit.evidence.checkpoints.add(again)
+        assert raised.value.refusal == "UNIQUE"
+        other_head = checkpoint(8, head="other")
+        with pytest.raises(StoreRefusedError) as second, ports.units() as unit:
+            unit.evidence.checkpoints.add(other_head)
+        assert second.value.refusal == "UNIQUE", "one verified checkpoint per seq"
+        with ports.units() as unit:
+            assert unit.evidence.checkpoints.all() == [seen]

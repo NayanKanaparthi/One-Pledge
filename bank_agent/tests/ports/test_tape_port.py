@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 import pytest
@@ -12,6 +13,7 @@ from bank_testkit.records import at
 from bank_testkit.tapes import SUMMIT_LAYOUT
 from onepledge_bank_agent.domain.enums import FailureCode, TapeKind, TapeStatus
 from onepledge_bank_agent.domain.errors import ConcurrentUploadError
+from onepledge_bank_agent.domain.store_errors import StoreRefusedError
 from onepledge_bank_agent.domain.tape import NEXT_STAGE, UNFINISHED, TapeSubmission
 from onepledge_bank_agent.domain.tape_file import TapeLayout
 
@@ -211,3 +213,55 @@ class TestTapes:
     def _runnable(ports: PortWorld, now: datetime) -> list[uuid.UUID]:
         with ports.units() as unit:
             return unit.tapes.runnable(UNFINISHED, now, 10)
+
+
+class TestTapeRefusals:
+    """What both stores refuse for a tape (SPEC_DECISIONS 92): every one raises `StoreRefusedError`."""
+
+    def test_a_save_two_steps_ahead_is_refused_with_the_tape_guards_code(self, ports: PortWorld) -> None:
+        tape = ports.tape(at(1))
+        ahead = TapeSubmission(tape.facts, replace(tape.progress, status=TapeStatus.CHECKED))
+        self._refused(ports, ahead, "OP004")
+        assert stored(ports, tape).status is TapeStatus.RECEIVED
+
+    def test_a_forged_resume_and_a_rewritten_failure_are_refused(self, ports: PortWorld) -> None:
+        tape = ports.tape(at(1))
+        tape.fail(FailureCode.OUTSIDE_RECORDS_REJECTED, at(2))
+        save(ports, tape)
+        forged_progress = replace(
+            tape.progress,
+            status=TapeStatus.SUBMITTED,
+            resume_status=None,
+            failed_stage=None,
+            failure_code=None,
+        )
+        forged = TapeSubmission(tape.facts, forged_progress)
+        self._refused(ports, forged, "OP004")
+        rewritten = TapeSubmission(
+            tape.facts, replace(tape.progress, failure_code=FailureCode.INTERNAL_ERROR)
+        )
+        self._refused(ports, rewritten, "OP004")
+        counted = TapeSubmission(tape.facts, replace(tape.progress, attempts=tape.progress.attempts + 1))
+        self._refused(ports, counted, "OP004")
+
+    def test_a_completed_tape_never_changes(self, ports: PortWorld) -> None:
+        tape = ports.tape(at(1))
+        for move in FORWARD:
+            move(tape, at(2))
+            save(ports, tape)
+        touched = TapeSubmission(tape.facts, replace(tape.progress, attempts=1))
+        self._refused(ports, touched, "OP004")
+
+    def test_a_tape_is_created_received_only(self, ports: PortWorld) -> None:
+        made = ports.tape_of(at(1))
+        cleaned = TapeSubmission(made.facts, replace(made.progress, status=TapeStatus.CLEANED))
+        with pytest.raises(StoreRefusedError) as refused, ports.units() as unit:
+            unit.tapes.add(cleaned, SUMMIT_LAYOUT)
+        assert refused.value.refusal == "OP004"
+
+    @staticmethod
+    def _refused(ports: PortWorld, tape: TapeSubmission, code: str) -> None:
+        with pytest.raises(StoreRefusedError) as refused, ports.units() as unit:
+            unit.tapes.save(tape)
+            unit.commit()
+        assert refused.value.refusal == code

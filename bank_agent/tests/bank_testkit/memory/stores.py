@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from types import TracebackType
 from typing import Self
 
+from bank_testkit.memory import guards
 from onepledge_bank_agent.application.evidence_ports import IntegrityRun, ItemRecord, PlannedItem
 from onepledge_bank_agent.application.ports import AcceptedItem, NewItem, StoredRawRow, Upserted
 from onepledge_bank_agent.domain.alert import Alert
@@ -36,6 +37,7 @@ from onepledge_bank_agent.domain.loan import Loan
 from onepledge_bank_agent.domain.raw_evidence import StoredRow, StoredTape
 from onepledge_bank_agent.domain.registry_records import ItemOutcome, QuarantinedMessage, RegistryAnswer
 from onepledge_bank_agent.domain.registry_results import StoredResult
+from onepledge_bank_agent.domain.store_errors import UNIQUE, StoreRefusedError
 from onepledge_bank_agent.domain.tape import UNFINISHED, TapeSubmission
 from onepledge_bank_agent.domain.tape_file import RawRow, TapeLayout, raw_payload
 from onepledge_bank_agent.domain.values import CheckResult, Token
@@ -96,6 +98,7 @@ class _Tapes:
         facts = tape.facts
         if self.find_by_file(facts.facility_id, facts.kind.value, facts.file_sha256) is not None:
             raise ConcurrentUploadError
+        guards.check_tape_insert(tape)
         self._state.tapes[tape.submission_id] = copy.deepcopy(tape)
         self._state.layouts[tape.submission_id] = layout
 
@@ -114,7 +117,11 @@ class _Tapes:
         return None
 
     def save(self, tape: TapeSubmission) -> None:
-        self._state.tapes[tape.submission_id] = copy.deepcopy(tape)
+        held = self._state.tapes.get(tape.submission_id)
+        if held is None:
+            return
+        guards.check_tape_save(held.progress, tape.progress)
+        self._state.tapes[tape.submission_id] = TapeSubmission(held.facts, copy.deepcopy(tape.progress))
 
     def runnable(self, statuses: Collection[TapeStatus], now: datetime, limit: int) -> list[uuid.UUID]:
         ordered = sorted(self._state.tapes.values(), key=lambda t: (t.facts.uploaded_at, t.submission_id))
@@ -138,6 +145,10 @@ class _RawRows:
         self._state = state
 
     def add_many(self, submission_id: uuid.UUID, rows: Sequence[RawRow], received_at: datetime) -> None:
+        held = {r.row_number for r in self._state.raw_rows.get(submission_id, [])}
+        numbers = [r.row_number for r in rows]
+        if len(set(numbers)) != len(numbers) or held & set(numbers):
+            raise StoreRefusedError(UNIQUE, "23505", "uq_loans_raw_submission_row")
         stored = [StoredRawRow(uuid.uuid4(), r.row_number, r.text, r.cells, r.row_sha256) for r in rows]
         self._state.raw_rows.setdefault(submission_id, []).extend(stored)
 
@@ -196,10 +207,26 @@ class _Loans:
 
     def add_many(self, loans: Sequence[Loan]) -> None:
         for loan in loans:
+            guards.check_loan_insert(loan)
+            record = loan.record
+            live = self.live_by_vin(record.facility_id, [record.terms.vin.value])
+            if loan.loan_id in self._state.loans or live:
+                raise StoreRefusedError(UNIQUE, "23505", "uq_loans_facility_vin_live")
             self._state.loans[loan.loan_id] = copy.deepcopy(loan)
 
     def save(self, loan: Loan) -> None:
-        self._state.loans[loan.loan_id] = copy.deepcopy(loan)
+        held = self._state.loans.get(loan.loan_id)
+        if held is None:
+            return
+        guards.check_loan_save(held, loan, bool(self._state.tokens.get(loan.loan_id)))
+        kept = held.record
+        saved = replace(
+            loan.record,
+            facility_id=kept.facility_id,
+            first_submission_id=kept.first_submission_id,
+            created_at=kept.created_at,
+        )
+        self._state.loans[loan.loan_id] = Loan(saved)
 
 
 class _Checks:
@@ -212,7 +239,11 @@ class _Checks:
     def add(
         self, submission_id: uuid.UUID, loan_id: uuid.UUID, results: Sequence[CheckResult], at: datetime
     ) -> None:
-        self._state.checks[(submission_id, loan_id)] = list(results)
+        held = self._state.checks.get((submission_id, loan_id), [])
+        kinds = [result.check_type for result in [*held, *results]]
+        if len(set(kinds)) != len(kinds):
+            raise StoreRefusedError(UNIQUE, "23505", "uq_local_checks_loan_submission_type")
+        self._state.checks[(submission_id, loan_id)] = [*held, *results]
 
 
 class _Tokens:
@@ -249,6 +280,13 @@ class _Requests:
         self._state = state
 
     def add(self, request: RegistryRequest, items: Sequence[PlannedItem]) -> None:
+        same_batch = request.origin is RequestOrigin.TAPE and any(
+            r.submission_id == request.submission_id and r.origin is RequestOrigin.TAPE
+            and r.batch_index == request.batch_index
+            for r in self._state.requests.values()
+        )  # fmt: skip
+        if self.by_key(request.idempotency_key.value) is not None or same_batch:
+            raise StoreRefusedError(UNIQUE, "23505", "uq_registry_requests")
         self._state.requests[request.request_id] = request
         self._state.request_items[request.request_id] = [
             ItemRecord(item.item_ref, item.position, item.loan_id, None, None) for item in items
@@ -394,10 +432,21 @@ class _Alerts:
         return sorted(found, key=lambda a: (a.record.received_at, a.record.alert_id))
 
     def add(self, alert: Alert) -> None:
+        guards.check_alert_insert(alert)
+        record = alert.record
+        if record.alert_id in self._state.alerts or self.find(record.registry_case_id, record.loan_id):
+            raise StoreRefusedError(UNIQUE, "23505", "uq_alerts_case_loan")
         self._state.alerts[alert.record.alert_id] = copy.deepcopy(alert)
 
     def save(self, alert: Alert) -> None:
-        self._state.alerts[alert.record.alert_id] = copy.deepcopy(alert)
+        held = self._state.alerts.get(alert.record.alert_id)
+        if held is None:
+            return
+        guards.check_alert_save(held, alert)
+        kept = held.record
+        saved = replace(kept, status=alert.record.status, case_status=alert.record.case_status,
+                        review=alert.record.review)  # fmt: skip
+        self._state.alerts[alert.record.alert_id] = Alert(saved)
 
 
 class _Checkpoints:
@@ -420,6 +469,10 @@ class _Checkpoints:
         )
 
     def add(self, checkpoint: Checkpoint) -> None:
+        if self.delivered(checkpoint.checkpoint_seq, checkpoint.head_hash.value, checkpoint.signature):
+            raise StoreRefusedError(UNIQUE, "23505", "uq_checkpoints_seen_delivery")
+        if checkpoint.verified and self.verified_with_seq(checkpoint.checkpoint_seq) is not None:
+            raise StoreRefusedError(UNIQUE, "23505", "uq_checkpoints_seen_verified_seq")
         self._state.checkpoints.append(checkpoint)
 
     def any_failed(self) -> bool:

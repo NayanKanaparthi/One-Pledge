@@ -94,7 +94,8 @@ class TapeRepository(Protocol):
     """`tape_submissions`."""
 
     def add(self, tape: TapeSubmission, layout: TapeLayout) -> None:
-        """Insert a new submission; raises `ConcurrentUploadError` when the same file was stored meanwhile."""
+        """Insert a new submission; raises `ConcurrentUploadError` when the same file was stored meanwhile,
+        and `StoreRefusedError` (OP004) when it is not RECEIVED with no failure or attempt facts."""
         ...
 
     def layout(self, submission_id: uuid.UUID) -> TapeLayout | None:
@@ -110,7 +111,9 @@ class TapeRepository(Protocol):
         ...
 
     def save(self, tape: TapeSubmission) -> None:
-        """Store the progress fields of a submission."""
+        """Store the progress fields of a submission. Refused with `StoreRefusedError` (OP004): a move that
+        is not one step of SPEC 8.3, a forged resume, a changed failure or attempt count while FAILED,
+        any change of a COMPLETED tape."""
         ...
 
     def runnable(self, statuses: Collection[TapeStatus], now: datetime, limit: int) -> list[uuid.UUID]:
@@ -162,11 +165,13 @@ class LoanRepository(Protocol):
         ...
 
     def add_many(self, loans: Sequence[Loan]) -> None:
-        """Insert new loan rows."""
+        """Insert new loan rows; refused: a loan not PENDING (OP002), a second live loan of a VIN (UNIQUE)."""
         ...
 
     def save(self, loan: Loan) -> None:
-        """Store a loan's state, terms, loan number and balance."""
+        """Store a loan's state, terms, loan number and balance. Refused with `StoreRefusedError`: a state
+        change outside SPEC 8.4 or any change of a RELEASED loan (OP002), a changed VIN, or changed terms of
+        a loan that has tokens (OP003)."""
         ...
 
 
@@ -180,7 +185,7 @@ class CheckRepository(Protocol):
     def add(
         self, submission_id: uuid.UUID, loan_id: uuid.UUID, results: Sequence[CheckResult], at: datetime
     ) -> None:
-        """Store the four results of one loan."""
+        """Store the four results of one loan; a second result of a check type is refused (UNIQUE)."""
         ...
 
 

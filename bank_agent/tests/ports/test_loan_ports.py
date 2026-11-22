@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
+from dataclasses import replace
+
+import pytest
 
 from bank_testkit.backends import PortWorld
 from bank_testkit.memory.bank import vins
-from bank_testkit.records import KEY_V1, KEY_V2, at, check_results, hex64, tokens
+from bank_testkit.records import KEY_V1, KEY_V2, at, check_results, hex64, loan, tokens
+from onepledge_bank_agent.application.ports import UnitOfWork
 from onepledge_bank_agent.domain.enums import CheckOutcome, LoanState, TokenKind
 from onepledge_bank_agent.domain.loan import Loan
+from onepledge_bank_agent.domain.store_errors import StoreRefusedError
 from onepledge_bank_agent.domain.values import LenderLoanNumber, LoanTerms, Money, Token
+from onepledge_bank_agent.domain.vin import Vin
 
 
 def save(ports: PortWorld, loan_row: Loan) -> None:
@@ -179,3 +186,63 @@ class TestTokens:
                 [released.loan_id, current.loan_id]
             )
             assert unit.tokens.loans_with_asset_token(hex64("nobody").value) == []
+
+
+def refused(ports: PortWorld, code: str, write: Callable[[UnitOfWork], object]) -> None:
+    """The write raises `StoreRefusedError` with the code, and nothing of the unit is kept."""
+    with pytest.raises(StoreRefusedError) as raised, ports.units() as unit:
+        write(unit)
+        unit.commit()
+    assert raised.value.refusal == code
+
+
+class TestLoanAndCheckRefusals:
+    """What both stores refuse for loans, checks and tokens (SPEC_DECISIONS 87, 92)."""
+
+    def test_an_illegal_state_and_a_changed_vin_are_refused(self, ports: PortWorld) -> None:
+        tape = ports.tape(at(1))
+        (made,) = ports.loans(tape.submission_id, vins(1))
+        released = Loan(replace(made.record, state=LoanState.RELEASED))
+        refused(ports, "OP002", lambda unit: unit.loans.save(released))
+        other = LoanTerms(Vin(vins(1, 500)[0]), made.terms.borrower_ref, made.terms.origination_date,
+                          made.terms.original_amount)  # fmt: skip
+        refused(ports, "OP003", lambda unit: unit.loans.save(Loan(replace(made.record, terms=other))))
+        assert reread(ports, made).record == made.record
+
+    def test_the_terms_of_a_tokenised_loan_and_a_released_loan_are_frozen(self, ports: PortWorld) -> None:
+        tape = ports.tape(at(1))
+        (made,) = ports.loans(tape.submission_id, vins(1))
+        with ports.units() as unit:
+            unit.tokens.add_many({made.loan_id: tokens("held")}, at(2))
+            unit.commit()
+        renumbered = Loan(replace(made.record, lender_loan_number=LenderLoanNumber("SAF-9")))
+        refused(ports, "OP003", lambda unit: unit.loans.save(renumbered))
+        made.lock(at(3))
+        save(ports, made)
+        made.release(at(4))
+        save(ports, made)
+        rebalanced = Loan(replace(made.record, current_balance=Money(1)))
+        refused(ports, "OP002", lambda unit: unit.loans.save(rebalanced))
+
+    def test_a_loan_is_created_pending_and_a_live_vin_only_once(self, ports: PortWorld) -> None:
+        tape = ports.tape(at(1))
+        (made,) = ports.loans(tape.submission_id, vins(1))
+        held = Loan(replace(loan(ports.facility.facility_id, tape.submission_id, vins(1, 300)[0]).record,
+                            state=LoanState.HELD_LOCAL))  # fmt: skip
+        refused(ports, "OP002", lambda unit: unit.loans.add_many([held]))
+        twin = loan(ports.facility.facility_id, tape.submission_id, made.terms.vin.value)
+        refused(ports, "UNIQUE", lambda unit: unit.loans.add_many([twin]))
+
+    def test_a_second_write_of_the_same_check_is_refused(self, ports: PortWorld) -> None:
+        tape = ports.tape(at(1))
+        (made,) = ports.loans(tape.submission_id, vins(1))
+        with ports.units() as unit:
+            unit.checks.add(tape.submission_id, made.loan_id, check_results(), at(2))
+            unit.commit()
+        refused(
+            ports,
+            "UNIQUE",
+            lambda unit: unit.checks.add(tape.submission_id, made.loan_id, check_results()[:1], at(3)),
+        )
+        with ports.units() as unit:
+            assert unit.checks.checked(tape.submission_id, [made.loan_id]) == {made.loan_id}

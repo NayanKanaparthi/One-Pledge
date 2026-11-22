@@ -154,11 +154,13 @@ class AlertRepository(Protocol):
         ...
 
     def add(self, alert: Alert) -> None:
-        """Insert a new alert."""
+        """Insert a new alert; refused: not NEW with an OPEN case (OP006), a second one of a case and a
+        loan (UNIQUE)."""
         ...
 
     def save(self, alert: Alert) -> None:
-        """Store the review fields and statuses of an alert."""
+        """Store the review fields and statuses of an alert. Refused (OP006): a transition outside SPEC 8.5,
+        a status that does not match its case, a second position, any change of a closed alert."""
         ...
 
 
@@ -178,7 +180,8 @@ class CheckpointRepository(Protocol):
         ...
 
     def add(self, checkpoint: Checkpoint) -> None:
-        """Store a checkpoint with its verdict."""
+        """Store a checkpoint with its verdict; the same delivery twice, or a second verified checkpoint
+        of a seq, is refused (UNIQUE)."""
         ...
 
     def any_failed(self) -> bool:

@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
+from dataclasses import replace
+
+import pytest
 
 from bank_testkit.backends import PortWorld
 from bank_testkit.memory.bank import vins
 from bank_testkit.records import alert, at
+from onepledge_bank_agent.application.ports import UnitOfWork
 from onepledge_bank_agent.domain.alert import Alert
 from onepledge_bank_agent.domain.enums import AlertStatus, BankPosition, CaseStatus
+from onepledge_bank_agent.domain.store_errors import StoreRefusedError
 
 
 def add(ports: PortWorld, *alerts: Alert) -> None:
@@ -94,3 +100,67 @@ class TestAlerts:
         assert (review.reviewed_by, review.note, review.bank_position, review.position_submitted_at) == (
             ports.user, "looking", BankPosition.DATA_ERROR, at(3),
         )  # fmt: skip
+
+
+class TestAlertRefusals:
+    """What both stores refuse for an alert (SPEC_DECISIONS 86, 87, 92)."""
+
+    @pytest.mark.parametrize(
+        ("status", "case"),
+        [
+            (AlertStatus.CLEARED, CaseStatus.OPEN),
+            (AlertStatus.CLEARED, CaseStatus.CONFIRMED),
+            (AlertStatus.ESCALATED, CaseStatus.CLEARED_DATA_ERROR),
+        ],
+    )
+    def test_an_alert_closed_without_its_case_is_refused(
+        self, ports: PortWorld, status: AlertStatus, case: CaseStatus
+    ) -> None:
+        made = self._stored(ports)
+        forged = Alert(replace(made.record, status=status, case_status=case))
+        self._refused(ports, lambda unit: unit.alerts.save(forged), "OP006")
+
+    def test_a_closed_alert_never_changes_and_a_position_is_recorded_once(self, ports: PortWorld) -> None:
+        made = self._stored(ports)
+        made.start_review(ports.user, at(2))
+        self._save(ports, made)
+        made.submit_position(BankPosition.DATA_ERROR, ports.user, at(3))
+        self._save(ports, made)
+        changed = replace(made.record.review, bank_position=BankPosition.CONFIRMED_DOUBLE_PLEDGE)
+        self._refused(
+            ports, lambda unit: unit.alerts.save(Alert(replace(made.record, review=changed))), "OP006"
+        )
+        made.apply_case_status(CaseStatus.CLEARED_DATA_ERROR)
+        self._save(ports, made)
+        noted = replace(made.record.review, note="after the fact")
+        self._refused(
+            ports, lambda unit: unit.alerts.save(Alert(replace(made.record, review=noted))), "OP006"
+        )
+
+    def test_an_alert_is_created_new_and_once_per_case_and_loan(self, ports: PortWorld) -> None:
+        made = self._stored(ports)
+        reviewing = Alert(replace(alert(made.record.loan_id).record, status=AlertStatus.REVIEWING))
+        self._refused(ports, lambda unit: unit.alerts.add(reviewing), "OP006")
+        twin = alert(made.record.loan_id, made.record.registry_case_id)
+        self._refused(ports, lambda unit: unit.alerts.add(twin), "UNIQUE")
+
+    @staticmethod
+    def _stored(ports: PortWorld) -> Alert:
+        tape = ports.tape(at(1))
+        (loan,) = ports.loans(tape.submission_id, vins(1))
+        made = alert(loan.loan_id)
+        add(ports, made)
+        return made
+
+    @staticmethod
+    def _save(ports: PortWorld, made: Alert) -> None:
+        with ports.units() as unit:
+            unit.alerts.save(made)
+            unit.commit()
+
+    @staticmethod
+    def _refused(ports: PortWorld, write: Callable[[UnitOfWork], object], code: str) -> None:
+        with pytest.raises(StoreRefusedError) as raised, ports.units() as unit:
+            write(unit)
+            unit.commit()
+        assert raised.value.refusal == code
