@@ -86,6 +86,13 @@ def test_the_small_replay_agrees_with_the_registry_and_every_integrity_section_i
         ]
         alerts = json.dumps([list(map(str, row)) for row in rows(database, "SELECT a.* FROM alerts a")])
         assert not [other for other in others if other.lower() in alerts.lower()], code
+        for evidence in (
+            "SELECT count(*) FROM audit_log WHERE action = 'LOAN_STATE_CHANGED' "
+            "AND NOT (detail ? 'from' AND detail ? 'to')",
+            "SELECT count(*) FROM alerts WHERE explanation_text = '' OR kinds_matched = '{}'",
+            "SELECT count(*) FROM certificates WHERE as_of_seq IS NULL",
+        ):
+            assert scalar(database, evidence) == 0, (code, evidence)
         report = banks.agents[code].verify()
         assert report.status is IntegrityRunStatus.OK, (code, report)
         assert set(report.section_statuses().values()) == {SectionStatus.OK.value}
