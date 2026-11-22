@@ -180,15 +180,19 @@ class InProcessDoubles:
             "signature": base64.b64encode(signature).decode("ascii"),
             "signing_key_id": SIGNING_KEY_ID,
         }
+        self.inject_message(bank_code, "CHECKPOINT", signed)
+        return signed
+
+    def inject_message(self, bank_code: str, message_type: str, payload: Mapping[str, object]) -> None:
+        """Deliver one extra outbox message to one bank, ahead of the real outbox, until acknowledged."""
         message = {
             "message_id": str(uuid.uuid4()),
             "position": 0,
-            "type": "CHECKPOINT",
+            "type": message_type,
             "created_at": "2026-11-20T12:00:00Z",
-            "payload": signed,
+            "payload": dict(payload),
         }
         self._forged.setdefault(self.members[bank_code].registry_key, []).append(message)
-        return signed
 
     def checkpoints(self) -> list[dict[str, Any]]:
         """Every checkpoint the registry signed, oldest first."""
