@@ -27,6 +27,8 @@ info:
       lock_id) pair cleared as CLEARED_DATA_ERROR is exempt from Rule C.
     - Otherwise: the lock is created. Result LOCKED with `already_held: false`.
 
+    The per member daily item cap counts BACK_BOOK and PLEDGE items only. A RELEASE is never refused for the cap.
+
     `kinds_matched` always lists every token kind whose value equals the matched
     lock's value (ASSET included when the asset token matched).
 

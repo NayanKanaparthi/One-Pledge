@@ -2118,7 +2118,7 @@ components:
                 format: uuid
               failure_reason:
                 type: string
-                enum: [BAD_SIGNATURE, UNKNOWN_SIGNING_KEY, BODY_HASH_MISMATCH, CONTENT_MISMATCH]
+                enum: [BAD_SIGNATURE, UNKNOWN_SIGNING_KEY, BODY_HASH_MISMATCH, CONTENT_MISMATCH, CERTIFICATE_MISSING]
     AuditChainSection:
       type: object
       additionalProperties: false
@@ -2210,6 +2210,30 @@ components:
           $ref: '#/components/schemas/DatabaseControlsSection'
         registry_messages:
           $ref: '#/components/schemas/RegistryMessagesSection'
+        evidence:
+          $ref: '#/components/schemas/EvidenceSection'
+    EvidenceSection:
+      type: object
+      additionalProperties: false
+      required: [status, problems]
+      properties:
+        status:
+          $ref: '#/components/schemas/IntegrityStatus'
+        problems:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [table, row_id, problem]
+            properties:
+              table:
+                type: string
+                pattern: '^[a-z_]{1,64}$'
+              row_id:
+                type: [string, 'null']
+              problem:
+                type: string
+                enum: [ROW_MISSING, ROW_UNAUDITED, SEQUENCE_GAP]
     SyncResult:
       type: object
       additionalProperties: false
