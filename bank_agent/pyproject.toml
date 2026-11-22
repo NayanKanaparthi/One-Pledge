@@ -30,6 +30,12 @@ dev = [
   "jsonschema>=4.21",
   "types-PyYAML>=6.0",
   "types-jsonschema>=4.21",
+  # The layer 1 packages the tests use (SPEC_DECISIONS 53.11): the outside records service and
+  # the registry and key holder doubles run in process; the data sets come from the
+  # onepledge-datagen program. `make setup` installs them first, from this repository.
+  "onepledge-outside-records==1.0.0",
+  "onepledge-contract-fakes==1.0.0",
+  "onepledge-datagen==1.0.0",
 ]
 
 [project.scripts]

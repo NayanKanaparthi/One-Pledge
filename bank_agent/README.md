@@ -17,7 +17,7 @@ What a reviewer can check, and where:
   `audit_log`, `cleaning_issues`, `submission_items`, `local_checks`, `loan_tokens`,
   `certificates`, `checkpoints_seen`, `integrity_runs`) have statement triggers that
   refuse `UPDATE`, `DELETE` and `TRUNCATE` with SQLSTATE `OP001`. Loan state changes
-  outside the table of SPEC 8.3 fail with `OP002`; a loan's identity, and the terms of
+  outside the table of SPEC 8.4 fail with `OP002`; a loan's identity, and the terms of
   a tokenised loan, are immutable (`OP003`); the facts of an upload and illegal tape
   status changes fail with `OP004`; an audit entry that does not extend the chain fails
   with `OP005` (`migrations/versions/0002_guards.py`). `TRUNCATE loans_raw` by the
@@ -239,27 +239,36 @@ in a settings repr, a log line or an error message.
 ## Running it by hand
 
 From the repository root, with PostgreSQL on port 55432 and the data set of `make data`.
-The `opdev` prefix keeps this away from the stack's own databases.
+The `opdev` prefix keeps this away from the stack's own databases. The administrative
+commands get the superuser and owner URLs in a subshell only (SPEC_DECISIONS 53.13): the
+shell that later starts `worker` never has `PG_ADMIN_URL` or `MIGRATION_DATABASE_URL`
+exported, and `worker` refuses to start as the owner anyway.
 
 ```
-export PG_ADMIN_URL=postgresql://postgres@localhost:55432/postgres
-export OWNER_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")
-export APP_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")
-export MIGRATION_DATABASE_URL=postgresql://opdev_bank_harbor_owner:$OWNER_PASSWORD@localhost:55432/opdev_bank_harbor
+OWNER_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")
+APP_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")
+OWNER_URL=postgresql://opdev_bank_harbor_owner:$OWNER_PASSWORD@localhost:55432/opdev_bank_harbor
 export DATABASE_URL=postgresql://opdev_bank_harbor_app:$APP_PASSWORD@localhost:55432/opdev_bank_harbor
-export DB_APP_ROLE=opdev_bank_harbor_app BANK_CODE=HARBOR BANK_NAME="Harbor Bank"
+export BANK_CODE=HARBOR BANK_NAME="Harbor Bank"
 
-onepledge-bank db provision
-onepledge-bank db migrate
+(
+  export PG_ADMIN_URL=postgresql://postgres@localhost:55432/postgres
+  export MIGRATION_DATABASE_URL=$OWNER_URL DB_APP_ROLE=opdev_bank_harbor_app
+  onepledge-bank db provision
+  onepledge-bank db migrate
+  onepledge-bank seed-reference --data-dir var/data/full-20261117
+)
 onepledge-bank db status
-onepledge-bank seed-reference --data-dir var/data/full-20261117
 ```
+
+`OWNER_PASSWORD`, `APP_PASSWORD` and `OWNER_URL` are shell variables, not exported, so no
+child process sees them unless a subshell exports them as above.
 
 To see the guards at work:
 
 ```
-psql "$DATABASE_URL" -c "DELETE FROM audit_log"                  # ERROR: permission denied for table audit_log
-psql "$MIGRATION_DATABASE_URL" -c "DELETE FROM audit_log"        # ERROR: table audit_log is insert-only (SQLSTATE OP001)
+psql "$DATABASE_URL" -c "DELETE FROM audit_log"      # ERROR: permission denied for table audit_log
+psql "$OWNER_URL" -c "DELETE FROM audit_log"         # ERROR: table audit_log is insert-only (SQLSTATE OP001)
 ```
 
 With outside records, the registry double and the two key holder doubles running (their
