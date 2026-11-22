@@ -18,6 +18,7 @@ from onepledge_bank_agent.domain.enums import (
     TapeKind,
 )
 from onepledge_bank_agent.domain.errors import InvalidValueError
+from onepledge_bank_agent.domain.registry_records import SignedCertificate
 from onepledge_bank_agent.domain.values import KeyVersion, Lei, Sha256Hex
 
 _FACILITY_CODE = re.compile(r"^[A-Z0-9-]{3,40}$")
@@ -106,6 +107,8 @@ class RegistryRequest:
     attempts: int
     response_status: int | None
     certificate_id: uuid.UUID | None
+    registry_submission_id: uuid.UUID | None = None
+    as_of_seq: int | None = None
 
     def __post_init__(self) -> None:
         """At most 500 items per request (the contract maximum)."""
@@ -120,34 +123,48 @@ class RegistryRequest:
 
 @dataclass(frozen=True)
 class Certificate:
-    """A signed registry certificate as received, with the bank's own verification result."""
+    """A signed registry certificate as received, with the bank's own verification result (SPEC 15.2)."""
 
     certificate_id: uuid.UUID
     request_id: uuid.UUID
+    registry_submission_id: uuid.UUID
+    kind: TapeKind
     as_of_seq: int
+    issued_at: datetime
     body: Mapping[str, JsonValue]
     body_hash: Sha256Hex
     signature: str
     signing_key_id: str
     failure: CertificateFailure | None
     verified_at: datetime
+    received_at: datetime
 
     @property
     def verified(self) -> bool:
         """True when every verification step passed."""
         return self.failure is None
 
+    def as_received(self) -> SignedCertificate:
+        """The stored body, hash, signature and key id, to verify again."""
+        return SignedCertificate(
+            self.body, self.body_hash.value, self.signature, self.signing_key_id, self.issued_at
+        )
+
 
 @dataclass(frozen=True)
 class Checkpoint:
-    """A signed registry checkpoint as received, with the bank's own verification result."""
+    """A signed registry checkpoint as received, with the body exactly as signed and the bank's verdict."""
 
+    checkpoint_id: uuid.UUID
     checkpoint_seq: int
     last_event_seq: int
     head_hash: Sha256Hex
     signed_at: datetime
     signature: str
     signing_key_id: str
+    body: Mapping[str, JsonValue]
+    received_at: datetime
+    verified_at: datetime
     failure: CheckpointFailure | None
     first_bad_event_seq: int | None
 

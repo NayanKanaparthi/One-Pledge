@@ -195,6 +195,28 @@ class TapeDuplicateError(DomainError):
         self.existing_submission_id = existing_submission_id
 
 
+class TapeNotRetryableError(DomainError):
+    """A retry was asked for a submission that is not FAILED or failed for a reason a retry cannot fix."""
+
+    code = "TAPE_NOT_RETRYABLE"
+
+
+class LoanNotLockedError(DomainError):
+    """A release instruction names loans that are not LOCKED in the facility; the details list their ids."""
+
+    code = "LOAN_NOT_LOCKED"
+
+    def __init__(self, loan_ids: tuple[uuid.UUID, ...]) -> None:
+        super().__init__(tuple(ErrorDetail("loan_ids", str(loan_id)) for loan_id in sorted(loan_ids)))
+        self.loan_ids = loan_ids
+
+
+class LoanNotResubmittableError(DomainError):
+    """A resubmission needs a CONFLICT loan whose every alert is CLEARED (SPEC 14.5)."""
+
+    code = "LOAN_NOT_RESUBMITTABLE"
+
+
 class ConcurrentUploadError(DomainError):
     """Another transaction stored the same file at the same moment; the caller looks it up again."""
 
