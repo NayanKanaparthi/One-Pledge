@@ -368,6 +368,16 @@ class _Certificates:
         proven = {c.request_id for c in self._state.certificates if c.verified}
         return any(not c.verified and c.request_id not in proven for c in self._state.certificates)
 
+    def missing_for_completed(self) -> list[tuple[uuid.UUID, uuid.UUID]]:
+        proven = {c.request_id for c in self._state.certificates if c.verified}
+        return sorted(
+            (r.request_id, r.certificate_id)
+            for r in self._state.requests.values()
+            if r.certificate_id is not None
+            and r.request_id not in proven
+            and self._state.tapes[r.submission_id].status is TapeStatus.COMPLETED
+        )
+
 
 class _Quarantine:
     def __init__(self, state: MemoryState) -> None:
@@ -384,6 +394,9 @@ class _Quarantine:
 
     def any_checkpoint(self) -> bool:
         return any(held.message_type == "CHECKPOINT" for held in self._state.quarantined)
+
+    def all(self) -> list[QuarantinedMessage]:
+        return sorted(self._state.quarantined, key=lambda held: (held.received_at, held.quarantine_id))
 
 
 class _OutboxAttempts:
@@ -491,6 +504,9 @@ class _IntegrityRuns:
     def add(self, run: IntegrityRun) -> None:
         self._state.integrity_runs.append(run)
 
+    def ids(self) -> set[uuid.UUID]:
+        return {run.run_id for run in self._state.integrity_runs}
+
     def latest(self) -> IntegrityRun | None:
         runs = sorted(self._state.integrity_runs, key=lambda run: run.run_id)
         return max(runs, key=lambda run: run.ran_at, default=None)
@@ -537,6 +553,9 @@ class _History:
     def submission_ids(self) -> list[uuid.UUID]:
         ordered = sorted(self._state.tapes.values(), key=lambda t: (t.facts.uploaded_at, t.submission_id))
         return [t.submission_id for t in ordered]
+
+    def loan_ids(self) -> set[uuid.UUID]:
+        return set(self._state.loans)
 
     def tape(self, submission_id: uuid.UUID) -> StoredTape | None:
         tape = self._state.tapes.get(submission_id)

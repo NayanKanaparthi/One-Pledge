@@ -7,7 +7,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from onepledge_bank_agent.domain.enums import QuarantineReason
-from onepledge_bank_agent.domain.registry_records import QuarantinedMessage
+from onepledge_bank_agent.domain.registry_records import QuarantinedMessage, QuarantinedPayload
 from onepledge_bank_agent.infrastructure.db.models import QuarantinedMessageRow
 
 CHECKPOINT_TYPE = "CHECKPOINT"
@@ -50,3 +50,18 @@ class SqlQuarantineRepository:
         """A quarantined CHECKPOINT message exists."""
         statement = select(exists().where(QuarantinedMessageRow.message_type == CHECKPOINT_TYPE))
         return bool(self._session.execute(statement).scalar_one())
+
+    def all(self) -> list[QuarantinedMessage]:
+        """Every quarantined message, oldest first."""
+        statement = select(QuarantinedMessageRow).order_by(
+            QuarantinedMessageRow.received_at, QuarantinedMessageRow.quarantine_id
+        )
+        found = []
+        for row in self._session.execute(statement).scalars():
+            held = QuarantinedPayload(QuarantineReason(row.reason), row.payload, row.payload_sha256)
+            found.append(
+                QuarantinedMessage(
+                    row.quarantine_id, row.message_id, row.position, row.message_type, held, row.received_at
+                )
+            )
+        return found

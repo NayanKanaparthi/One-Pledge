@@ -38,7 +38,7 @@ from onepledge_bank_agent.domain.enums import (
     IntegrityRunStatus,
     TapeKind,
 )
-from onepledge_bank_agent.domain.integrity import SectionStatus
+from onepledge_bank_agent.domain.integrity import CertificateFinding, SectionStatus
 from onepledge_bank_agent.domain.tape import TapeSubmission
 
 pytestmark = pytest.mark.integration
@@ -198,7 +198,7 @@ def test_a_tampered_certificate_fails_the_tape_halts_the_bank_and_a_retry_after_
         assert broken.certificates.status is SectionStatus.BROKEN
         assert broken.status is IntegrityRunStatus.BROKEN
         failed = [(str(f.certificate_id), f.failure_reason) for f in broken.certificates.failures]
-        assert failed == [(tamper.certificate_id, CertificateFailure.BODY_HASH_MISMATCH)]
+        assert failed == [(tamper.certificate_id, CertificateFinding.BODY_HASH_MISMATCH)]
 
         submissions = bank.doubles.member_stats("HARBOR")["submissions"]
         halted = bank.upload(agent, SECOND)
@@ -277,7 +277,7 @@ def test_a_stored_certificate_edited_by_a_superuser_is_found_by_deep_verificatio
         report = agent.verify()
     assert report.status is IntegrityRunStatus.BROKEN and report.certificates.status is SectionStatus.BROKEN
     assert [(f.certificate_id, f.failure_reason) for f in report.certificates.failures] == [
-        (certificate_id, CertificateFailure.BODY_HASH_MISMATCH)
+        (certificate_id, CertificateFinding.BODY_HASH_MISMATCH)
     ]
 
 
@@ -306,7 +306,7 @@ def test_a_stored_body_and_claimed_hash_edited_together_are_still_found(bank: Ba
         )
         report = agent.verify()
     assert report.certificates.status is SectionStatus.BROKEN
-    assert (certificate_id, CertificateFailure.BODY_HASH_MISMATCH) in [
+    assert (certificate_id, CertificateFinding.BODY_HASH_MISMATCH) in [
         (f.certificate_id, f.failure_reason) for f in report.certificates.failures
     ]
 

@@ -10,10 +10,12 @@ import pytest
 from bank_testkit.backends import PortWorld
 from bank_testkit.memory.bank import vins
 from bank_testkit.records import (
+    answer,
     at,
     certificate,
     checkpoint,
     integrity_run,
+    outcome,
     planned,
     quarantined,
     request,
@@ -24,8 +26,10 @@ from onepledge_bank_agent.domain.enums import (
     CheckpointFailure,
     IntegrityRunStatus,
     QuarantineReason,
+    RegistryItemResult,
 )
 from onepledge_bank_agent.domain.store_errors import StoreRefusedError
+from onepledge_bank_agent.domain.tape import TapeSubmission
 
 
 def requests(ports: PortWorld, count: int) -> list[RegistryRequest]:
@@ -38,6 +42,21 @@ def requests(ports: PortWorld, count: int) -> list[RegistryRequest]:
             unit.requests.add(planned_request, planned([loan.loan_id]))
         unit.commit()
     return made
+
+
+def complete(ports: PortWorld, submission_id: uuid.UUID) -> None:
+    """Move a stored submission forward to COMPLETED, one legal step at a time."""
+    moves = (
+        TapeSubmission.mark_cleaned, TapeSubmission.mark_checked, TapeSubmission.mark_tokenized,
+        TapeSubmission.mark_submitted, TapeSubmission.mark_completed,
+    )  # fmt: skip
+    for move in moves:
+        with ports.units() as unit:
+            tape = unit.tapes.get(submission_id, for_update=True)
+            assert tape is not None
+            move(tape, at(9))
+            unit.tapes.save(tape)
+            unit.commit()
 
 
 class TestCertificates:
@@ -105,6 +124,36 @@ class TestCertificates:
             assert unit.evidence.certificates.verified_for_requests([]) == {}
         assert found == {first.request_id: proven_first}
 
+    def test_an_answered_request_of_a_completed_tape_without_its_verified_row_is_missing(
+        self, ports: PortWorld
+    ) -> None:
+        """CERTIFICATE_MISSING (SPEC_DECISIONS 89 a): only COMPLETED tapes, only answered requests."""
+        proven, failed, unanswered = requests(ports, 3)
+        answers = {}
+        with ports.units() as unit:
+            for made in (proven, failed):
+                items = unit.requests.items(made.request_id)
+                answers[made.request_id] = answer(
+                    made, [outcome(items[0].item_ref, RegistryItemResult.LOCKED)[0]]
+                )
+                unit.requests.mark_sent(made.request_id, at(2))
+                unit.requests.store_answer(made.request_id, answers[made.request_id], at(3))
+            unit.evidence.certificates.add(
+                certificate(proven.request_id, answers[proven.request_id].certificate_id)
+            )
+            unit.evidence.certificates.add(certificate(
+                failed.request_id, answers[failed.request_id].certificate_id,
+                failure=CertificateFailure.BAD_SIGNATURE,
+            ))  # fmt: skip
+            unit.commit()
+        with ports.units() as unit:
+            assert unit.evidence.certificates.missing_for_completed() == [], "the tape is not COMPLETED"
+        complete(ports, proven.submission_id)
+        with ports.units() as unit:
+            missing = unit.evidence.certificates.missing_for_completed()
+        assert missing == [(failed.request_id, answers[failed.request_id].certificate_id)]
+        assert unanswered.request_id not in {request_id for request_id, _ in missing}
+
 
 class TestCheckpoints:
     """`checkpoints_seen`: every checkpoint received, failed ones kept."""
@@ -165,6 +214,16 @@ class TestQuarantine:
         with ports.units() as unit:
             assert (unit.evidence.quarantine.count(), unit.evidence.quarantine.any_checkpoint()) == (2, True)
 
+    def test_every_held_message_is_listed_oldest_first(self, ports: PortWorld) -> None:
+        later, earlier = quarantined(received=at(5)), quarantined(received=at(1))
+        with ports.units() as unit:
+            assert unit.evidence.quarantine.all() == []
+            unit.evidence.quarantine.add(later)
+            unit.evidence.quarantine.add(earlier)
+            unit.commit()
+        with ports.units() as unit:
+            assert unit.evidence.quarantine.all() == [earlier, later]
+
 
 class TestIntegrityRuns:
     """`integrity_runs`."""
@@ -179,6 +238,7 @@ class TestIntegrityRuns:
             unit.commit()
         with ports.units() as unit:
             assert unit.evidence.runs.latest() == later
+            assert unit.evidence.runs.ids() == {later.run_id, earlier.run_id}
 
 
 class TestEvidenceRefusals:

@@ -13,7 +13,7 @@ from collections.abc import Mapping
 
 from onepledge_bank_agent.domain.audit import Actor, AuditDraft
 from onepledge_bank_agent.domain.canonical_json import JsonValue
-from onepledge_bank_agent.domain.entities import Checkpoint, RegistryRequest
+from onepledge_bank_agent.domain.entities import Certificate, Checkpoint, RegistryRequest
 from onepledge_bank_agent.domain.enums import AuditAction, AuditObjectType, AuditOutcome
 from onepledge_bank_agent.domain.registry_records import QuarantinedMessage, RegistryAnswer
 
@@ -83,10 +83,13 @@ def item_rejected(request_id: uuid.UUID, loan_id: uuid.UUID, reason: str) -> Aud
 
 
 def certificate_checked(
-    certificate_id: uuid.UUID, request: RegistryRequest, failure: str | None, as_of_seq: int
+    certificate: Certificate, request: RegistryRequest, failure: str | None, as_of_seq: int
 ) -> AuditDraft:
-    """`CERTIFICATE_VERIFIED`, or `CERTIFICATE_REJECTED` (FAILURE) with the reason."""
+    """`CERTIFICATE_VERIFIED`, or `CERTIFICATE_REJECTED` (FAILURE) with the reason; the object is the
+    stored row (`certificate_row_id`, SPEC_DECISIONS 89), the registry's id is in the detail."""
+    certificate_id = certificate.certificate_row_id
     detail: dict[str, JsonValue] = {
+        "certificate_id": str(certificate.certificate_id),
         "request_id": str(request.request_id),
         "submission_id": str(request.submission_id),
         "as_of_seq": as_of_seq,

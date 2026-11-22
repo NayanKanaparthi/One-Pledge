@@ -105,6 +105,11 @@ class CertificateRepository(Protocol):
         """True when some request has a failed certificate row and no verified one."""
         ...
 
+    def missing_for_completed(self) -> list[tuple[uuid.UUID, uuid.UUID]]:
+        """`(request_id, certificate_id)` of every answered request of a COMPLETED tape that has no
+        verified certificate row: the certificate the registry announced (SPEC_DECISIONS 89 a)."""
+        ...
+
 
 class QuarantineRepository(Protocol):
     """`registry_messages_quarantined` (insert-only, SPEC_DECISIONS 57)."""
@@ -119,6 +124,10 @@ class QuarantineRepository(Protocol):
 
     def any_checkpoint(self) -> bool:
         """True when a message of type CHECKPOINT is quarantined."""
+        ...
+
+    def all(self) -> list[QuarantinedMessage]:
+        """Every quarantined message, oldest first."""
         ...
 
 
@@ -215,6 +224,10 @@ class IntegrityRunRepository(Protocol):
         """The most recent deep verification."""
         ...
 
+    def ids(self) -> set[uuid.UUID]:
+        """The id of every stored deep verification."""
+        ...
+
 
 class EvidenceStores(Protocol):
     """The insert-only proof stores and nothing else (SPEC_DECISIONS 67): what the registry signed and
@@ -261,6 +274,10 @@ class HistoryReader(Protocol):
 
     def tape(self, submission_id: uuid.UUID) -> StoredTape | None:
         """One submission's facts, layout and raw rows."""
+        ...
+
+    def loan_ids(self) -> set[uuid.UUID]:
+        """The id of every loan."""
         ...
 
 

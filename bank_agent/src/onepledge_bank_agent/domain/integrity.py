@@ -1,8 +1,9 @@
 """The integrity report (SPEC 15.5, 15.6; `IntegrityReport` in `contracts/bank_agent.yaml`).
 
-Six sections: what the bank verified about the registry (checkpoints and the chain),
+Seven sections: what the bank verified about the registry (checkpoints and the chain),
 the certificates it holds, its own audit chain, its raw rows, the database controls in
-force, and the registry messages it had to quarantine (SPEC_DECISIONS 57).
+force, the registry messages it had to quarantine (SPEC_DECISIONS 57, 85), and the
+evidence whose rows and audit entries no longer match (SPEC_DECISIONS 89).
 `GET /v1/integrity` combines live counts with the last deep verification; a deep
 verification stores the report it produced. A section is NOT_VERIFIED when nothing
 has been verified yet, BROKEN when anything failed, OK otherwise; the report is BROKEN
@@ -13,13 +14,11 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from onepledge_bank_agent.domain.canonical_json import JsonValue
 from onepledge_bank_agent.domain.enums import CertificateFailure, CheckpointFailure, IntegrityRunStatus
-from onepledge_bank_agent.domain.errors import InvalidValueError
 
 
 class SectionStatus(StrEnum):
@@ -82,10 +81,57 @@ class CheckpointProblem:
 
 @dataclass(frozen=True)
 class CertificateProblem:
-    """A certificate that failed verification, at receipt or in a deep verification."""
+    """A certificate that failed verification (at receipt or in a deep verification), or one the
+    registry announced that the bank does not hold verified (CERTIFICATE_MISSING, decision 89).
+    `recovered` is true for a failed row whose request has since got a verified row."""
 
     certificate_id: uuid.UUID
-    failure_reason: CertificateFailure
+    failure_reason: CertificateFinding
+    recovered: bool = field(default=False, compare=False)
+
+
+class CertificateFinding(StrEnum):
+    """What the certificates section reports: a verification failure or a missing proof."""
+
+    BAD_SIGNATURE = CertificateFailure.BAD_SIGNATURE.value
+    UNKNOWN_SIGNING_KEY = CertificateFailure.UNKNOWN_SIGNING_KEY.value
+    BODY_HASH_MISMATCH = CertificateFailure.BODY_HASH_MISMATCH.value
+    CONTENT_MISMATCH = CertificateFailure.CONTENT_MISMATCH.value
+    CERTIFICATE_MISSING = "CERTIFICATE_MISSING"
+
+
+class EvidenceProblemKind(StrEnum):
+    """What the reconciliation of proofs with the audit log found (SPEC_DECISIONS 89 b)."""
+
+    ROW_MISSING = "ROW_MISSING"
+    ROW_UNAUDITED = "ROW_UNAUDITED"
+    SEQUENCE_GAP = "SEQUENCE_GAP"
+
+
+@dataclass(frozen=True, order=True)
+class EvidenceProblem:
+    """One evidence finding: the table, the row (a primary key, or the missing seq), and the problem."""
+
+    table: str
+    row_id: str | None
+    problem: EvidenceProblemKind
+
+
+@dataclass(frozen=True)
+class EvidenceSection:
+    """The `evidence` section: BROKEN while any problem is listed."""
+
+    status: SectionStatus
+    problems: tuple[EvidenceProblem, ...]
+
+
+@dataclass(frozen=True)
+class QuarantineFinding:
+    """A quarantined registry message: its row, its type and why."""
+
+    quarantine_id: uuid.UUID
+    message_type: str
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -145,15 +191,25 @@ class ControlsSection:
 
 @dataclass(frozen=True)
 class RegistryMessagesSection:
-    """Registry outbox messages of a known type quarantined because their payload broke the contract."""
+    """Registry outbox messages quarantined as poison (SPEC_DECISIONS 57, 85), each with its reason."""
 
     status: SectionStatus
     quarantined: int
+    messages: tuple[QuarantineFinding, ...] = ()
+
+
+@dataclass(frozen=True)
+class UnreadSection:
+    """A section the live report could not read: the store's SQLSTATE (SPEC_DECISIONS 93, item 8).
+    The section is shown NOT_VERIFIED and the rest of the report is still printed."""
+
+    section: str
+    sqlstate: str
 
 
 @dataclass(frozen=True)
 class IntegrityReport:
-    """The six sections, when the report was made and when the last deep verification ran."""
+    """The seven sections, when the report was made and when the last deep verification ran."""
 
     generated_at: datetime
     last_deep_verification_at: datetime | None
@@ -163,6 +219,8 @@ class IntegrityReport:
     raw_data: RawDataSection
     database_controls: ControlsSection
     registry_messages: RegistryMessagesSection
+    evidence: EvidenceSection
+    unread: tuple[UnreadSection, ...] = ()
 
     @property
     def status(self) -> IntegrityRunStatus:
@@ -174,6 +232,7 @@ class IntegrityReport:
             self.raw_data.status,
             self.database_controls.status,
             self.registry_messages.status,
+            self.evidence.status,
         )
         broken = SectionStatus.BROKEN in statuses
         return IntegrityRunStatus.BROKEN if broken else IntegrityRunStatus.OK
@@ -187,6 +246,7 @@ class IntegrityReport:
             "raw_data": self.raw_data.status.value,
             "database_controls": self.database_controls.status.value,
             "registry_messages": self.registry_messages.status.value,
+            "evidence": self.evidence.status.value,
         }
 
 
@@ -212,10 +272,15 @@ def merge_certificate_problems(*groups: Iterable[CertificateProblem]) -> tuple[C
 
 
 def chain_section(
-    received: int, verified: int, last: CheckpointRef | None, failures: tuple[CheckpointProblem, ...]
+    counts: tuple[int, int],
+    last: CheckpointRef | None,
+    failures: tuple[CheckpointProblem, ...],
+    answered: bool,
 ) -> RegistryChainSection:
-    """NOT_VERIFIED before the first checkpoint, BROKEN with any failure, else OK."""
-    if failures:
+    """BROKEN with any failure, or when the registry has answered and no checkpoint is verified
+    (SPEC_DECISIONS 89 a); NOT_VERIFIED only for a bank that never had an answer; else OK."""
+    received, verified = counts
+    if failures or (answered and verified == 0):
         status = SectionStatus.BROKEN
     else:
         status = SectionStatus.NOT_VERIFIED if received == 0 else SectionStatus.OK
@@ -229,9 +294,17 @@ def certificate_section(
     return CertificateSection(broken_if(broken), total, verified, failures)
 
 
-def registry_messages_section(quarantined: int) -> RegistryMessagesSection:
-    """BROKEN while any quarantined message exists (SPEC_DECISIONS 57)."""
-    return RegistryMessagesSection(broken_if(quarantined > 0), quarantined)
+def registry_messages_section(messages: Sequence[QuarantineFinding]) -> RegistryMessagesSection:
+    """BROKEN while any quarantined message exists (SPEC_DECISIONS 57, 85)."""
+    return RegistryMessagesSection(broken_if(bool(messages)), len(messages), tuple(messages))
+
+
+def evidence_section(problems: Iterable[EvidenceProblem] | None) -> EvidenceSection:
+    """NOT_VERIFIED before the first deep verification; BROKEN while any problem is listed."""
+    if problems is None:
+        return EvidenceSection(SectionStatus.NOT_VERIFIED, ())
+    found = tuple(sorted(set(problems)))
+    return EvidenceSection(broken_if(bool(found)), found)
 
 
 def controls_section(
@@ -240,148 +313,3 @@ def controls_section(
     """Every control in report order; BROKEN when any is false (a missing one counts as false)."""
     ordered = tuple((control, bool(controls.get(control, False))) for control in DatabaseControl)
     return ControlsSection(broken_if(not all(ok for _, ok in ordered)), ordered, tuple(violations))
-
-
-def _id_list(values: Sequence[uuid.UUID]) -> list[JsonValue]:
-    return [str(value) for value in values]
-
-
-def _chain_json(chain: RegistryChainSection) -> dict[str, JsonValue]:
-    last = chain.last_verified
-    return {
-        "status": chain.status.value,
-        "checkpoints_received": chain.checkpoints_received,
-        "checkpoints_verified": chain.checkpoints_verified,
-        "last_verified": None
-        if last is None
-        else {
-            "checkpoint_seq": last.checkpoint_seq,
-            "last_event_seq": last.last_event_seq,
-            "head_hash": last.head_hash,
-            "verified_at": render_time(last.verified_at),
-        },
-        "failures": [
-            {
-                "checkpoint_id": str(p.checkpoint_id),
-                "checkpoint_seq": p.checkpoint_seq,
-                "failure_reason": p.failure_reason.value,
-                "first_bad_event_seq": p.first_bad_event_seq,
-                "received_at": render_time(p.received_at),
-            }
-            for p in chain.failures
-        ],
-    }
-
-
-def report_json(report: IntegrityReport) -> dict[str, JsonValue]:
-    """The `IntegrityReport` wire shape."""
-    certificates, audit, raw = report.certificates, report.audit_log, report.raw_data
-    return {
-        "status": report.status.value,
-        "generated_at": render_time(report.generated_at),
-        "last_deep_verification_at": (
-            render_time(report.last_deep_verification_at) if report.last_deep_verification_at else None
-        ),
-        "registry_chain": _chain_json(report.registry_chain),
-        "certificates": {
-            "status": certificates.status.value,
-            "total": certificates.total,
-            "verified": certificates.verified,
-            "failures": [
-                {"certificate_id": str(p.certificate_id), "failure_reason": p.failure_reason.value}
-                for p in certificates.failures
-            ],
-        },
-        "audit_log": {
-            "status": audit.status.value,
-            "entries": audit.entries,
-            "last_seq": audit.last_seq,
-            "first_bad_seq": audit.first_bad_seq,
-        },
-        "raw_data": {
-            "status": raw.status.value,
-            "submissions_checked": raw.submissions_checked,
-            "rows_checked": raw.rows_checked,
-            "bad_submission_ids": _id_list(raw.bad_submission_ids),
-        },
-        "database_controls": {
-            "status": report.database_controls.status.value,
-            "controls": [{"name": name.value, "ok": ok} for name, ok in report.database_controls.controls],
-        },
-        "registry_messages": {
-            "status": report.registry_messages.status.value,
-            "quarantined": report.registry_messages.quarantined,
-        },
-    }
-
-
-def _object(value: JsonValue | None) -> Mapping[str, JsonValue]:
-    if not isinstance(value, Mapping):
-        raise InvalidValueError("report", "INVALID_TYPE")
-    return value
-
-
-def _list(value: JsonValue | None) -> Sequence[JsonValue]:
-    if not isinstance(value, Sequence) or isinstance(value, str):
-        raise InvalidValueError("report", "INVALID_TYPE")
-    return value
-
-
-def _text(value: JsonValue | None) -> str:
-    if not isinstance(value, str):
-        raise InvalidValueError("report", "INVALID_TYPE")
-    return value
-
-
-def _optional_int(value: JsonValue | None) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise InvalidValueError("report", "INVALID_TYPE")
-    return value
-
-
-def _int(value: JsonValue | None) -> int:
-    number = _optional_int(value)
-    if number is None:
-        raise InvalidValueError("report", "REQUIRED")
-    return number
-
-
-def _checkpoint_problem(entry: Mapping[str, JsonValue]) -> CheckpointProblem:
-    return CheckpointProblem(
-        uuid.UUID(_text(entry.get("checkpoint_id"))),
-        _int(entry.get("checkpoint_seq")),
-        CheckpointFailure(_text(entry.get("failure_reason"))),
-        _optional_int(entry.get("first_bad_event_seq")),
-        parse_time(_text(entry.get("received_at"))),
-    )
-
-
-def stored_findings(
-    document: Mapping[str, JsonValue],
-) -> tuple[tuple[CheckpointProblem, ...], tuple[CertificateProblem, ...], AuditChainSection, RawDataSection]:
-    """What a stored deep verification report found: checkpoint and certificate problems, audit, raw rows."""
-    chain, certificates = _object(document.get("registry_chain")), _object(document.get("certificates"))
-    audit, raw = _object(document.get("audit_log")), _object(document.get("raw_data"))
-    checkpoints = tuple(_checkpoint_problem(_object(entry)) for entry in _list(chain.get("failures")))
-    certificate_problems = tuple(
-        CertificateProblem(
-            uuid.UUID(_text(_object(entry).get("certificate_id"))),
-            CertificateFailure(_text(_object(entry).get("failure_reason"))),
-        )
-        for entry in _list(certificates.get("failures"))
-    )
-    audit_section = AuditChainSection(
-        SectionStatus(_text(audit.get("status"))),
-        _int(audit.get("entries")),
-        _int(audit.get("last_seq")),
-        _optional_int(audit.get("first_bad_seq")),
-    )
-    raw_section = RawDataSection(
-        SectionStatus(_text(raw.get("status"))),
-        _int(raw.get("submissions_checked")),
-        _int(raw.get("rows_checked")),
-        tuple(uuid.UUID(_text(value)) for value in _list(raw.get("bad_submission_ids"))),
-    )
-    return checkpoints, certificate_problems, audit_section, raw_section

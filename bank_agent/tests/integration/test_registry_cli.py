@@ -159,3 +159,62 @@ def test_a_poison_checkpoint_neither_fails_registry_sync_nor_starves_worker_once
     worker = cli("worker", "--once", "--json")
     assert worker.code == 0, worker.err
     assert worker.json()["ok"] is True
+
+
+def section_line(text: str, name: str) -> list[str]:
+    """The words of the Sections table row of one section."""
+    return next(line.split() for line in text.splitlines() if line.split()[:1] == [name])
+
+
+def test_integrity_report_and_verify_exit_1_when_broken_and_0_when_ok(
+    cli: Cli, bank_db: BankDatabase
+) -> None:
+    """SPEC_DECISIONS 78, 93 item 8: the same exit rule for both, in text and in JSON."""
+    assert [cli("integrity", "verify").code, cli("integrity", "report", "--json").code] == [0, 0]
+    with bank_db.connect("admin") as connection:
+        connection.execute("ALTER TABLE audit_log DISABLE TRIGGER ALL")
+        connection.execute("UPDATE audit_log SET detail = detail || '{\"x\": 1}' WHERE seq = 3")
+        connection.execute("ALTER TABLE audit_log ENABLE TRIGGER ALL")
+    verify, report = cli("integrity", "verify", "--json"), cli("integrity", "report")
+    assert (verify.code, verify.json()["status"], verify.json()["audit_log"]["first_bad_seq"]) == (
+        1,
+        "BROKEN",
+        3,
+    )
+    assert report.code == 1 and section_line(report.out, "audit_log")[:2] == ["audit_log", "BROKEN"]
+    assert cli("integrity", "verify").code == 1
+
+
+def test_integrity_report_shows_a_schema_behind_the_code_instead_of_refusing(
+    cli: Cli, bank_db: BankDatabase
+) -> None:
+    """Review 2, quality finding 8: the report is exempt from the head check, verify is not."""
+    with bank_db.connect("owner") as connection:
+        connection.execute("UPDATE alembic_version SET version_num = '0003_grants'")
+    report = cli("integrity", "report", "--json")
+    assert report.code == 1, report.err
+    controls = {c["name"]: c["ok"] for c in report.json()["database_controls"]["controls"]}
+    assert [name for name, ok in controls.items() if not ok] == ["SCHEMA_AT_MIGRATION_HEAD"]
+    plain = cli("integrity", "report")
+    assert plain.code == 1 and "SCHEMA_AT_MIGRATION_HEAD" in plain.out and plain.err == ""
+    refused = cli("integrity", "verify", "--json")
+    assert (refused.code, refused.json()["error"]["code"]) == (1, "SCHEMA_NOT_CURRENT")
+
+
+def test_a_section_whose_query_fails_is_not_verified_with_the_reason_and_the_rest_is_printed(
+    cli: Cli, bank_db: BankDatabase
+) -> None:
+    with bank_db.connect("owner") as connection:
+        connection.execute("UPDATE alembic_version SET version_num = '0003_grants'")
+        connection.execute("ALTER TABLE registry_messages_quarantined RENAME COLUMN reason TO reason_before")
+    report = cli("integrity", "report", "--json")
+    assert report.code == 1, report.err
+    document = report.json()
+    assert document.pop("ok") is True
+    assert list(report_validator().iter_errors(document)) == []
+    assert document["registry_messages"] == {"status": "NOT_VERIFIED", "quarantined": 0}
+    assert document["certificates"]["status"] == "OK" and document["certificates"]["total"] >= 1
+    plain = cli("integrity", "report")
+    assert section_line(plain.out, "registry_messages")[:2] == ["registry_messages", "NOT_VERIFIED"]
+    assert "SQLSTATE 42703" in plain.out and "certificates" in plain.out
+    assert "Traceback" not in plain.out + plain.err

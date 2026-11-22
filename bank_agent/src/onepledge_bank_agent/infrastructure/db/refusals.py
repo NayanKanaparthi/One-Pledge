@@ -2,9 +2,9 @@
 
 A guard's SQLSTATE (`OP001` to `OP006`), a unique key, and every other integrity or data
 rule become `StoreRefusedError`; a lost or timed out connection, a serialisation failure
-and a deadlock become `StoreUnavailableError`. Anything else (a missing table, a missing
-privilege) is left as it is: it is a database that is not provisioned as the code
-expects, which the command line reports with its own sentence.
+and a deadlock become `StoreUnavailableError`; a missing table, column, function or
+privilege (class 42) becomes `StoreMismatchError`, a database that is not migrated or
+provisioned as the code expects, which the command line reports with its own sentence.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from onepledge_bank_agent.domain.errors import DomainError
 from onepledge_bank_agent.domain.store_errors import (
     GUARD_CODES,
     UNIQUE,
+    StoreMismatchError,
     StoreRefusedError,
     StoreUnavailableError,
 )
@@ -25,6 +26,8 @@ REFUSAL_CLASSES = ("22", "23")
 PASSING = frozenset({"40001", "40P01", "57014", "57P01", "57P02", "57P03"})
 """Serialisation failure, deadlock, statement timeout and the three shutdown states."""
 CONNECTION_CLASS = "08"
+MISMATCH_CLASS = "42"
+"""Syntax error or access rule violation: an undefined table, column or function, a missing privilege."""
 
 
 def sqlstate_of(error: DBAPIError) -> str | None:
@@ -37,14 +40,12 @@ def store_error(error: DBAPIError) -> DomainError | None:
     """The store error a driver error stands for, or None when it is neither a refusal nor passing."""
     state = sqlstate_of(error)
     constraint = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
-    if state in GUARD_CODES:
-        return StoreRefusedError(state, state, constraint)
-    if state == UNIQUE_VIOLATION:
-        return StoreRefusedError(UNIQUE, state, constraint)
-    if state is not None and state[:2] in REFUSAL_CLASSES:
-        return StoreRefusedError(state, state, constraint)
+    if state is not None and (state in GUARD_CODES or state[:2] in REFUSAL_CLASSES):
+        return StoreRefusedError(UNIQUE if state == UNIQUE_VIOLATION else state, state, constraint)
     if state in PASSING or (state is not None and state[:2] == CONNECTION_CLASS):
         return StoreUnavailableError(state)
     if error.connection_invalidated or (state is None and isinstance(error, OperationalError)):
         return StoreUnavailableError(state)
+    if state is not None and state[:2] == MISMATCH_CLASS:
+        return StoreMismatchError(state)
     return None

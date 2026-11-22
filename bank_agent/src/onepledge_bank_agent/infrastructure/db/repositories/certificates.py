@@ -17,9 +17,13 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, aliased
 
 from onepledge_bank_agent.domain.entities import Certificate
-from onepledge_bank_agent.domain.enums import CertificateFailure, TapeKind
+from onepledge_bank_agent.domain.enums import CertificateFailure, TapeKind, TapeStatus
 from onepledge_bank_agent.domain.values import Sha256Hex
-from onepledge_bank_agent.infrastructure.db.models import CertificateRow, RegistryRequestRow
+from onepledge_bank_agent.infrastructure.db.models import (
+    CertificateRow,
+    RegistryRequestRow,
+    TapeSubmissionRow,
+)
 
 
 def _certificate(row: CertificateRow) -> Certificate:
@@ -96,6 +100,23 @@ class SqlCertificateRepository:
         """Answered registry requests: each names the certificate it should have."""
         statement = select(func.count()).where(RegistryRequestRow.certificate_id.is_not(None))
         return int(self._session.execute(statement).scalar_one())
+
+    def missing_for_completed(self) -> list[tuple[uuid.UUID, uuid.UUID]]:
+        """Answered requests of COMPLETED tapes with no verified certificate row."""
+        proven = exists().where(
+            CertificateRow.request_id == RegistryRequestRow.request_id, CertificateRow.verified
+        )
+        statement = (
+            select(RegistryRequestRow.request_id, RegistryRequestRow.certificate_id)
+            .join(TapeSubmissionRow, TapeSubmissionRow.submission_id == RegistryRequestRow.submission_id)
+            .where(
+                TapeSubmissionRow.status == TapeStatus.COMPLETED.value,
+                RegistryRequestRow.certificate_id.is_not(None),
+                ~proven,
+            )
+            .order_by(RegistryRequestRow.request_id)
+        )
+        return [(row.request_id, row.certificate_id) for row in self._session.execute(statement)]
 
     def any_unproven(self) -> bool:
         """A request with a failed row and no verified row."""

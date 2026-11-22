@@ -35,6 +35,15 @@ class StoreUnavailableError(DomainError):
         self.sqlstate = sqlstate
 
 
+class StoreMismatchError(DomainError):
+    """The store does not have the shape the code expects: a table, a column, a function or a
+    privilege is missing (SQLSTATE class 42). A schema behind the code reads this way."""
+
+    def __init__(self, sqlstate: str) -> None:
+        super().__init__()
+        self.sqlstate = sqlstate
+
+
 class ContradictsStoredStateError(DomainError):
     """A registry message describes a state that contradicts what the bank already holds
     (SPEC_DECISIONS 85, rule 3). Nothing is changed; the message is quarantined."""

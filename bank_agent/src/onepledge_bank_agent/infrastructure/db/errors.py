@@ -7,7 +7,7 @@ from collections.abc import Iterator
 
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
-from onepledge_bank_agent.domain.store_errors import StoreUnavailableError
+from onepledge_bank_agent.domain.store_errors import StoreMismatchError, StoreUnavailableError
 from onepledge_bank_agent.infrastructure.operator_errors import (
     DATABASE_UNAVAILABLE,
     SCHEMA_NOT_CURRENT,
@@ -26,7 +26,7 @@ def database_errors_as_operator_errors() -> Iterator[None]:
             "db provision.",
             DATABASE_UNAVAILABLE,
         ) from None
-    except ProgrammingError:
+    except (ProgrammingError, StoreMismatchError):
         raise OperatorError(
             "The bank database is missing tables or privileges; run db migrate.", SCHEMA_NOT_CURRENT
         ) from None

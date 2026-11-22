@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
@@ -39,3 +41,7 @@ class SqlIntegrityRunRepository:
         return IntegrityRun(
             row.run_id, row.ran_at, row.triggered_by, IntegrityRunStatus(row.status), row.report
         )
+
+    def ids(self) -> set[uuid.UUID]:
+        """The id of every stored run."""
+        return set(self._session.execute(select(IntegrityRunRow.run_id)).scalars())

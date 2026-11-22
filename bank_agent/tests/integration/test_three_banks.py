@@ -22,8 +22,8 @@ from bank_testkit.database import BankDatabase
 from bank_testkit.outside import InProcessOutsideRecords
 from bank_testkit.world import Faults
 from onepledge_bank_agent.application.faults import FaultPoint
-from onepledge_bank_agent.domain.enums import CertificateFailure, CheckpointFailure, IntegrityRunStatus
-from onepledge_bank_agent.domain.integrity import IntegrityReport, SectionStatus
+from onepledge_bank_agent.domain.enums import CheckpointFailure, IntegrityRunStatus
+from onepledge_bank_agent.domain.integrity import CertificateFinding, IntegrityReport, SectionStatus
 
 pytestmark = pytest.mark.integration
 
@@ -152,7 +152,7 @@ def test_each_tamper_mode_turns_the_report_broken_with_its_reason(banks: ThreeBa
     assert scalar(database, rejected) == 1
     report = harbor.report()
     assert report.certificates.status is SectionStatus.BROKEN
-    assert [f.failure_reason for f in report.certificates.failures] == [CertificateFailure.BODY_HASH_MISMATCH]
+    assert [f.failure_reason for f in report.certificates.failures] == [CertificateFinding.BODY_HASH_MISMATCH]
     assert report.registry_chain.status is SectionStatus.OK
 
     banks.doubles.tamper(mode="BAD_CHECKPOINT_SIGNATURE")

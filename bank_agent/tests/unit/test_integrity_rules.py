@@ -21,7 +21,13 @@ from onepledge_bank_agent.domain.enums import (
     QuarantineReason,
     TapeKind,
 )
-from onepledge_bank_agent.domain.integrity import CertificateProblem, SectionStatus, registry_messages_section
+from onepledge_bank_agent.domain.integrity import (
+    CertificateFinding,
+    CertificateProblem,
+    QuarantineFinding,
+    SectionStatus,
+    registry_messages_section,
+)
 from onepledge_bank_agent.domain.registry_records import QuarantinedMessage, QuarantinedPayload
 from onepledge_bank_agent.domain.values import Sha256Hex
 
@@ -52,10 +58,11 @@ def certificate(request_id: uuid.UUID, failure: CertificateFailure | None, body:
 
 
 BAD = CertificateFailure.BODY_HASH_MISMATCH
+BAD_FINDING = CertificateFinding.BODY_HASH_MISMATCH
 
 
 def test_a_request_without_a_certificate_yet_is_counted_but_breaks_nothing() -> None:
-    section = certificates_section(2, [certificate(FIRST, None)], [])
+    section = certificates_section(2, [certificate(FIRST, None)], [], [])
     assert (section.status, section.total, section.verified, section.failures) == (SectionStatus.OK, 2, 1, ())
 
 
@@ -63,24 +70,24 @@ def test_a_failed_row_with_no_verified_one_breaks_the_section_until_a_verified_r
     None
 ):
     failed = certificate(FIRST, BAD, body=2)
-    broken = certificates_section(2, [failed, certificate(SECOND, None)], [])
+    broken = certificates_section(2, [failed, certificate(SECOND, None)], [], [])
     assert (broken.status, broken.verified) == (SectionStatus.BROKEN, 1)
-    recovered = certificates_section(2, [failed, certificate(SECOND, None), certificate(FIRST, None)], [])
+    recovered = certificates_section(2, [failed, certificate(SECOND, None), certificate(FIRST, None)], [], [])
     assert (recovered.status, recovered.verified) == (SectionStatus.OK, 2)
-    assert recovered.failures == (CertificateProblem(failed.certificate_id, BAD),), (
+    assert recovered.failures == (CertificateProblem(failed.certificate_id, BAD_FINDING),), (
         "the evidence stays listed"
     )
 
 
 def test_a_deep_finding_breaks_the_section_and_a_stored_failed_row_is_not_one() -> None:
     failed, verified = certificate(FIRST, BAD, body=2), certificate(FIRST, None)
-    receipt = CertificateProblem(failed.certificate_id, BAD)
-    finding = CertificateProblem(verified.certificate_id, CertificateFailure.BAD_SIGNATURE)
+    receipt = CertificateProblem(failed.certificate_id, BAD_FINDING)
+    finding = CertificateProblem(verified.certificate_id, CertificateFinding.BAD_SIGNATURE)
     assert deep_findings_of([receipt, finding], [failed, verified]) == [finding]
-    section = certificates_section(1, [failed, verified], [finding])
+    section = certificates_section(1, [failed, verified], [finding], [])
     assert section.status is SectionStatus.BROKEN and set(section.failures) == {receipt, finding}
     assert certificates_section(
-        1, [failed, verified], deep_findings_of([receipt], [failed, verified])
+        1, [failed, verified], deep_findings_of([receipt], [failed, verified]), []
     ).status is (SectionStatus.OK)
 
 
@@ -88,8 +95,9 @@ def test_a_deep_finding_breaks_the_section_and_a_stored_failed_row_is_not_one() 
 def test_any_quarantined_message_breaks_the_registry_messages_section(
     held: int, status: SectionStatus
 ) -> None:
-    assert registry_messages_section(held) == registry_messages_section(held)
-    assert registry_messages_section(held).status is status
+    messages = [QuarantineFinding(uuid.uuid4(), "ALERT", "SCHEMA_MISMATCH") for _ in range(held)]
+    section = registry_messages_section(messages)
+    assert (section.status, section.quarantined, section.messages) == (status, held, tuple(messages))
 
 
 def failed_checkpoint(world: World) -> None:

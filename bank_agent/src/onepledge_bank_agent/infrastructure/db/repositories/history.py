@@ -12,7 +12,7 @@ from onepledge_bank_agent.domain.audit import AuditEntry
 from onepledge_bank_agent.domain.enums import TapeSource
 from onepledge_bank_agent.domain.raw_evidence import StoredRow, StoredTape
 from onepledge_bank_agent.domain.tape_file import TapeLayout
-from onepledge_bank_agent.infrastructure.db.models import RawRowRow, TapeSubmissionRow
+from onepledge_bank_agent.infrastructure.db.models import LoanRow, RawRowRow, TapeSubmissionRow
 from onepledge_bank_agent.infrastructure.db.repositories.audit_log import SqlAuditLogRepository
 
 
@@ -69,3 +69,7 @@ class SqlHistoryReader:
             layout=layout,
             rows=rows,
         )
+
+    def loan_ids(self) -> set[uuid.UUID]:
+        """The id of every loan."""
+        return set(self._session.execute(select(LoanRow.loan_id)).scalars())

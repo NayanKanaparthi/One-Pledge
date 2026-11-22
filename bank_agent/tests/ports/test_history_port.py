@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 
 from bank_testkit.backends import PortWorld
+from bank_testkit.memory.bank import vins
 from bank_testkit.records import at, raw_rows
 from bank_testkit.tapes import SUMMIT_HEADER, SUMMIT_LAYOUT
 from onepledge_bank_agent.domain.enums import TapeSource
@@ -28,6 +29,15 @@ class TestHistory:
                 same_time[1].submission_id,
                 later.submission_id,
             ]
+
+    def test_every_loan_id_is_read_for_the_anchor_check(self, ports: PortWorld) -> None:
+        """SPEC_DECISIONS 89 b: every loan must have its creating entry, so every id is read."""
+        with ports.units() as unit:
+            assert unit.history.loan_ids() == set()
+        first = ports.loans(ports.tape(at(1)).submission_id, vins(2))
+        second = ports.loans(ports.tape(at(2)).submission_id, vins(1, start=5))
+        with ports.units() as unit:
+            assert unit.history.loan_ids() == {loan.loan_id for loan in (*first, *second)}
 
     def test_a_tape_reads_back_with_its_facts_layout_and_rows_in_row_order(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))

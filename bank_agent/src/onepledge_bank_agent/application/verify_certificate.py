@@ -90,7 +90,7 @@ class VerifyCertificate:
             if not unit.evidence.certificates.add(certificate):
                 return certificate
             failure = certificate.failure.value if certificate.failure else None
-            unit.record(certificate_checked(certificate.certificate_id, request, failure, facts.as_of_seq))
+            unit.record(certificate_checked(certificate, request, failure, facts.as_of_seq))
             unit.commit()
         self._log.info(
             LogEvent.CERTIFICATE_STORED,

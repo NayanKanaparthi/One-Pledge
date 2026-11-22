@@ -37,7 +37,7 @@ from onepledge_bank_agent.interface.composition import AdminComposition, Collabo
 QUIET_LEVEL = "WARNING"
 WORKER_PROCESS = "worker"
 type AdminHandler = Callable[[argparse.Namespace, AdminSettings, AdminComposition, Output], None]
-type RuntimeHandler = Callable[[argparse.Namespace, RuntimeComposition, Output], None]
+type RuntimeHandler = Callable[[argparse.Namespace, RuntimeComposition, Output], int]
 RUNTIME_HANDLERS: Mapping[str, RuntimeHandler] = MappingProxyType(
     {"sync": registry_sync, "report": integrity_report, "verify": integrity_verify}
 )
@@ -53,8 +53,7 @@ def run_command(arguments: argparse.Namespace, output: Output, collaborators: Co
     if arguments.command == "worker":
         return _worker(arguments, output, collaborators)
     if arguments.command in ("registry", "integrity"):
-        _runtime_command(arguments, output, collaborators)
-        return 0
+        return _runtime_command(arguments, output, collaborators)
     handlers: dict[str, AdminHandler] = {
         "provision": _provision,
         "migrate": _migrate,
@@ -231,13 +230,14 @@ UNGUARDED = frozenset({"report"})
 
 def _runtime_command(
     arguments: argparse.Namespace, output: Output, collaborators: Collaborators | None
-) -> None:
-    """`registry sync`, `integrity report`, `integrity verify`: the app role, the runtime settings."""
+) -> int:
+    """`registry sync`, `integrity report`, `integrity verify`: the app role, the runtime settings.
+    `integrity report` skips the schema and role checks, so it can show the controls that are false."""
     settings = load_runtime_settings()
     _route_logs(settings.bank_code, settings.log_level, arguments.quiet)
     action = arguments.registry_command if arguments.command == "registry" else arguments.integrity_command
     with database_errors_as_operator_errors(), RuntimeComposition(settings, collaborators) as composition:
-        composition.schema().require_head()
-        if action not in UNGUARDED:  # SPEC_DECISIONS 72: integrity report must show a false control
+        if action not in UNGUARDED:  # SPEC_DECISIONS 72, 93.8: integrity report must show a false control
+            composition.schema().require_head()
             composition.role_guard().require_least_privilege()
-        RUNTIME_HANDLERS[action](arguments, composition, output)
+        return RUNTIME_HANDLERS[action](arguments, composition, output)

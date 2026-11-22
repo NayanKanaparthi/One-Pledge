@@ -21,7 +21,6 @@ from onepledge_bank_agent.application.create_release_instruction import (
 from onepledge_bank_agent.domain.dependency_errors import RegistryUnavailableError
 from onepledge_bank_agent.domain.enums import (
     AuditAction,
-    CertificateFailure,
     CheckpointFailure,
     FailureReason,
     IntegrityRunStatus,
@@ -34,7 +33,7 @@ from onepledge_bank_agent.domain.errors import (
     TapeDuplicateError,
     ValidationFailedError,
 )
-from onepledge_bank_agent.domain.integrity import DatabaseControl, SectionStatus
+from onepledge_bank_agent.domain.integrity import CertificateFinding, DatabaseControl, SectionStatus
 from onepledge_bank_agent.domain.values import Sha256Hex
 
 pytestmark = pytest.mark.unit
@@ -61,7 +60,15 @@ def test_a_clean_bank_verifies_ok_in_every_section_and_the_run_is_stored_and_aud
     report = bank.verify()
     assert report.status is IntegrityRunStatus.OK
     assert report.section_statuses() == dict.fromkeys(
-        ("registry_chain", "certificates", "audit_log", "raw_data", "database_controls", "registry_messages"),
+        (
+            "registry_chain",
+            "certificates",
+            "audit_log",
+            "raw_data",
+            "database_controls",
+            "registry_messages",
+            "evidence",
+        ),
         "OK",
     )
     assert (report.raw_data.submissions_checked, report.raw_data.rows_checked) == (1, 3)
@@ -96,7 +103,7 @@ def test_a_stored_certificate_body_edited_with_its_claimed_hash_is_still_found(b
     report = bank.verify()
     assert report.certificates.status is SectionStatus.BROKEN
     assert [(f.certificate_id, f.failure_reason) for f in report.certificates.failures] == [
-        (first.certificate_id, CertificateFailure.BODY_HASH_MISMATCH)
+        (first.certificate_id, CertificateFinding.BODY_HASH_MISMATCH)
     ]
 
 
@@ -107,7 +114,7 @@ def test_a_stored_signature_edited_in_place_is_found_on_a_verified_row(bank: Mem
         first, signature="A" + first.signature[1:] if first.signature[0] != "A" else "B"
     )
     report = bank.verify()
-    assert (first.certificate_id, CertificateFailure.BAD_SIGNATURE) in [
+    assert (first.certificate_id, CertificateFinding.BAD_SIGNATURE) in [
         (f.certificate_id, f.failure_reason) for f in report.certificates.failures
     ]
 
@@ -154,7 +161,7 @@ def test_a_failed_certificate_found_by_a_deep_run_and_later_proven_is_ok_in_the_
     bank.run(tape)
     live = bank.report()
     assert live.certificates.status is SectionStatus.OK, "a stored failed row is not a deep finding"
-    assert [f.failure_reason for f in live.certificates.failures] == [CertificateFailure.CONTENT_MISMATCH]
+    assert [f.failure_reason for f in live.certificates.failures] == [CertificateFinding.CONTENT_MISMATCH]
 
 
 # -- release instructions (SPEC 14.6) -------------------------------------------------------------

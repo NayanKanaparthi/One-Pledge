@@ -8,28 +8,36 @@ sections; `--json` prints the `IntegrityReport` document with `"ok": true`.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
 
 from onepledge_bank_agent.application.requester import Requester
 from onepledge_bank_agent.application.sync_registry_outbox import SyncResult
-from onepledge_bank_agent.domain.integrity import IntegrityReport, render_time, report_json
-from onepledge_bank_agent.interface.cli.output import Output, counted, short_hash
+from onepledge_bank_agent.domain.canonical_json import JsonValue
+from onepledge_bank_agent.domain.enums import IntegrityRunStatus
+from onepledge_bank_agent.domain.integrity import IntegrityReport, render_time
+from onepledge_bank_agent.domain.integrity_document import Finding, all_findings, report_json
+from onepledge_bank_agent.interface.cli.output import Output, counted
 from onepledge_bank_agent.interface.composition import RuntimeComposition
 
 
-def registry_sync(arguments: argparse.Namespace, composition: RuntimeComposition, output: Output) -> None:
+def registry_sync(arguments: argparse.Namespace, composition: RuntimeComposition, output: Output) -> int:
     """Pull and process every pending registry message now."""
     result = composition.outbox_sync().requested(Requester.command_line())
     _sync_result(result, output)
+    return 0
 
 
-def integrity_report(arguments: argparse.Namespace, composition: RuntimeComposition, output: Output) -> None:
-    """Print the live integrity report."""
-    _report(composition.integrity_report().execute(), output, "Integrity report")
+def integrity_report(arguments: argparse.Namespace, composition: RuntimeComposition, output: Output) -> int:
+    """Print the live integrity report; exit 1 when it is BROKEN."""
+    return print_report(composition.integrity_report().execute(), output, "Integrity report")
 
 
-def integrity_verify(arguments: argparse.Namespace, composition: RuntimeComposition, output: Output) -> None:
-    """Run a deep verification, store it and print its report."""
-    _report(composition.deep_verification().execute(Requester.command_line()), output, "Deep verification")
+def integrity_verify(arguments: argparse.Namespace, composition: RuntimeComposition, output: Output) -> int:
+    """Run a deep verification, store it and print its report; exit 1 when it is BROKEN."""
+    return print_report(
+        composition.deep_verification().execute(Requester.command_line()), output, "Deep verification"
+    )
 
 
 def _sync_result(result: SyncResult, output: Output) -> None:
@@ -51,74 +59,63 @@ def _sync_result(result: SyncResult, output: Output) -> None:
     )
 
 
-def _sections(report: IntegrityReport) -> list[tuple[str, str, str]]:
-    chain, certificates, audit, raw = (
-        report.registry_chain,
-        report.certificates,
-        report.audit_log,
-        report.raw_data,
-    )
-    last = chain.last_verified
-    last_text = (
-        f"; last verified seq {last.checkpoint_seq:,} at event {last.last_event_seq:,}, head "
-        f"{short_hash(last.head_hash)}"
-        if last is not None
-        else ""
-    )
+def _chain_facts(report: IntegrityReport) -> str:
+    chain, last = report.registry_chain, report.registry_chain.last_verified
+    last_text = f"; last verified seq {last.checkpoint_seq:,}" if last is not None else ""
+    received = counted(chain.checkpoints_received, "checkpoint", "checkpoints")
+    return f"{received} received, {chain.checkpoints_verified:,} verified{last_text}"
+
+
+def _audit_facts(report: IntegrityReport) -> str:
+    audit = report.audit_log
+    bad = f"; first bad seq {audit.first_bad_seq:,}" if audit.first_bad_seq is not None else ""
+    return f"{counted(audit.entries, 'entry', 'entries')}{bad}"
+
+
+def _controls_facts(report: IntegrityReport) -> str:
     controls = report.database_controls.controls
-    in_force = sum(1 for _, ok in controls if ok)
-    first_bad = f"; first bad seq {audit.first_bad_seq:,}" if audit.first_bad_seq is not None else ""
-    return [
-        (
-            "registry_chain",
-            chain.status.value,
-            f"{counted(chain.checkpoints_received, 'checkpoint', 'checkpoints')} received, "
-            f"{chain.checkpoints_verified:,} verified{last_text}",
-        ),
-        (
-            "certificates",
-            certificates.status.value,
-            counted(certificates.total, "certificate", "certificates")
-            + f", {certificates.verified:,} verified",
-        ),
-        ("audit_log", audit.status.value, f"{counted(audit.entries, 'entry', 'entries')}{first_bad}"),
-        (
-            "raw_data",
-            raw.status.value,
-            f"{counted(raw.submissions_checked, 'submission', 'submissions')}, "
-            f"{counted(raw.rows_checked, 'row', 'rows')} checked, {len(raw.bad_submission_ids):,} not intact",
-        ),
-        (
-            "database_controls",
-            report.database_controls.status.value,
-            f"{in_force} of {len(controls)} in force",
-        ),
-    ]
+    return f"{sum(1 for _, ok in controls if ok)} of {len(controls)} in force"
 
 
-def _failures(report: IntegrityReport) -> list[tuple[str, str, str, str]]:
-    rows = [
-        (
-            "checkpoint",
-            str(problem.checkpoint_id),
-            problem.failure_reason.value,
-            f"seq {problem.checkpoint_seq:,}"
-            + (f", first bad event {problem.first_bad_event_seq:,}" if problem.first_bad_event_seq else ""),
-        )
-        for problem in report.registry_chain.failures
-    ]
-    rows += [
-        ("certificate", str(problem.certificate_id), problem.failure_reason.value, "")
-        for problem in report.certificates.failures
-    ]
-    rows += [("submission", str(sid), "RAW_DATA_MISMATCH", "") for sid in report.raw_data.bad_submission_ids]
-    return rows
+FACTS: Mapping[str, Callable[[IntegrityReport], str]] = MappingProxyType(
+    {
+        "registry_chain": _chain_facts,
+        "certificates": lambda r: (
+            f"{r.certificates.verified:,} of "
+            + counted(r.certificates.total, "answered request", "answered requests")
+            + " proven"
+        ),
+        "audit_log": _audit_facts,
+        "raw_data": lambda r: (
+            counted(r.raw_data.submissions_checked, "submission", "submissions")
+            + f", {len(r.raw_data.bad_submission_ids):,} not intact"
+        ),
+        "database_controls": _controls_facts,
+        "registry_messages": lambda r: (
+            counted(r.registry_messages.quarantined, "message", "messages") + " quarantined"
+        ),
+        "evidence": lambda r: counted(len(r.evidence.problems), "problem", "problems"),
+    }
+)
+"""The facts column of every section of the document, by section name."""
 
 
-def _report(report: IntegrityReport, output: Output, title: str) -> None:
+def _unread(sqlstate: str) -> str:
+    """The facts of a section the report could not read (SPEC_DECISIONS 93, item 8)."""
+    return f"not read: the database refused the query (SQLSTATE {sqlstate}); run db migrate"
+
+
+def _rows(findings: list[Finding]) -> list[tuple[str, str, str, str]]:
+    return [(f.section, f.subject, f.ident, f"{f.reason} {f.where}".strip()) for f in findings]
+
+
+def print_report(report: IntegrityReport, output: Output, title: str) -> int:
+    """Print the whole report; exit 1 when it is BROKEN (SPEC_DECISIONS 78)."""
+    document = report_json(report)
+    code = 0 if report.status is IntegrityRunStatus.OK else 1
     if output.as_json:
-        output.success(report_json(report))
-        return
+        output.success(document)
+        return code
     deep = report.last_deep_verification_at
     output.pairs(
         title,
@@ -128,14 +125,27 @@ def _report(report: IntegrityReport, output: Output, title: str) -> None:
             "last deep verification": render_time(deep) if deep is not None else "never",
         },
     )
-    output.table("Sections", ("section", "status", "facts"), _sections(report), ("section", "sections"), "")
-    failures = _failures(report)
-    if failures:
-        output.table("Failures", ("object", "id", "reason", "where"), failures, ("failure", "failures"), "")
-    output.table(
-        "Database controls",
-        ("control", "in force"),
-        [(name.value, "yes" if ok else "no") for name, ok in report.database_controls.controls],
-        ("control", "controls"),
-        f"Overall status {report.status.value}: BROKEN when any section is BROKEN.",
-    )
+    sections = [name for name, value in document.items() if isinstance(value, dict) and "status" in value]
+    unread = {u.section: u.sqlstate for u in report.unread}
+    rows = [
+        (
+            name,
+            str(_section_status(document, name)),
+            _unread(unread[name]) if name in unread else FACTS[name](report),
+        )
+        for name in sections
+    ]
+    output.table("Sections", ("section", "status", "facts"), rows, ("section", "sections"), "")
+    open_findings, recovered = all_findings(report)
+    headers = ("section", "object", "id", "reason")
+    if open_findings:
+        output.table("Open failures", headers, _rows(open_findings), ("failure", "failures"), "")
+    if recovered:
+        output.table("Recovered (evidence kept)", headers, _rows(recovered), ("failure", "failures"), "")
+    output.line(f"Overall status {report.status.value}: BROKEN when any section is BROKEN.")
+    return code
+
+
+def _section_status(document: Mapping[str, JsonValue], name: str) -> JsonValue:
+    section = document[name]
+    return section.get("status") if isinstance(section, Mapping) else None

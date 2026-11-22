@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 import yaml
 
-from onepledge_bank_agent.domain import enums
+from onepledge_bank_agent.domain import enums, integrity
 from onepledge_bank_agent.domain.access_policy import AccessPolicy, Route
 from onepledge_bank_agent.domain.enums import Role
 from onepledge_bank_agent.domain.errors import MESSAGES
@@ -49,7 +49,8 @@ PROPERTIES: dict[tuple[str, ...], type[StrEnum]] = {
     ("AuditEntry", "outcome"): enums.AuditOutcome,
     ("LineageRegistryRequest", "origin"): enums.RequestOrigin,
     ("CheckpointFailure", "failure_reason"): enums.CheckpointFailure,
-    ("CertificateSection", "failures", "items", "failure_reason"): enums.CertificateFailure,
+    ("CertificateSection", "failures", "items", "failure_reason"): integrity.CertificateFinding,
+    ("EvidenceSection", "problems", "items", "problem"): integrity.EvidenceProblemKind,
     ("IntegrityReport", "status"): enums.IntegrityRunStatus,
 }
 
