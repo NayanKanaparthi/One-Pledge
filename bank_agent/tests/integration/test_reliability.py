@@ -459,3 +459,20 @@ def test_a_refused_key_holder_key_fails_the_tape_at_once_and_sends_nothing_to_th
     assert pairs(bank.database, detail) == {"KEY_HOLDER_REJECTED": "key_holder_2 401 UNAUTHENTICATED"}
     assert pairs(bank.database, "SELECT 'tokens', count(*)::text FROM loan_tokens") == {"tokens": "0"}
     assert bank.doubles.member_stats("HARBOR").get("submissions", 0) == 0
+
+
+def test_a_lost_answer_on_a_one_batch_tape_is_replayed_and_locks_once(lab: Lab) -> None:
+    """REL-04: the registry commits the only batch and its answer is lost; the retry replays it."""
+    bank = lab.bank()
+    bank.doubles.fail_next(REGISTRY_URL, count=1, status=503, when="AFTER_COMMIT")
+    with BankAgentHarness(bank.database, Services(bank.outside, bank.doubles)) as harness:
+        lab.upload(harness)
+        assert harness.run_worker().runs[-1].status is TapeStatus.COMPLETED
+    assert pairs(bank.database, "SELECT attempts::text, response_status::text FROM registry_requests") == {
+        "2": "200"
+    }
+    assert bank.doubles.member_stats("HARBOR")["submissions"] == 1
+    locked = pairs(bank.database, "SELECT 'locked', count(*)::text FROM loans WHERE state = 'LOCKED'")
+    assert int(locked["locked"]) == len(bank.doubles.active_locks("HARBOR"))
+    bodies = [r["body"] for r in bank.doubles.received() if r["path"] == "/v1/submissions"]
+    assert (len(bodies), len(set(bodies))) == (2, 1)
