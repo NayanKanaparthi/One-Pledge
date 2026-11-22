@@ -35,7 +35,7 @@ ALLOWED_KEYS: frozenset[str] = frozenset(
         "loan_id", "alert_id", "registry_request_id", "certificate_id", "checkpoint_seq", "user_id",
         "role", "stage", "status", "kind", "count", "rows", "attempts", "duration_ms", "http_status",
         "method", "route", "error_code", "failure_code", "check_type", "result", "reason_code",
-        "batch_index", "item_count", "exception_type", "stack", "dependency",
+        "batch_index", "item_count", "exception_type", "stack", "dependency", "reason", "revision",
     }
 )  # fmt: skip
 REDACTED = "[REDACTED]"
@@ -63,7 +63,7 @@ class RedactionProcessor:
     def __call__(self, logger: WrappedLogger, method_name: str, event_dict: EventDict) -> EventDict:
         """A new record holding only allowed keys with safe values, and the names of dropped keys."""
         output: EventDict = {}
-        dropped = sorted(key for key in event_dict if key not in ALLOWED_KEYS and not key.startswith("_"))
+        dropped = sorted(key for key in event_dict if key not in ALLOWED_KEYS)
         for key, value in event_dict.items():
             if key in ALLOWED_KEYS:
                 output[key] = safe_value(key, value)
@@ -101,12 +101,35 @@ def _render_exception(logger: WrappedLogger, method_name: str, event_dict: Event
 
 
 def _foreign_record(logger: WrappedLogger, method_name: str, event_dict: EventDict) -> EventDict:
-    """A standard library record keeps only its logger name; its message is never rendered."""
+    """A third party record keeps its logger name, its level and its exception type; its message is never
+    rendered (SPEC_DECISIONS 43.6)."""
     record = event_dict.get("_record")
     event_dict["event"] = LogEvent.LIBRARY_LOG.value
     if isinstance(record, logging.LogRecord):
         event_dict["logger"] = record.name
+        if record.exc_info and record.exc_info[0] is not None:
+            event_dict["exception_type"] = record.exc_info[0].__name__
     return event_dict
+
+
+FRAMEWORK_KEYS = ("_record", "_from_structlog")
+
+
+def strip_framework_keys(logger: WrappedLogger, method_name: str, event_dict: EventDict) -> EventDict:
+    """Remove, by exact name, the keys the logging framework itself injects (SPEC_DECISIONS 53.8), so the
+    redaction that follows names every other key it drops."""
+    for key in FRAMEWORK_KEYS:
+        event_dict.pop(key, None)
+    return event_dict
+
+
+class ThirdPartyFilter(logging.Filter):
+    """Drops records of third party loggers below WARNING (SPEC_DECISIONS 43.6). A record of this package
+    carries its structlog event dictionary as its message."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Keep the package's records and third party records at WARNING or above."""
+        return isinstance(record.msg, dict) or record.levelno >= logging.WARNING
 
 
 class _FixedKeys:
@@ -139,7 +162,7 @@ def configure_logging(bank_code: str | None, level: str, stream: TextIO | None =
     formatter = structlog.stdlib.ProcessorFormatter(
         foreign_pre_chain=[_foreign_record, *shared],
         processors=[
-            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            strip_framework_keys,
             _render_exception,
             RedactionProcessor(),
             structlog.processors.JSONRenderer(sort_keys=False),
@@ -147,6 +170,7 @@ def configure_logging(bank_code: str | None, level: str, stream: TextIO | None =
     )
     handler = logging.StreamHandler(stream if stream is not None else sys.stdout)
     handler.setFormatter(formatter)
+    handler.addFilter(ThirdPartyFilter())
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(level)

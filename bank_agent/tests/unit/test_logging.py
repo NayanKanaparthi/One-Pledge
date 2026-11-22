@@ -31,6 +31,7 @@ SPEC_16_5_KEYS = {
     "role", "stage", "status", "kind", "count", "rows", "attempts", "duration_ms", "http_status",
     "method", "route", "error_code", "failure_code", "check_type", "result", "reason_code",
     "batch_index", "item_count", "exception_type", "stack", "dependency",
+    "reason", "revision",  # SPEC_DECISIONS 58 and 43.6
 }  # fmt: skip
 REDACT = RedactionProcessor()
 
@@ -137,3 +138,27 @@ def test_an_unknown_key_logged_through_the_product_logger_is_named_not_shown(cap
     structlog.stdlib.get_logger("probe").info("probe", vin="1HGCM82633A004352", colour="red")
     (record,) = lines(captured)
     assert record["redacted_keys"] == ["colour", "vin"] and "1HGCM82633A004352" not in captured.getvalue()
+
+
+def test_a_key_starting_with_an_underscore_is_dropped_and_named(captured: io.StringIO) -> None:
+    """SPEC_DECISIONS 53.8: only the framework's own keys are removed silently, by exact name."""
+    structlog.stdlib.get_logger("probe").info("probe", _vin="1HGCM82633A004352", _x=1)
+    (record,) = lines(captured)
+    assert record["redacted_keys"] == ["_vin", "_x"] and "1HGCM82633A004352" not in captured.getvalue()
+    assert "_record" not in json.dumps(record) and "_from_structlog" not in json.dumps(record)
+
+
+def test_library_records_below_warning_are_dropped_and_above_keep_logger_level_and_type(
+    captured: io.StringIO,
+) -> None:
+    """SPEC_DECISIONS 43.6: no contentless library line; a warning keeps who, how bad and what type."""
+    logging.getLogger("alembic.runtime.migration").info("Running upgrade 0001 -> 0002")
+    assert captured.getvalue() == ""
+    try:
+        raise OSError("/secret/path 1HGCM82633A004352")
+    except OSError:
+        logging.getLogger("sqlalchemy.pool").error("pool failed for %s", "C1234567", exc_info=True)
+    (record,) = lines(captured)
+    assert (record["event"], record["logger"], record["level"]) == ("library_log", "sqlalchemy.pool", "error")
+    assert record["exception_type"] == "OSError"
+    assert "secret" not in captured.getvalue() and "C1234567" not in captured.getvalue()

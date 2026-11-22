@@ -176,8 +176,13 @@ def test_no_canary_value_reaches_any_log_record_of_intake_clean_and_check(
             harness.ingest(tape, FACILITY, TapeKind.PLEDGE, AS_OF)
             assert [run.status.value for run in harness.run_worker().runs] == ["CLEANED", "FAILED"]
 
+    library = logging.getLogger("httpx")
+    library.info("dropped below WARNING %s", VALID_VINS[0])
+    library.warning("a library warning that names %s and %s", VALID_VINS[1], BORROWERS[1])
+
     records = records_of(captured)
     events = {record["event"] for record in records}
+    assert [record["level"] for record in records if record["event"] == "library_log"] == ["warning"]
     expected = {
         LogEvent.TAPE_RECEIVED, LogEvent.TAPE_STAGE_ADVANCED, LogEvent.TAPE_UPLOAD_REJECTED,
         LogEvent.ACCESS_DENIED, LogEvent.TAPE_STAGE_ATTEMPT_FAILED, LogEvent.TAPE_FAILED,
