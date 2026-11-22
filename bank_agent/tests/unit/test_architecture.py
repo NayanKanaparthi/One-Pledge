@@ -46,7 +46,10 @@ MARKERS = re.compile(
     r"\b(" + "|".join(("TO" + "DO", "FIX" + "ME", "X" + "XX", "HA" + "CK", "T" + "BD")) + r")\b"
 )
 VIN_LITERAL = re.compile(r"[A-HJ-NPR-Z0-9]{17}")
-CASE_NAMES = re.compile(r"20261117|S0[1-9]_|S1[0-5]_|EXACT_COPY|TWO_CARS|RACE_PAIR|BLIND_SPOT")
+CASE_NAMES = re.compile(
+    r"2026111[7]|S0[1-9]_|S1[0-5]_|EXACT_[C]OPY|COPY_[A]MOUNT|COPY_[D]ATE|COPY_[V]IN|INVENT[E]D|TWO_[C]ARS"
+    r"|MOVED_[A]FTER|REFINANC[E]D|RACE_[P]AIR|BLIND_[S]POT|M_[V]IN|M_[D]ATE|M_[A]MOUNT"
+)
 EM_DASH = chr(0x2014)
 BUILTIN_ERRORS = frozenset(
     {"Exception", "ValueError", "RuntimeError", "TypeError", "KeyError", "LookupError"}
