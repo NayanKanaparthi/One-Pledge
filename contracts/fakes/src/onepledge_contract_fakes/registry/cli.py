@@ -5,11 +5,12 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 
+from onepledge_contract_fakes.binding import BindError
 from onepledge_contract_fakes.cli_output import CliOutput, common_options, run_guarded
 from onepledge_contract_fakes.errors import ConfigurationError
 from onepledge_contract_fakes.registry.app import create_registry_app
 from onepledge_contract_fakes.registry.settings import load_settings
-from onepledge_contract_fakes.server import BindError, run_server
+from onepledge_contract_fakes.server import run_server
 
 # The `service` value in log lines is the health value of the contract (SPEC_DECISIONS 22.6).
 SERVICE_NAME = "registry"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import select
 import socket
 import subprocess
 import sys
@@ -224,7 +225,7 @@ def test_serving_on_a_busy_port_says_so(run: Run, database: Database) -> None:
         port = busy.getsockname()[1]
         code, _, err = run(["serve"], **database.environment(PORT=str(port)))
     assert code == 1
-    assert err == f"Port {port} on 127.0.0.1 is already in use or not permitted; set another PORT.\n"
+    assert err == "PORT is already in use or not permitted on BIND_HOST; set another PORT.\n"
 
 
 def test_adding_a_client_needs_the_key_variable_and_the_key_format(run: Run, database: Database) -> None:
@@ -326,7 +327,7 @@ def test_a_bind_host_that_is_not_local_is_one_sentence(run: Run, database: Datab
     assert run(["serve"], **env) == (
         1,
         "",
-        "BIND_HOST 192.0.2.77 is not an address of this machine; set BIND_HOST to 127.0.0.1 or 0.0.0.0.\n",
+        "BIND_HOST is not an address of this machine. Set BIND_HOST to 127.0.0.1 or 0.0.0.0.\n",
     )
 
 
@@ -445,3 +446,50 @@ def test_an_unknown_target_revision_is_logged_with_that_revision(
     assert [(r["event"], r["revision"]) for r in lines if r["level"] == "error"] == [
         ("schema_migration_failed", "9999_unknown")
     ]
+
+
+# SPEC_DECISIONS 73.6: the real probe with each kind of address. This machine may have no IPv6,
+# so `::` and `::1` may give the IPv6 sentence; never the last resort one.
+NO_IPV6_SENTENCE = (
+    "BIND_HOST is an IPv6 address and this machine has no IPv6. Set BIND_HOST to 127.0.0.1 or 0.0.0.0."
+)
+NOT_LOCAL_SENTENCE = "BIND_HOST is not an address of this machine. Set BIND_HOST to 127.0.0.1 or 0.0.0.0."
+
+
+def serve_outcome(env: dict[str, str]) -> tuple[str, str]:
+    """Start serve as a process: ("started", "") once it logs service_started, else its stderr."""
+    script = "from onepledge_outside_records.interface.cli import main; raise SystemExit(main(['serve']))"
+    process = subprocess.Popen(  # noqa: S603 - fixed interpreter and arguments
+        [sys.executable, "-c", script], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    deadline = time.monotonic() + 20
+    try:
+        assert process.stdout is not None
+        while time.monotonic() < deadline and process.poll() is None:
+            ready, _, _ = select.select([process.stdout], [], [], 0.2)
+            if ready and "service_started" in process.stdout.readline():
+                return "started", ""
+        _, err = process.communicate(timeout=10)
+        return "refused", err
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.communicate(timeout=10)
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("host", ["127.0.0.1", "0.0.0.0", "8.8.8.8", "::", "::1"])  # noqa: S104 - decision 73.6
+def test_the_real_probe_on_each_bind_host(database: Database, host: str) -> None:
+    env = {
+        **{k: v for k, v in os.environ.items() if k not in VARIABLES},
+        "DATABASE_URL": database.app_url,
+        "PORT": str(free_port()),
+        "BIND_HOST": host,
+    }
+    outcome, err = serve_outcome(env)
+    if host == "8.8.8.8":
+        assert (outcome, err) == ("refused", NOT_LOCAL_SENTENCE + "\n")
+    elif host in ("::", "::1"):
+        assert outcome == "started" or err == NO_IPV6_SENTENCE + "\n", err
+    else:
+        assert outcome == "started", err

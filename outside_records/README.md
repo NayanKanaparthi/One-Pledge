@@ -120,7 +120,7 @@ the variables in the table below.
 | `DB_APP_ROLE` | `db migrate` | The role that receives `SELECT` on the four tables (`{db}_app`). |
 | `PG_ADMIN_URL` | `db provision` | Superuser URL. Provisioning only. |
 | `PORT` | `serve` | TCP port, 1 to 65535 in ASCII digits (8200 in the local stack: `ONEPLEDGE_PORT_BASE` plus 200). |
-| `BIND_HOST` | `serve` | An IP address of this machine. Default `127.0.0.1`; `0.0.0.0` in the container. |
+| `BIND_HOST` | `serve` | An IPv4 or IPv6 literal of this machine (a name such as `localhost` is refused). Default `127.0.0.1`; `0.0.0.0` in the container. `serve` binds a socket to it before anything else and refuses with one line that names the variable, never its value (SPEC_DECISIONS 73). |
 | `LOG_LEVEL` | `serve` | Default `INFO`. |
 
 Every value is trimmed of ASCII space, tab, CR and LF at both ends; a value that still

@@ -7,6 +7,7 @@ import base64
 import io
 import json
 import os
+import select
 import socket
 import subprocess
 import sys
@@ -92,10 +93,7 @@ def test_a_port_in_use_is_one_sentence(clean_env: pytest.MonkeyPatch) -> None:
             clean_env.setenv(name, value)
         err = io.StringIO()
         assert registry_cli.main(["serve"], CliOutput(io.StringIO(), err)) == 1
-        assert (
-            err.getvalue()
-            == f"Port {port} on 127.0.0.1 is already in use or not permitted; set another PORT.\n"
-        )
+        assert err.getvalue() == "PORT is already in use or not permitted on BIND_HOST; set another PORT.\n"
 
 
 def key_holder_env(keys: str, active: str = "1") -> dict[str, str]:
@@ -154,8 +152,9 @@ def test_a_bind_host_that_is_not_local_is_one_sentence(clean_env: pytest.MonkeyP
         clean_env.setenv(name, value)
     err = io.StringIO()
     assert registry_cli.main(["serve"], CliOutput(io.StringIO(), err)) == 1
-    assert err.getvalue() == (
-        "BIND_HOST 192.0.2.77 is not an address of this machine; set BIND_HOST to 127.0.0.1 or 0.0.0.0.\n"
+    assert (
+        err.getvalue()
+        == "BIND_HOST is not an address of this machine. Set BIND_HOST to 127.0.0.1 or 0.0.0.0.\n"
     )
 
 
@@ -182,3 +181,54 @@ def test_the_registry_serves_health_as_a_process() -> None:
         stdout, _ = process.communicate(timeout=10)
     lines = [json.loads(line) for line in stdout.decode().splitlines() if line.strip()]
     assert lines and lines[0]["event"] == "service_started" and lines[0]["service"] == "registry"
+
+
+# SPEC_DECISIONS 73.6: the real probe with each kind of address. This machine may have no IPv6,
+# so `::` and `::1` may give the IPv6 sentence; never the last resort one.
+NO_IPV6_SENTENCE = (
+    "BIND_HOST is an IPv6 address and this machine has no IPv6. Set BIND_HOST to 127.0.0.1 or 0.0.0.0."
+)
+NOT_LOCAL_SENTENCE = "BIND_HOST is not an address of this machine. Set BIND_HOST to 127.0.0.1 or 0.0.0.0."
+
+
+def serve_outcome(cli_module: str, env: dict[str, str]) -> tuple[str, str]:
+    """Start a double's serve as a process: ("started", "") once it logs service_started, else its stderr."""
+    script = f"from onepledge_contract_fakes.{cli_module}.cli import main; raise SystemExit(main(['serve']))"
+    process = subprocess.Popen(  # noqa: S603 - fixed interpreter and arguments
+        [sys.executable, "-c", script], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    deadline = time.monotonic() + 20
+    try:
+        assert process.stdout is not None
+        while time.monotonic() < deadline and process.poll() is None:
+            ready, _, _ = select.select([process.stdout], [], [], 0.2)
+            if ready and "service_started" in process.stdout.readline():
+                return "started", ""
+        _, err = process.communicate(timeout=10)
+        return "refused", err
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.communicate(timeout=10)
+
+
+KEYS = json.dumps({"1": SCALAR})
+
+
+@pytest.mark.integration
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("cli_module", ["registry", "key_holder"])
+@pytest.mark.parametrize("host", ["127.0.0.1", "0.0.0.0", "8.8.8.8", "::", "::1"])  # noqa: S104 - decision 73.6
+def test_the_real_probe_on_each_bind_host(cli_module: str, host: str) -> None:
+    base = {k: v for k, v in os.environ.items() if not k.startswith(ENV_PREFIXES)}
+    with socket.socket() as spare:
+        spare.bind(("127.0.0.1", 0))
+        port = spare.getsockname()[1]
+    settings = registry_env(port) if cli_module == "registry" else {**key_holder_env(KEYS), "PORT": str(port)}
+    outcome, err = serve_outcome(cli_module, {**base, **settings, "BIND_HOST": host})
+    if host == "8.8.8.8":
+        assert (outcome, err) == ("refused", NOT_LOCAL_SENTENCE + "\n")
+    elif host in ("::", "::1"):
+        assert outcome == "started" or err == NO_IPV6_SENTENCE + "\n", err
+    else:
+        assert outcome == "started", err

@@ -94,7 +94,7 @@ Key holder double:
 |---|---|---|
 | `HOLDER_ID` | required | `kh1` or `kh2`. |
 | `PORT` | required | TCP port. |
-| `BIND_HOST` | `127.0.0.1` | IP address to bind (`0.0.0.0` in containers). A value that is not an IPv4 or IPv6 address, or not an address of this machine, stops startup with one line naming `BIND_HOST` and saying to set it to 127.0.0.1 or 0.0.0.0, the rule of outside records (SPEC_DECISIONS 66). |
+| `BIND_HOST` | `127.0.0.1` | IP address to bind (`0.0.0.0` in containers). It must be an IPv4 or IPv6 literal (a name such as `localhost` is refused). Before anything else, `serve` binds a socket to it and refuses with one line, never printing the value: "BIND_HOST is an IPv6 address and this machine has no IPv6.", "BIND_HOST is not an address of this machine." or "BIND_HOST cannot be bound.", each followed by "Set BIND_HOST to 127.0.0.1 or 0.0.0.0." A taken `PORT` gives "PORT is already in use or not permitted on BIND_HOST; set another PORT." The rule and sentences are those of outside records (SPEC_DECISIONS 73). |
 | `FAKE_KH_KEYS` | required | JSON object of key version to base64 scalar, for example `{"1": "<44 base64 characters>"}`. Versions are ASCII digits; every scalar must decode to 32 bytes and be neither zero nor one (modulo the group order). |
 | `FAKE_KH_ACTIVE_VERSION` | required | The version used when a request does not pin one. |
 | `FAKE_KH_MEMBERS` | required | JSON list of `{"member_id": "<uuid>", "api_key_sha256": "<64 hex>"}`. |

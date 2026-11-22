@@ -7,9 +7,6 @@ and writes its log lines to stderr; `serve` logs to stdout and prints nothing el
 from __future__ import annotations
 
 import argparse
-import errno
-import ipaddress
-import socket
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -17,6 +14,7 @@ import uvicorn
 from fastapi import FastAPI
 
 from onepledge_outside_records.domain.errors import OperatorError
+from onepledge_outside_records.infrastructure.binding import check_binding
 from onepledge_outside_records.infrastructure.logging_setup import LogEvent, configure_logging, get_logger
 from onepledge_outside_records.infrastructure.settings import (
     AdminSettings,
@@ -29,7 +27,6 @@ from onepledge_outside_records.interface.output import Console, common_options, 
 
 # The `service` value in log lines is the contract's health value (SPEC_DECISIONS 22.6).
 SERVICE_NAME = "outside_records"
-IPV6 = 6
 QUIET_LEVEL = "WARNING"
 
 
@@ -122,28 +119,6 @@ def non_empty_path(text: str) -> Path:
     return Path(text)
 
 
-def _port_free(host: str, port: int) -> None:
-    """One sentence when the address cannot be bound: taken, not permitted, or not of this machine."""
-    family = socket.AF_INET6 if ipaddress.ip_address(host).version == IPV6 else socket.AF_INET
-    with socket.socket(family, socket.SOCK_STREAM) as probe:
-        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            probe.bind((host, port))
-        except OSError as error:
-            if error.errno == errno.EADDRNOTAVAIL:
-                raise OperatorError(
-                    f"BIND_HOST {host} is not an address of this machine; "
-                    "set BIND_HOST to 127.0.0.1 or 0.0.0.0.",
-                    "CONFIGURATION_ERROR",
-                ) from None
-            if error.errno in (errno.EADDRINUSE, errno.EACCES):
-                raise OperatorError(
-                    f"Port {port} on {host} is already in use or not permitted; set another PORT.",
-                    "PORT_UNAVAILABLE",
-                ) from None
-            raise
-
-
 def build_server(app: FastAPI, host: str, port: int) -> uvicorn.Server:
     """A uvicorn server: one worker, uvicorn's access log off, logging left to `logging_setup`."""
     config = uvicorn.Config(
@@ -163,7 +138,7 @@ def build_server(app: FastAPI, host: str, port: int) -> uvicorn.Server:
 def _serve(composition: Composition) -> None:
     settings = load_serve_settings()
     port = settings.require_port()
-    _port_free(settings.bind_host, port)
+    check_binding(settings.bind_host, port)
     app = composition.service(settings)
     configure_logging(SERVICE_NAME, settings.log_level)
     get_logger(__name__).info(LogEvent.SERVICE_STARTED)
