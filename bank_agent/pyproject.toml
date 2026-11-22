@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "onepledge-bank-agent"
 version = "1.0.0"
-description = "The OnePledge bank agent: intake, cleaning, local checks and the bank's own evidence database (layer 1)."
+description = "The OnePledge bank agent: intake, cleaning, local checks, blind tokenisation, registry submission and the bank's own evidence database (layer 1)."
 requires-python = ">=3.12"
 dependencies = [
   "pydantic>=2.6",
@@ -14,6 +14,8 @@ dependencies = [
   "psycopg[binary]>=3.1",
   "structlog>=24.1",
   "httpx>=0.27",
+  "oprf>=5.0",
+  "cryptography>=42",
 ]
 
 [project.optional-dependencies]
@@ -41,6 +43,7 @@ packages = [
   "onepledge_bank_agent.domain.cleaning",
   "onepledge_bank_agent.application",
   "onepledge_bank_agent.infrastructure",
+  "onepledge_bank_agent.infrastructure.crypto",
   "onepledge_bank_agent.infrastructure.db",
   "onepledge_bank_agent.infrastructure.db.models",
   "onepledge_bank_agent.infrastructure.db.repositories",

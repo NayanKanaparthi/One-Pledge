@@ -10,8 +10,12 @@ masked in every repr.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import os
 import re
+import uuid
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Self
@@ -28,6 +32,12 @@ _BOOLEANS = MappingProxyType({"true": True, "false": False})
 MAX_PORT = 65535
 MAX_SECONDS = 3600.0
 MAX_CHUNK = 1000
+MAX_TOKENIZE_CHUNK = 125  # 8 elements per loan, at most 1,000 elements per key holder request
+MAX_SUBMIT_BATCH = 500
+_KEY_ID = re.compile(r"^[a-z0-9-]{1,64}$")
+PUBLIC_KEY_BYTES = 32
+# The published test vector key (contracts/examples/vectors/signatures.json) is never a trust anchor.
+TEST_VECTOR_PUBLIC_KEYS = frozenset({"BlflaowBg3VkeFNDcT9cKZFMgLkwYA7l+SNUMxWPOVQ="})
 
 
 def read_environment() -> Mapping[str, str]:
@@ -55,13 +65,17 @@ class Tunables(BaseModel):
     pipeline_worker_enabled: bool = True
     pipeline_poll_seconds: float = 1.0
     pipeline_max_attempts: int = 8
+    outbox_poll_seconds: float = 2.0
     check_chunk_loans: int = 100
+    tokenize_chunk_loans: int = 100
+    submit_batch_items: int = 500
     http_connect_timeout_seconds: float = 2.0
     http_read_timeout_seconds: float = 10.0
     title_pending_window_days: int = 30
     first_payment_grace_days: int = 45
     payment_window_days: int = 90
     contract_date_tolerance_days: int = 3
+    halt_on_registry_integrity_failure: bool = True
 
 
 class _Reader:
@@ -112,6 +126,38 @@ class _Reader:
             raise _invalid(name, "true or false")
         return _BOOLEANS[value.lower()]
 
+    def member_id(self, name: str) -> uuid.UUID | None:
+        value = self.text(name)
+        if value is None:
+            return None
+        try:
+            parsed = uuid.UUID(value)
+        except ValueError:
+            raise _invalid(name, "a UUID") from None
+        if str(parsed) != value.lower():
+            raise _invalid(name, "a UUID")
+        return parsed
+
+    def public_keys(self, name: str) -> tuple[tuple[str, str], ...] | None:
+        value = self.text(name)
+        if value is None:
+            return None
+        rule = "a JSON object of key ids to base64 Ed25519 public keys"
+        try:
+            document = json.loads(value)
+        except ValueError:
+            raise _invalid(name, rule) from None
+        if not isinstance(document, dict) or not document:
+            raise _invalid(name, rule)
+        keys: list[tuple[str, str]] = []
+        for key_id, key in sorted(document.items()):
+            if not isinstance(key, str) or not _KEY_ID.fullmatch(key_id) or not _is_public_key(key):
+                raise _invalid(name, rule)
+            if key in TEST_VECTOR_PUBLIC_KEYS:
+                raise _invalid(name, "a real registry key, not the published test vector key")
+            keys.append((key_id, key))
+        return tuple(keys)
+
     def http_url(self, name: str) -> str | None:
         value = self.text(name)
         if value is not None:
@@ -121,18 +167,29 @@ class _Reader:
         return value
 
 
+def _is_public_key(text: str) -> bool:
+    try:
+        return len(base64.b64decode(text, validate=True)) == PUBLIC_KEY_BYTES
+    except (binascii.Error, ValueError):
+        return False
+
+
 def _tunables(read: _Reader) -> Tunables:
     return Tunables(
         pipeline_worker_enabled=read.boolean("PIPELINE_WORKER_ENABLED", True),
         pipeline_poll_seconds=read.seconds("PIPELINE_POLL_SECONDS", 1.0),
         pipeline_max_attempts=read.integer("PIPELINE_MAX_ATTEMPTS", 8, 1, 100),
+        outbox_poll_seconds=read.seconds("OUTBOX_POLL_SECONDS", 2.0),
         check_chunk_loans=read.integer("CHECK_CHUNK_LOANS", 100, 1, MAX_CHUNK),
+        tokenize_chunk_loans=read.integer("TOKENIZE_CHUNK_LOANS", 100, 1, MAX_TOKENIZE_CHUNK),
+        submit_batch_items=read.integer("SUBMIT_BATCH_ITEMS", 500, 1, MAX_SUBMIT_BATCH),
         http_connect_timeout_seconds=read.seconds("HTTP_CONNECT_TIMEOUT_SECONDS", 2.0),
         http_read_timeout_seconds=read.seconds("HTTP_READ_TIMEOUT_SECONDS", 10.0),
         title_pending_window_days=read.integer("TITLE_PENDING_WINDOW_DAYS", 30, 0, 3650),
         first_payment_grace_days=read.integer("FIRST_PAYMENT_GRACE_DAYS", 45, 0, 3650),
         payment_window_days=read.integer("PAYMENT_WINDOW_DAYS", 90, 1, 3650),
         contract_date_tolerance_days=read.integer("CONTRACT_DATE_TOLERANCE_DAYS", 3, 0, 365),
+        halt_on_registry_integrity_failure=read.boolean("HALT_ON_REGISTRY_INTEGRITY_FAILURE", True),
     )
 
 
@@ -153,6 +210,66 @@ def _required[T](name: str, value: T | None, reveal: Callable[[T], str]) -> str:
     return reveal(value)
 
 
+class RegistrySettings(BaseModel):
+    """The shared services of a runtime process: the registry, its trust anchors and the two key holders."""
+
+    model_config = ConfigDict(frozen=True)
+
+    registry_url: str | None
+    registry_api_key: SecretStr | None
+    member_id: uuid.UUID | None
+    public_keys: tuple[tuple[str, str], ...] | None
+    key_holder_1_url: str | None
+    key_holder_1_api_key: SecretStr | None
+    key_holder_2_url: str | None
+    key_holder_2_api_key: SecretStr | None
+
+    @classmethod
+    def read(cls, read: _Reader) -> Self:
+        """The variables that are present; requirements are checked per use."""
+        return cls(
+            registry_url=read.http_url("REGISTRY_URL"),
+            registry_api_key=read.secret("REGISTRY_API_KEY"),
+            member_id=read.member_id("REGISTRY_MEMBER_ID"),
+            public_keys=read.public_keys("REGISTRY_PUBLIC_KEYS"),
+            key_holder_1_url=read.http_url("KEY_HOLDER_1_URL"),
+            key_holder_1_api_key=read.secret("KEY_HOLDER_1_API_KEY"),
+            key_holder_2_url=read.http_url("KEY_HOLDER_2_URL"),
+            key_holder_2_api_key=read.secret("KEY_HOLDER_2_API_KEY"),
+        )
+
+    def require_registry(self) -> tuple[str, str]:
+        """REGISTRY_URL and REGISTRY_API_KEY."""
+        return (
+            _required("REGISTRY_URL", self.registry_url, str),
+            _required("REGISTRY_API_KEY", self.registry_api_key, _reveal),
+        )
+
+    def require_member_id(self) -> uuid.UUID:
+        """REGISTRY_MEMBER_ID."""
+        if self.member_id is None:
+            raise _missing("REGISTRY_MEMBER_ID")
+        return self.member_id
+
+    def require_public_keys(self) -> dict[str, str]:
+        """REGISTRY_PUBLIC_KEYS, the only trust anchors of registry signatures (SPEC 15.1)."""
+        if self.public_keys is None:
+            raise _missing("REGISTRY_PUBLIC_KEYS")
+        return dict(self.public_keys)
+
+    def require_key_holder(self, number: int) -> tuple[str, str]:
+        """KEY_HOLDER_<n>_URL and KEY_HOLDER_<n>_API_KEY for holder 1 or 2."""
+        url, key = (
+            (self.key_holder_1_url, self.key_holder_1_api_key)
+            if number == 1
+            else (self.key_holder_2_url, self.key_holder_2_api_key)
+        )
+        return (
+            _required(f"KEY_HOLDER_{number}_URL", url, str),
+            _required(f"KEY_HOLDER_{number}_API_KEY", key, _reveal),
+        )
+
+
 class RuntimeSettings(BaseModel):
     """Settings of a serving or working process (`worker`, and `serve` from WP4).
 
@@ -169,6 +286,7 @@ class RuntimeSettings(BaseModel):
     database_url: SecretStr | None
     outside_records_url: str | None
     outside_records_api_key: SecretStr | None
+    registry: RegistrySettings
     log_level: str
     tunables: Tunables
 
@@ -185,6 +303,7 @@ class RuntimeSettings(BaseModel):
             database_url=read.secret("DATABASE_URL"),
             outside_records_url=read.http_url("OUTSIDE_RECORDS_URL"),
             outside_records_api_key=read.secret("OUTSIDE_RECORDS_API_KEY"),
+            registry=RegistrySettings.read(read),
             log_level=_log_level(read),
             tunables=_tunables(read),
         )
