@@ -16,6 +16,13 @@ import pytest
 
 from onepledge_bank_agent.application.evidence_ports import EvidenceStores
 from onepledge_bank_agent.application.ports import UnitOfWork
+from onepledge_testtools.repository_rules import (
+    markdown_files,
+    markdown_problems,
+    python_modules,
+    size_problems,
+    source_tree_problems,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -44,7 +51,6 @@ ONLY_IN = {
     "fastapi": {"interface"},
     "uvicorn": {"interface"},
 }
-MAX_MODULE_LINES, MAX_FUNCTION_LINES, MAX_PUBLIC_METHODS = 400, 60, 15
 MARKERS = re.compile(
     r"\b(" + "|".join(("TO" + "DO", "FIX" + "ME", "X" + "XX", "HA" + "CK", "T" + "BD")) + r")\b"
 )
@@ -182,28 +188,27 @@ def test_time_and_ids_are_injected_into_the_domain_and_application() -> None:
     assert violations == []
 
 
-def _size_violations(path: Path) -> Iterator[str]:
-    for node in ast.walk(parsed(path)):
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-            length = (node.end_lineno or node.lineno) - node.lineno + 1
-            if length > MAX_FUNCTION_LINES:
-                yield f"{where(path, node.lineno)} {node.name} has {length} lines"
-        if isinstance(node, ast.ClassDef):
-            public = [i for i in node.body if isinstance(i, ast.FunctionDef) and not i.name.startswith("_")]
-            if len(public) > MAX_PUBLIC_METHODS:
-                yield f"{where(path, node.lineno)} {node.name} has {len(public)} public methods"
+def test_the_source_tree_keeps_the_spec_2_2_size_limits() -> None:
+    """400 lines per module, 60 per function, 15 public methods per class (SPEC_DECISIONS 71 rule 1),
+    checked by the rules every package shares (`onepledge_testtools.repository_rules`)."""
+    assert source_tree_problems(SOURCE) == []
 
 
-def test_modules_functions_and_classes_stay_small() -> None:
-    """SPEC 2.2: modules of `src/` up to 400 lines; every function up to 60 lines, migrations included."""
-    violations = [
-        f"{path.relative_to(PACKAGE)} has more than {MAX_MODULE_LINES} lines"
-        for path in source_files()
-        if len(path.read_text(encoding="utf-8").splitlines()) > MAX_MODULE_LINES
+def test_every_migration_function_stays_within_60_lines() -> None:
+    """The module limit is for `src/`; a migration's DDL may be long, its functions may not."""
+    problems = [
+        problem
+        for path in python_modules(MIGRATIONS)
+        for problem in size_problems(path.relative_to(PACKAGE), path.read_text(encoding="utf-8"))
+        if " function " in problem or " class " in problem
     ]
-    for path in [*source_files(), *MIGRATIONS.rglob("*.py")]:
-        violations += _size_violations(path)
-    assert violations == []
+    assert problems == []
+
+
+def test_every_markdown_file_of_the_package_renders_its_tables_whole() -> None:
+    """Rows keep the header's cell count and nothing interrupts a table (SPEC_DECISIONS 71 rule 2)."""
+    assert markdown_files(PACKAGE)
+    assert markdown_problems(markdown_files(PACKAGE), PACKAGE.parent) == []
 
 
 def test_every_module_and_public_class_and_function_is_documented() -> None:
