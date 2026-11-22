@@ -10,10 +10,13 @@ import pytest
 
 from onepledge_datagen.domain.errors import DataGenError
 from onepledge_datagen.domain.oracle.cleaning import TapeFormatError
+from onepledge_testtools.repository_rules import markdown_files, markdown_problems, source_tree_problems
 
 pytestmark = pytest.mark.unit
 
 SOURCE = Path(__file__).resolve().parents[1] / "src" / "onepledge_datagen"
+REPOSITORY = SOURCE.parents[2]
+OWNED_MARKDOWN = markdown_files(REPOSITORY / "datagen")
 OTHER_PACKAGES = (
     "onepledge_bank_agent",
     "onepledge_contract_fakes",
@@ -163,3 +166,13 @@ def test_no_argument_is_converted_with_int_or_float() -> None:
                 assert node.value.id not in ("int", "float"), (
                     f"{path.name} converts an argument with {node.value.id}"
                 )
+
+
+def test_the_source_tree_keeps_the_spec_2_2_size_limits() -> None:
+    """400 lines per module, 60 per function, 15 public methods per class (SPEC_DECISIONS 71 rule 1)."""
+    assert source_tree_problems(SOURCE) == []
+
+
+def test_every_markdown_file_of_the_package_renders_its_tables_whole() -> None:
+    """Rows keep the header's cell count and nothing interrupts a table (SPEC_DECISIONS 71 rule 2)."""
+    assert markdown_problems(OWNED_MARKDOWN, REPOSITORY) == []

@@ -8,10 +8,19 @@ from pathlib import Path
 
 import pytest
 
+from onepledge_testtools.repository_rules import (
+    markdown_files,
+    markdown_problems,
+    source_tree_problems,
+    vin_shaped_lines,
+)
+
 pytestmark = pytest.mark.unit
 
 PACKAGE = Path(__file__).resolve().parents[1]
 SOURCE = PACKAGE / "src" / "onepledge_outside_records"
+REPOSITORY = PACKAGE.parent
+OWNED_MARKDOWN = markdown_files(PACKAGE)
 MIGRATIONS = PACKAGE / "migrations"
 OTHER_PACKAGES = frozenset(
     {"onepledge_bank_agent", "onepledge_datagen", "onepledge_contract_fakes", "onepledge_evaluation"}
@@ -19,7 +28,6 @@ OTHER_PACKAGES = frozenset(
 SQL_PACKAGES = frozenset({"sqlalchemy", "psycopg", "alembic"})
 WEB_PACKAGES = frozenset({"fastapi", "starlette", "uvicorn"})
 OWN = "onepledge_outside_records"
-MAX_MODULE_LINES, MAX_FUNCTION_LINES = 400, 60
 
 
 def modules() -> list[Path]:
@@ -105,15 +113,6 @@ def test_the_environment_is_read_only_in_the_settings_module() -> None:
                 pytest.fail(f"{path.name} reads the environment")
 
 
-def test_modules_and_functions_stay_small() -> None:
-    for path in modules():
-        source = path.read_text(encoding="utf-8")
-        assert len(source.splitlines()) <= MAX_MODULE_LINES, path.name
-        for node in ast.walk(ast.parse(source)):
-            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.end_lineno is not None:
-                assert node.end_lineno - node.lineno + 1 <= MAX_FUNCTION_LINES, f"{path.name}:{node.name}"
-
-
 def test_every_module_has_a_docstring_and_never_names_the_scoring_file() -> None:
     for path in [*modules(), *MIGRATIONS.rglob("*.py")]:
         source = path.read_text(encoding="utf-8")
@@ -191,3 +190,18 @@ def test_only_the_http_plumbing_builds_envelopes_and_failure_records() -> None:
         attributes = {n.attr for n in nodes if isinstance(n, ast.Attribute)}
         assert not names & {"error_response", "failure_response"}, f"{path.name} builds an envelope"
         assert not attributes & FAILURE_EVENTS, f"{path.name} writes a failure record"
+
+
+def test_the_source_tree_keeps_the_spec_2_2_size_limits() -> None:
+    """400 lines per module, 60 per function, 15 public methods per class (SPEC_DECISIONS 71 rule 1)."""
+    assert source_tree_problems(SOURCE) == []
+
+
+def test_every_markdown_file_of_the_package_renders_its_tables_whole() -> None:
+    """Rows keep the header's cell count and nothing interrupts a table (SPEC_DECISIONS 71 rule 2)."""
+    assert markdown_problems(OWNED_MARKDOWN, REPOSITORY) == []
+
+
+def test_no_source_line_is_vin_shaped() -> None:
+    """CODE-03 is literal: the reviewers' grep for 17 VIN alphabet characters prints nothing."""
+    assert vin_shaped_lines(SOURCE) == []

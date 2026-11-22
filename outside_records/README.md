@@ -109,11 +109,11 @@ the variables in the table below.
 | `PG_ADMIN_URL` | `db provision` | Superuser URL. Provisioning only. |
 | `PORT` | `serve` | TCP port, 1 to 65535 in ASCII digits (8200 in the local stack: `ONEPLEDGE_PORT_BASE` plus 200). |
 | `BIND_HOST` | `serve` | An IP address of this machine. Default `127.0.0.1`; `0.0.0.0` in the container. |
+| `LOG_LEVEL` | `serve` | Default `INFO`. |
 
 Every value is trimmed of ASCII space, tab, CR and LF at both ends; a value that still
 holds any other whitespace or a control character is refused with one line naming its
 variable, the client key of `clients add` included (SPEC_DECISIONS 66).
-| `LOG_LEVEL` | `serve` | Default `INFO`. |
 
 `db provision` takes the database and role names and passwords from the two role URLs;
 the roles must be named `{db}_owner` and `{db}_app`. Database URLs are held as secrets:

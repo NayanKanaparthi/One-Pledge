@@ -21,8 +21,9 @@ same sentence on stderr. Two codes carry a list of problems (SPEC_DECISIONS 66):
 | Code | Command | Meaning |
 |---|---|---|
 | `VERIFICATION_FAILED` | `verify` | A data set on disk fails a check. `violations` lists each failure as `{"stage", "problem"}`, the stage being `CHECKSUM` (a file against `checksums.json`), `INVARIANT` (a SPEC 5.8 invariant or the contract example) or `REGENERATION` (the comparison with the data set its seed and profile generate). |
-| `INVARIANTS_VIOLATED` | `generate` | The generator's own pre-write invariant check failed: a defect of the generator. Nothing is written; `violations` lists the invariants as sentences. | Every
-failure is one sentence and exit 1, including a path the file system refuses ("Cannot
+| `INVARIANTS_VIOLATED` | `generate` | The generator's own pre-write invariant check failed: a defect of the generator. Nothing is written; `violations` lists the invariants as sentences. |
+
+Every failure is one sentence and exit 1, including a path the file system refuses ("Cannot
 write the data set to PATH: permission denied; choose another --out.") and a malformed
 data set file, which is named with what is wrong ("outside_records/payments.csv line 2
 column amount_cents is not a positive whole number of cents."). An unexpected error
