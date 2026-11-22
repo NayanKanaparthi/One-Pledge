@@ -24,6 +24,7 @@ from bank_testkit.pipeline import BankAgentHarness, Services
 from onepledge_bank_agent.domain.dependency_errors import RegistryUnavailableError
 from onepledge_bank_agent.domain.enums import IntegrityRunStatus, TapeKind
 from onepledge_bank_agent.domain.integrity import DatabaseControl, SectionStatus
+from onepledge_bank_agent.infrastructure.db.migrations import head_revision
 
 pytestmark = pytest.mark.integration
 
@@ -132,7 +133,8 @@ def test_a_control_switched_off_is_shown_live_and_back_on_when_restored(bank: Ba
     assert bank.agent.report().database_controls.status is SectionStatus.OK
     bank.run("UPDATE alembic_version SET version_num = '0003_grants'")
     behind = dict(bank.agent.report().database_controls.controls)
-    bank.run("UPDATE alembic_version SET version_num = '0004_checkpoint_body'")
+    with bank.database.connect("admin") as connection:
+        connection.execute("UPDATE alembic_version SET version_num = %s", (head_revision(),))
     assert behind[DatabaseControl.SCHEMA_AT_MIGRATION_HEAD] is False
 
 

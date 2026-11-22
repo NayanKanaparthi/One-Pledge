@@ -43,7 +43,7 @@ REVISION = text(
 
 
 class SqlDatabaseControlInspector:
-    """The eleven controls of SPEC 15.5, each true when it holds now."""
+    """The twelve controls of SPEC 15.5 and SPEC_DECISIONS 47, each true when it holds now."""
 
     def __init__(self, engine: Engine, head_revision: str) -> None:
         self._engine = engine
@@ -66,7 +66,10 @@ class SqlDatabaseControlInspector:
             DatabaseControl.EVIDENCE_TABLES_IMMUTABILITY_TRIGGERS_ENABLED: enabled(
                 *(f"{table}_insert_only" for table in INSERT_ONLY_EVIDENCE)
             ),
-            DatabaseControl.LOAN_STATE_GUARD_TRIGGER_ENABLED: enabled("loans_guard"),
+            DatabaseControl.LOAN_STATE_GUARD_TRIGGER_ENABLED: enabled(
+                "loans_guard", "loans_insert_guard", "tape_submissions_guard", "tape_submissions_insert_guard"
+            ),
+            DatabaseControl.ALERT_STATE_GUARD_TRIGGER_ENABLED: enabled("alerts_guard"),
             DatabaseControl.AUDIT_CHAIN_GUARD_TRIGGER_ENABLED: enabled("audit_log_chain_guard"),
             DatabaseControl.APP_ROLE_CANNOT_UPDATE_LOANS_RAW: not update_raw,
             DatabaseControl.APP_ROLE_CANNOT_DELETE_LOANS_RAW: not delete_raw,
