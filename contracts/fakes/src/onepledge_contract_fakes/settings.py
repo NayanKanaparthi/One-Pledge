@@ -95,9 +95,7 @@ class EnvironmentReader:
         try:
             return str(ipaddress.ip_address(value))
         except ValueError:
-            raise ConfigurationError(
-                name, "must be an IPv4 or IPv6 address such as 127.0.0.1 or 0.0.0.0"
-            ) from None
+            raise ConfigurationError(name, "must be an IP address such as 127.0.0.1 or 0.0.0.0") from None
 
     def boolean(self, name: str, default: bool) -> bool:
         """A `true` or `false` variable."""

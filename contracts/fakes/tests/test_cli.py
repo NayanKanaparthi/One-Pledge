@@ -120,7 +120,10 @@ ONE = base64.b64encode((1).to_bytes(32, "little")).decode()
             "FAKE_KH_ACTIVE_VERSION must be a whole number",
         ),
         (key_holder_env(json.dumps({"1": ONE})), "FAKE_KH_KEYS must not contain a scalar of zero or one"),
-        ({**key_holder_env(json.dumps({"1": SCALAR})), "BIND_HOST": "999.1.1.1"}, "BIND_HOST must be an IP"),
+        (
+            {**key_holder_env(json.dumps({"1": SCALAR})), "BIND_HOST": "999.1.1.1"},
+            "BIND_HOST must be an IP address such as 127.0.0.1 or 0.0.0.0.",
+        ),
     ],
 )
 def test_a_malformed_setting_is_one_line_naming_the_variable(

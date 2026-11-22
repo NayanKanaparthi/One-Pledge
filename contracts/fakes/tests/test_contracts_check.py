@@ -326,3 +326,15 @@ def test_quiet_says_it_has_no_effect_where_no_log_is_written(capsys: pytest.Capt
     with pytest.raises(SystemExit):
         main(["check", "--help"])
     assert "no effect: this command writes no log lines" in " ".join(capsys.readouterr().out.split())
+
+
+def test_an_empty_contracts_dir_is_a_usage_error_and_the_metavar_is_dir(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exited:
+        main(["check", "--contracts-dir", ""])
+    assert exited.value.code == 2
+    assert "must name a directory, not be empty" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        main(["check", "--help"])
+    assert "--contracts-dir DIR" in capsys.readouterr().out

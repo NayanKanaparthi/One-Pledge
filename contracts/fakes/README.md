@@ -51,7 +51,7 @@ builders and an in-process HTTP client for other layers' tests.
 ```
 onepledge-fake-keyholder serve [--debug]   serve one key holder double on BIND_HOST:PORT
 onepledge-fake-registry serve [--debug]    serve the registry double on BIND_HOST:PORT
-onepledge-contracts check [--contracts-dir contracts] [--json] [--quiet] [--debug]
+onepledge-contracts check [--contracts-dir DIR] [--json] [--quiet] [--debug]
 ```
 
 Every command prints one sentence on stderr and exits 1 when something is wrong, and

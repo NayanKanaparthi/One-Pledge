@@ -14,6 +14,13 @@ from onepledge_contract_fakes.cli_output import CliOutput, common_options, plura
 from onepledge_contract_fakes.contracts_check.checker import CheckOutcome, CheckReport, ContractsChecker
 
 
+def directory_argument(text: str) -> Path:
+    """A directory argument: an empty value is a usage error, not the current directory."""
+    if not text.strip():
+        raise argparse.ArgumentTypeError("must name a directory, not be empty")
+    return Path(text)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Argument parser with one `check` subcommand."""
     parser = argparse.ArgumentParser(
@@ -30,8 +37,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     check.add_argument(
         "--contracts-dir",
-        type=Path,
+        type=directory_argument,
         default=Path("contracts"),
+        metavar="DIR",
         help="directory holding the contract YAML files and examples/ (default: contracts)",
     )
     return parser
