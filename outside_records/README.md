@@ -154,7 +154,10 @@ python3 -m pytest outside_records -q
 The integration tests need the PostgreSQL server at `PG_ADMIN_URL` (default
 `postgresql://postgres@localhost:55432/postgres`). Each test session provisions a
 uniquely named database and role pair through the same provisioning code, migrates it and
-drops it afterwards. They cover provisioning twice, migrations up, down and up, agreement
+drops it afterwards. The names have the form `optest_<UTC time>_<pid>_<8 hex>_outside`; a
+run stopped by SIGTERM still tears its fixtures down, every session first drops `optest_`
+databases and roles more than two hours old, and `make test-sweep` drops all of them. Every
+test stops after 120 seconds, and the tests that expect `serve` to refuse after 60. They cover provisioning twice, migrations up, down and up, agreement
 of the models with the migrated schema, seeding and its idempotence, the app role being
 refused every write, client keys stored only as hashes, every endpoint against the
 contract's schemas, ordering and paging of payments, 401, 404 and 422 without echo,

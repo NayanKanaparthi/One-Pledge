@@ -22,6 +22,7 @@ max-complexity = 10
 [tool.ruff.lint.isort]
 known-first-party = [
   "bank_testkit",
+  "onepledge_testtools",
   "onepledge_contract_fakes",
   "onepledge_datagen",
   "onepledge_outside_records",
@@ -40,14 +41,18 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers --import-mode=importlib"
-testpaths = ["contracts/fakes/tests", "datagen/tests", "outside_records/tests", "bank_agent/tests"]
-# The bank agent tests share helpers through the `bank_testkit` package next to them.
-pythonpath = ["bank_agent/tests"]
+testpaths = ["tools/tests", "contracts/fakes/tests", "datagen/tests", "outside_records/tests", "bank_agent/tests"]
+# The bank agent tests share helpers through the `bank_testkit` package next to them; the root
+# conftest.py loads `onepledge_testtools` from tools/ (SPEC_DECISIONS 76).
+pythonpath = ["bank_agent/tests", "tools"]
+# Every test stops after 120 seconds; e2e tests get 600 (onepledge_testtools.pytest_plugin).
+timeout = 120
 markers = [
-  "unit: pure tests with no I/O",
-  "integration: tests that use a real PostgreSQL server, the file system or child processes",
+  "unit: no network, no database, no child process and no write to the file system; reading committed files is allowed",
+  "integration: tests that use a real PostgreSQL server, the network, the file system or child processes",
   "contract: tests that check behaviour against the files in contracts/",
   "e2e: end to end tests that start the real services as processes",
+  "reliability: tests of behaviour under failure, interruption, load or time limits",
 ]
 filterwarnings = ["error"]
 

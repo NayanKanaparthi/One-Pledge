@@ -17,11 +17,11 @@ COVERAGE_MIN := 85
 BANK_UNIT_COVERAGE := COVERAGE_FILE=.coverage.bank-unit
 # mypy runs once per package so that test helpers with the same file name do not collide.
 MYPY := $(PYTHON) -m mypy --config-file pyproject.toml
-TEST_PATHS := $(foreach p,$(PACKAGES),$(p)/tests)
+TEST_PATHS := tools/tests $(foreach p,$(PACKAGES),$(p)/tests)
 DATA_DIR := var/data/$(PROFILE)-$(SEED)
 
 .DEFAULT_GOAL := help
-.PHONY: help setup lint format typecheck contracts-check test test-fast ci data clean
+.PHONY: help setup lint format typecheck contracts-check test test-fast test-sweep ci data clean
 
 help: ## List the targets with one line each
 	@echo "OnePledge layer 1 targets:"
@@ -48,13 +48,15 @@ format: ## Format the code and apply safe lint fixes
 
 typecheck: ## Run mypy in strict mode over every source and test tree
 	@echo "typecheck: contracts/fakes"
-	@$(MYPY) contracts/fakes/src contracts/fakes/tests
+	@MYPYPATH=tools $(MYPY) contracts/fakes/src contracts/fakes/tests
+	@echo "typecheck: tools"
+	@MYPYPATH=tools $(MYPY) tools/onepledge_testtools tools/tests
 	@echo "typecheck: datagen"
-	@$(MYPY) datagen/src datagen/tests
+	@MYPYPATH=tools $(MYPY) datagen/src datagen/tests
 	@echo "typecheck: outside_records"
-	@$(MYPY) outside_records/src outside_records/tests outside_records/migrations
+	@MYPYPATH=tools $(MYPY) outside_records/src outside_records/tests outside_records/migrations
 	@echo "typecheck: bank_agent"
-	@MYPYPATH=outside_records/src:contracts/fakes/src $(MYPY) bank_agent/src bank_agent/tests bank_agent/migrations
+	@MYPYPATH=outside_records/src:contracts/fakes/src:tools $(MYPY) bank_agent/src bank_agent/tests bank_agent/migrations
 
 contracts-check: ## Validate the contracts, their examples and the test vectors
 	@echo "contracts-check: onepledge-contracts check"
@@ -95,6 +97,9 @@ test-fast: ## Run only the unit and contract tests, and the bank agent's unit-on
 	@echo "test-fast: pytest -m 'unit or contract'"
 	@$(PYTHON) -m pytest $(TEST_PATHS) -q -m "unit or contract"
 	$(call bank_unit_gate,test-fast)
+
+test-sweep: ## Drop every optest_ scratch database and role on the test server, whatever its age
+	@PYTHONPATH=tools $(PYTHON) -m onepledge_testtools.scratch_databases
 
 ci: ## Run lint, typecheck, contracts-check and test, stopping at the first failure
 	@$(MAKE) --no-print-directory lint

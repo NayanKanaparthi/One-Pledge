@@ -22,7 +22,10 @@ from onepledge_contract_fakes.members import api_key_sha256
 from onepledge_contract_fakes.registry import cli as registry_cli
 from onepledge_contract_fakes.testing import new_api_key, new_members, new_scalar
 
-pytestmark = pytest.mark.unit
+# A serve call that refuses in process would serve forever if the refusal were missing, so each one
+# has a short limit of its own (SPEC_DECISIONS 76).
+SERVE_REFUSAL_LIMIT = pytest.mark.timeout(15)
+UNUSED_PORT = "18099"
 
 ENV_PREFIXES = ("HOLDER_ID", "PORT", "FAKE_", "REGISTRY_", "BIND_HOST", "LOG_LEVEL")
 
@@ -57,6 +60,7 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     return monkeypatch
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize("build", [key_holder_cli.build_parser, registry_cli.build_parser])
 def test_help_describes_the_serve_command(
     build: Callable[[], argparse.ArgumentParser], capsys: pytest.CaptureFixture[str]
@@ -67,6 +71,7 @@ def test_help_describes_the_serve_command(
     assert "TEST DOUBLE" in capsys.readouterr().out
 
 
+@pytest.mark.unit
 def test_missing_configuration_is_one_sentence_naming_the_variable(clean_env: pytest.MonkeyPatch) -> None:
     err = io.StringIO()
     assert key_holder_cli.main(["serve"], CliOutput(io.StringIO(), err)) == 1
@@ -76,6 +81,8 @@ def test_missing_configuration_is_one_sentence_naming_the_variable(clean_env: py
     assert err.getvalue().startswith("Configuration error: REGISTRY_SIGNING_KEY_ID ")
 
 
+@pytest.mark.integration
+@SERVE_REFUSAL_LIMIT
 def test_a_port_in_use_is_one_sentence(clean_env: pytest.MonkeyPatch) -> None:
     with socket.socket() as taken:
         taken.bind(("127.0.0.1", 0))
@@ -94,7 +101,7 @@ def test_a_port_in_use_is_one_sentence(clean_env: pytest.MonkeyPatch) -> None:
 def key_holder_env(keys: str, active: str = "1") -> dict[str, str]:
     return {
         "HOLDER_ID": "kh1",
-        "PORT": str(free_port()),
+        "PORT": UNUSED_PORT,
         "FAKE_KH_KEYS": keys,
         "FAKE_KH_ACTIVE_VERSION": active,
         "FAKE_KH_MEMBERS": members_json(),
@@ -105,6 +112,8 @@ SCALAR = base64.b64encode(new_scalar()).decode()
 ONE = base64.b64encode((1).to_bytes(32, "little")).decode()
 
 
+@pytest.mark.unit
+@SERVE_REFUSAL_LIMIT
 @pytest.mark.parametrize(
     ("env", "sentence"),
     [
@@ -138,6 +147,8 @@ def test_a_malformed_setting_is_one_line_naming_the_variable(
     assert out.getvalue() == ""
 
 
+@pytest.mark.integration
+@SERVE_REFUSAL_LIMIT
 def test_a_bind_host_that_is_not_local_is_one_sentence(clean_env: pytest.MonkeyPatch) -> None:
     for name, value in {**registry_env(free_port()), "BIND_HOST": "192.0.2.77"}.items():
         clean_env.setenv(name, value)

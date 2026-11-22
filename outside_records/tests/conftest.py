@@ -31,6 +31,7 @@ from onepledge_outside_records.infrastructure.db.repositories import (
     SqlRecordsWriter,
 )
 from onepledge_outside_records.interface.http.app import create_app
+from onepledge_testtools.scratch_databases import new_name
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 CONTRACT = REPOSITORY / "contracts" / "outside_records.yaml"
@@ -61,7 +62,7 @@ class Database:
 
 def new_database() -> Database:
     """Names and passwords for a fresh database. Nothing is created yet."""
-    name = f"optest_{secrets.token_hex(5)}_outside"
+    name = new_name("outside")
     admin = make_url(ADMIN_URL)
     server = f"{admin.host or 'localhost'}:{admin.port or 5432}"
     owner_url = f"postgresql://{name}_owner:{secrets.token_urlsafe(18)}@{server}/{name}"
@@ -206,3 +207,9 @@ def call_app() -> Iterator[Callable[[FastAPI], InProcessApi]]:
     yield build
     for api in made:
         api.close()
+
+
+@pytest.fixture(autouse=True)
+def _unit_isolation(enforce_unit_isolation: None) -> None:
+    """Every test here marked `unit` is held to SPEC_DECISIONS 77: no network, database, process or write."""
+    del enforce_unit_isolation

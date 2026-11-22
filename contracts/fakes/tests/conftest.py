@@ -28,3 +28,9 @@ def key_holder_schemas() -> ContractSchemas:
 def registry_schemas() -> ContractSchemas:
     """Schemas of contracts/registry.yaml."""
     return ContractSchemas(load_yaml_mapping(CONTRACTS_DIR / "registry.yaml"), "registry.yaml")
+
+
+@pytest.fixture(autouse=True)
+def _unit_isolation(enforce_unit_isolation: None) -> None:
+    """Every test here marked `unit` is held to SPEC_DECISIONS 77: no network, database, process or write."""
+    del enforce_unit_isolation

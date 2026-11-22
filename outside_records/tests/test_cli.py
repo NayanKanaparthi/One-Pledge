@@ -30,7 +30,10 @@ from onepledge_outside_records.interface.output import Console
 if TYPE_CHECKING:
     from conftest import Database
 
-pytestmark = pytest.mark.integration
+# Several tests call `serve` in process and expect it to refuse; if a refusal regressed, the
+# service would start and the test would never end, so every test here has a limit of 60 s
+# (SPEC_DECISIONS 76).
+pytestmark = [pytest.mark.integration, pytest.mark.timeout(60)]
 
 VARIABLES = (
     "PG_ADMIN_URL",

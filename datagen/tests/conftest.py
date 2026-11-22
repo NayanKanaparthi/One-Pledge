@@ -53,3 +53,9 @@ def full_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def example_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """The example profile with the default seed."""
     return generate(tmp_path_factory.mktemp("example") / "data", Profile.EXAMPLE)
+
+
+@pytest.fixture(autouse=True)
+def _unit_isolation(enforce_unit_isolation: None) -> None:
+    """Every test here marked `unit` is held to SPEC_DECISIONS 77: no network, database, process or write."""
+    del enforce_unit_isolation
