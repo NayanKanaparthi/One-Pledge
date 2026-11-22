@@ -47,7 +47,10 @@ def files(*roots: Path) -> list[Path]:
     return [path for root in roots for path in sorted(root.rglob("*.py")) if "__pycache__" not in path.parts]
 
 
-def nodes(path: Path) -> list[ast.AST]:
+def nodes(path: Path | str) -> list[ast.AST]:
+    """Every node of a committed module, or of source text given as a string."""
+    if isinstance(path, str):
+        return list(ast.walk(ast.parse(path, filename="<planted>")))
     return list(ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))))
 
 
@@ -55,7 +58,7 @@ def where(path: Path, node: ast.AST) -> str:
     return f"{path.relative_to(PACKAGE)}:{getattr(node, 'lineno', 0)}"
 
 
-def calls(path: Path) -> list[tuple[ast.Call, str]]:
+def calls(path: Path | str) -> list[tuple[ast.Call, str]]:
     """Every call with the name of what is called (`int`, or the attribute name of `x.strip`)."""
     found = []
     for node in nodes(path):
@@ -112,11 +115,9 @@ def test_the_independent_oracle_shares_no_technique_or_code_with_the_product() -
     assert [name for _, name in imported if name == "re" or name.startswith("onepledge_bank_agent")] == []
 
 
-def test_the_rules_find_a_planted_violation(tmp_path: Path) -> None:
-    planted = tmp_path / "planted.py"
-    planted.write_text(
-        'import re\nX = re.compile(r"\\d+")\nY = "7".isdigit()\nZ = int("7")\n', encoding="utf-8"
-    )
+def test_the_rules_find_a_planted_violation() -> None:
+    """SPEC_DECISIONS 77: the violation is planted from a string, so the unit test writes no file."""
+    planted = 'import re\nX = re.compile(r"\\d+")\nY = "7".isdigit()\nZ = int("7")\n'
     assert [name for _, name in calls(planted) if name in UNICODE_CLASSIFIERS] == ["isdigit"]
     assert [name for _, name in calls(planted) if name in NUMBER_BUILDERS] == ["int"]
     constants = [n.value for n in nodes(planted) if isinstance(n, ast.Constant) and isinstance(n.value, str)]

@@ -36,7 +36,7 @@ from onepledge_bank_agent.domain.tape import TapeSubmission
 from onepledge_bank_agent.infrastructure.http.base import RETRY_DELAYS_SECONDS
 from onepledge_bank_agent.infrastructure.stop_signal import EventStopSignal
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.reliability]
 
 TAPE = "tapes/HARBOR/S01_HARBOR-SUMMIT_BACK_BOOK.csv"
 FACILITY, KIND, AS_OF = "HARBOR-SUMMIT", TapeKind.BACK_BOOK, date(2026, 9, 30)
@@ -346,7 +346,7 @@ class ArmAfterFirstBatch(Faults):
         super().reached(point)
 
 
-def test_a_registry_fault_on_the_middle_batch_keeps_the_first_and_resumes_the_rest(
+def test_a_registry_503_on_the_middle_batch_keeps_the_first_and_resumes_the_rest(
     lab: Lab, clean_run: State
 ) -> None:
     bank, clock = lab.bank(), ManualClock()
@@ -369,7 +369,7 @@ def test_a_registry_fault_on_the_middle_batch_keeps_the_first_and_resumes_the_re
     assert one_submission_per_key(final)
 
 
-def test_a_key_holder_2_fault_after_key_holder_1_answered_stores_no_token_until_resumed(
+def test_key_holder_2_failing_after_key_holder_1_answered_stores_no_token_until_resumed(
     lab: Lab, clean_run: State
 ) -> None:
     bank, clock = lab.bank(), ManualClock()
@@ -398,7 +398,7 @@ def test_a_key_holder_2_fault_after_key_holder_1_answered_stores_no_token_until_
     assert lab.state(bank) == clean_run
 
 
-def test_an_outside_records_fault_for_a_whole_stage_delays_the_tape_and_corrupts_nothing(
+def test_outside_records_down_for_a_whole_stage_delays_the_tape_and_corrupts_nothing(
     lab: Lab, clean_run: State
 ) -> None:
     bank, clock = lab.bank(), ManualClock()
@@ -456,7 +456,7 @@ def test_the_maximum_number_of_attempts_fails_the_tape_and_a_retry_resumes_it_to
     assert pairs(bank.database, retried) == {"TAPE_RETRY_REQUESTED": "1"}
 
 
-def test_a_duplicate_upload_fault_is_refused_and_changes_nothing(lab: Lab) -> None:
+def test_the_same_tape_uploaded_twice_is_refused_and_changes_nothing(lab: Lab) -> None:
     bank = lab.bank()
     with lab.harness(bank) as harness:
         lab.upload(harness)
@@ -473,7 +473,7 @@ def test_a_duplicate_upload_fault_is_refused_and_changes_nothing(lab: Lab) -> No
     assert one_submission_per_key(after)
 
 
-def test_a_second_worker_fault_on_one_database_never_runs_a_stage_twice(lab: Lab, clean_run: State) -> None:
+def test_two_workers_on_one_database_never_run_a_stage_twice(lab: Lab, clean_run: State) -> None:
     bank = lab.bank()
     with lab.harness(bank) as uploader:
         lab.upload(uploader)
@@ -514,7 +514,7 @@ class WrongKey:
         self.client_factory = outside.client_factory
 
 
-def test_a_refused_key_fault_fails_the_tape_at_once_and_the_audit_names_the_reason(lab: Lab) -> None:
+def test_an_outside_records_key_it_does_not_know_fails_the_tape_at_once_with_the_reason(lab: Lab) -> None:
     bank = lab.bank()
     with lab.harness(replace(bank, outside=WrongKey(lab.outside))) as harness:
         lab.upload(harness)
@@ -531,7 +531,7 @@ def test_a_refused_key_fault_fails_the_tape_at_once_and_the_audit_names_the_reas
     assert chain_holds(bank.database)
 
 
-def test_a_refused_key_holder_key_fault_fails_the_tape_at_once_and_sends_nothing(lab: Lab) -> None:
+def test_a_key_holder_key_it_does_not_know_fails_the_tape_at_once_and_sends_nothing(lab: Lab) -> None:
     bank = lab.bank()
     environment = {"KEY_HOLDER_2_API_KEY": "khk_" + "w" * 43}
     with lab.harness(bank, environment=environment) as harness:

@@ -12,7 +12,7 @@ import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy.engine import make_url
 
-from bank_testkit.database import ADMIN_URL, TEST_PREFIX
+from bank_testkit.database import ADMIN_URL
 from onepledge_bank_agent.infrastructure.http.base import HttpTimeouts
 from onepledge_outside_records.application.administration import RegisterClient, SeedRecords
 from onepledge_outside_records.infrastructure.csv_source import CsvRecordsSource
@@ -25,6 +25,7 @@ from onepledge_outside_records.infrastructure.db.repositories import (
     SqlRecordsWriter,
 )
 from onepledge_outside_records.interface.http.app import create_app
+from onepledge_testtools.scratch_databases import new_name
 
 OUTSIDE_BASE_URL = "http://outside-records.test"
 
@@ -63,7 +64,7 @@ class InProcessOutsideRecords:
     """
 
     def __init__(self, data_dir: Path) -> None:
-        name = f"{TEST_PREFIX}_{secrets.token_hex(4)}_outside"
+        name = new_name("outside")
         admin = make_url(ADMIN_URL)
         server = f"{admin.host or 'localhost'}:{admin.port or 5432}"
         owner = f"postgresql://{name}_owner:{secrets.token_urlsafe(18)}@{server}/{name}"

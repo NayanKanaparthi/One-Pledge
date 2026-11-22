@@ -17,9 +17,9 @@ from onepledge_bank_agent.infrastructure.db.engines import DatabaseTarget
 from onepledge_bank_agent.infrastructure.db.migrations import MigrationRunner
 from onepledge_bank_agent.infrastructure.db.provisioning import DatabaseProvisioner
 from onepledge_bank_agent.infrastructure.settings import RuntimeSettings
+from onepledge_testtools.scratch_databases import new_name
 
 ADMIN_URL = os.environ.get("PG_ADMIN_URL", "postgresql://postgres@localhost:55432/postgres")
-TEST_PREFIX = "opwp2t"
 
 
 @dataclass(frozen=True)
@@ -68,8 +68,10 @@ def pairs(database: BankDatabase, query: str, parameters: tuple[object, ...] = (
 
 
 def new_bank_database(code: str = "harbor") -> BankDatabase:
-    """Names and passwords for a fresh bank database; nothing is created yet."""
-    name = f"{TEST_PREFIX}_{secrets.token_hex(4)}_bank_{code}"
+    """Names and passwords for a fresh bank database; nothing is created yet. The name is a scratch
+    name of SPEC_DECISIONS 76 (`optest_<UTC time>_<pid>_<8 hex>_bank_<code>`), so the session sweep
+    drops it when a killed run left it behind."""
+    name = new_name(f"bank_{code}")
     admin = make_url(ADMIN_URL)
     server = f"{admin.host or 'localhost'}:{admin.port or 5432}"
     owner_url = f"postgresql://{name}_owner:{secrets.token_urlsafe(18)}@{server}/{name}"

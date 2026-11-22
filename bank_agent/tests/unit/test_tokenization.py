@@ -35,6 +35,7 @@ def terms(vin: str = "1HGCM82633A004352", cents: int = 2345000, day: date = date
     return LoanTerms(Vin.parse(vin), BorrowerRef("C0048213"), day, Money(cents))
 
 
+@pytest.mark.contract  # SPEC 21.4, SPEC_DECISIONS 77: the tokenisation vector
 def test_the_eight_inputs_are_the_vector_strings_in_kind_order() -> None:
     inputs = token_inputs(terms(), LEI)
     assert len(inputs) == TOKENS_PER_LOAN == 8
@@ -71,6 +72,7 @@ def test_an_input_never_shows_its_value() -> None:
     assert "1HGCM82633A004352" not in shown and "C0048213" not in shown and "ASSET" in shown
 
 
+@pytest.mark.contract  # SPEC 21.4, SPEC_DECISIONS 77: the tokenisation vector
 def test_the_token_of_a_point_is_the_vector_token_and_needs_32_bytes() -> None:
     for entry in VECTOR["tokens"]:
         point = base64.b64decode(entry["unblinded"])
@@ -85,6 +87,7 @@ def evaluate(scalar: bytes, element: str) -> str:
     return base64.b64encode(bytes(oprf.mask(scalar).mask(point))).decode("ascii")
 
 
+@pytest.mark.contract  # SPEC 21.4, SPEC_DECISIONS 77: the tokenisation vector
 def test_the_blinder_reproduces_every_step_of_the_vector() -> None:
     blind = base64.b64decode(VECTOR["blind_scalar_b64"])
     holder_1 = base64.b64decode(VECTOR["holder_1_scalar_b64"])

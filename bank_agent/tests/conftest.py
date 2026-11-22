@@ -111,3 +111,9 @@ def ports(request: pytest.FixtureRequest) -> Iterator[PortWorld]:
         return
     with postgres_backend() as backend:
         yield PortWorld(backend)
+
+
+@pytest.fixture(autouse=True)
+def _unit_isolation(enforce_unit_isolation: None) -> None:
+    """Every test marked `unit` is held to SPEC_DECISIONS 77: no network, database, process or write."""
+    del enforce_unit_isolation

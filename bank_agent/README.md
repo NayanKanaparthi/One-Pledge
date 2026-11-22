@@ -323,7 +323,7 @@ verified. Uploads arrive through the HTTP API of WP4; the tests upload through
 
 ```
 python3 -m pytest bank_agent -q
-python3 -m pytest bank_agent/tests/integration -k "crash or resume or fault" -v
+python3 -m pytest bank_agent/tests -m reliability -v
 python3 -m pytest bank_agent/tests -k "vector or oprf or certificate or checkpoint" -q
 python3 -m pytest bank_agent/tests/unit bank_agent/tests/integration -q --cov=onepledge_bank_agent.domain --cov=onepledge_bank_agent.application --cov-fail-under=85
 python3 -m pytest bank_agent/tests -m unit -q --cov=onepledge_bank_agent.domain --cov=onepledge_bank_agent.application --cov-branch --cov-fail-under=85
@@ -331,7 +331,11 @@ python3 -m pytest bank_agent/tests -m unit -q --cov=onepledge_bank_agent.domain 
 
 Two coverage gates hold for the domain and application layers together, branches on
 (SPEC_DECISIONS 63): the full run, and the unit-only run (`-m unit`: no PostgreSQL, no
-network, no child process). `make test` enforces both; `make test-fast` enforces the
+network, no child process and no file write; reading committed files is allowed). An
+autouse fixture of the shared test tools makes a `unit` test that connects, binds, starts
+a process or asks for `tmp_path` fail (SPEC_DECISIONS 77). The tests of SPEC 21.3 are
+marked `reliability`; the tokenisation vector tests are marked `contract` as well.
+`make test` enforces both gates; `make test-fast` enforces the
 unit-only one. The unit tests reach every use case through `bank_testkit/memory/`: an
 in-memory unit of work with every repository (leaving a scope without commit discards
 it, and committed audit entries are chained by the domain's own rule), and scripted
@@ -345,8 +349,11 @@ on fails the suite.
 
 Integration tests need the PostgreSQL server at `PG_ADMIN_URL` (default
 `postgresql://postgres@localhost:55432/postgres`). Each test creates a uniquely named
-database (`opwp2t_<random>_bank_harbor`) and role pair through the product's own
-provisioning and migrations, and drops it afterwards. Data sets come from the
+database (`optest_<UTC time>_<pid>_<8 hex>_bank_harbor`, SPEC_DECISIONS 76) and role pair
+through the product's own provisioning and migrations, and drops it afterwards, also when
+the run is stopped with SIGTERM; each session first sweeps `optest_` objects more than two
+hours old, and `make test-sweep` drops all of them. Every test has a time limit (120
+seconds, 600 for `e2e`). Data sets come from the
 `onepledge-datagen` command; outside records runs in process on its own test database;
 the registry and both key holders are the real doubles of `contracts/fakes` (real OPRF,
 real Ed25519, the real registry rules) reached in process through the bank's own HTTP
