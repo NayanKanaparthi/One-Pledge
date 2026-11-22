@@ -97,8 +97,16 @@ class InvariantChecker:
     """Runs every invariant over one data set view."""
 
     def check(self, view: DataSetView) -> CheckReport:
-        """All structural and outcome invariants."""
+        """All structural and outcome invariants.
+
+        The answer key may only name steps and facilities the manifest and the reference
+        data list; when it names others the remaining checks have nothing to stand on, so
+        those references are the violations reported (SPEC_DECISIONS 43.3).
+        """
         report = CheckReport()
+        report.violations.extend(self._unknown_references(view))
+        if report.violations:
+            return report
         records = self._tape_records(view, report)
         self._check_vins(view, records, report)
         self._check_case_wiring(view, report)
@@ -109,6 +117,21 @@ class InvariantChecker:
         report.violations = list(dict.fromkeys(report.violations))
         report.rows_checked = sum(len(rows) for rows in records.values())
         return report
+
+    @staticmethod
+    def _unknown_references(view: DataSetView) -> list[str]:
+        steps = {step.step_id for step in view.steps}
+        named = [*(row.step_id for row in view.case_rows), *(entry.step_id for entry in view.messiness)]
+        problems = [
+            f"the answer key names step {step_id}, which manifest.json does not list"
+            for step_id in sorted(set(named) - steps)
+        ]
+        unknown_facilities = {step.facility_code for step in view.steps} - set(view.facilities)
+        problems.extend(
+            f"manifest.json names facility {code}, which reference.json does not list"
+            for code in sorted(unknown_facilities)
+        )
+        return problems
 
     @staticmethod
     def _tape_records(view: DataSetView, report: CheckReport) -> dict[str, tuple[tuple[str, ...], ...]]:

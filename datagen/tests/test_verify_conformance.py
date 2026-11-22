@@ -321,3 +321,23 @@ def test_help_names_dir_and_says_quiet_has_no_effect(
     text = " ".join(capsys.readouterr().out.split())
     assert " DIR" in text and "DATA_DIR" not in text and " OUT" not in text
     assert "--quiet no effect: this command writes no log lines" in text
+
+
+@pytest.mark.parametrize(
+    ("change", "problem"),
+    [
+        (
+            edit_json(MANIFEST, lambda m: m["steps"].pop(3)),
+            "the answer key names step S04, which manifest.json",
+        ),
+        (
+            edit_json(MANIFEST, lambda m: m["steps"][0].__setitem__("facility_code", "X-Y")),
+            "manifest.json names facility X-Y, which reference.json does not list",
+        ),
+    ],
+)
+def test_references_to_unknown_steps_and_facilities_are_problems_not_defects(
+    small_dir: Path, tmp_path: Path, change: Change, problem: str
+) -> None:
+    code, _, err = run("verify", "--data-dir", str(tampered(small_dir, tmp_path / "copy", change)))
+    assert code == 1 and f"  {problem}" in err and "Unexpected" not in err
