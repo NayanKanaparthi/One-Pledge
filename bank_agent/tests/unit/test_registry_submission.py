@@ -11,7 +11,9 @@ import pytest
 
 from bank_testkit.memory.bank import MemoryBank, vins
 from bank_testkit.memory.registry import Tamper
+from bank_testkit.records import tokens
 from onepledge_bank_agent.application.advance_submission import StageOutcome
+from onepledge_bank_agent.application.tokenize_loans import complete_version
 from onepledge_bank_agent.domain.dependency_errors import (
     KeyHolderRejectedError,
     KeyHolderUnavailableError,
@@ -27,9 +29,11 @@ from onepledge_bank_agent.domain.enums import (
     RegistryItemResult,
     TapeKind,
     TapeStatus,
+    TokenKind,
 )
 from onepledge_bank_agent.domain.errors import TapeNotRetryableError
 from onepledge_bank_agent.domain.tokenization import TOKENS_PER_LOAN
+from onepledge_bank_agent.domain.values import KeyVersion
 
 pytestmark = pytest.mark.unit
 
@@ -287,3 +291,16 @@ def test_each_certificate_reason_fails_the_tape_keeps_the_loans_and_stores_the_e
     assert [d.detail["failure_reason"] for d in rejected] == [reason.value]
     report = bank.report()
     assert report.certificates.status.value == "BROKEN" and report.certificates.verified == 0
+
+
+def test_a_loans_complete_key_version_is_the_highest_at_which_it_holds_all_eight_kinds() -> None:
+    """A loan tokenised again after a rotation holds two complete sets; the newer one counts."""
+    older, newer, partial = KeyVersion(1, 1), KeyVersion(2, 1), KeyVersion(3, 1)
+    held = [
+        *tokens("loan", newer),
+        *tokens("loan", older),
+        *tokens("loan", partial, kinds=tuple(TokenKind)[:7]),
+    ]
+    assert complete_version(held) == newer
+    assert complete_version(tokens("loan", partial, kinds=tuple(TokenKind)[:7])) is None
+    assert complete_version([]) is None
