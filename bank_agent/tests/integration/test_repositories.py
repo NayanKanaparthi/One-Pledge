@@ -16,7 +16,10 @@ from bank_testkit.audit_chain import first_broken_seq
 from bank_testkit.clocks import ManualClock
 from bank_testkit.data import seed_reference
 from bank_testkit.database import BankDatabase, insert_user, pairs
-from bank_testkit.tapes import SUMMIT_LAYOUT
+from bank_testkit.doubles import InProcessDoubles
+from bank_testkit.outside import InProcessOutsideRecords
+from bank_testkit.pipeline import BankAgentHarness, Services
+from bank_testkit.tapes import SUMMIT_LAYOUT, summit_row, summit_tape
 from onepledge_bank_agent.domain.audit import Actor, AuditDraft
 from onepledge_bank_agent.domain.entities import Facility, Lender
 from onepledge_bank_agent.domain.enums import (
@@ -29,7 +32,7 @@ from onepledge_bank_agent.domain.enums import (
     TapeSource,
     TapeStatus,
 )
-from onepledge_bank_agent.domain.errors import ConcurrentUploadError, ReferenceDataError
+from onepledge_bank_agent.domain.errors import ConcurrentUploadError, ReferenceDataError, TapeDuplicateError
 from onepledge_bank_agent.domain.tape import TapeFacts, TapeSubmission
 from onepledge_bank_agent.domain.values import Lei
 from onepledge_bank_agent.infrastructure.audit import HashChainedAuditWriter
@@ -150,6 +153,33 @@ def test_a_concurrent_insert_of_the_same_file_raises_concurrent_upload(
     assert len(outcome) == 1 and isinstance(outcome[0], ConcurrentUploadError)
     with units(app_engine)() as unit:
         assert unit.tapes.find_by_file(first.facts.facility_id, "PLEDGE", sha) == first.submission_id
+
+
+def test_the_duplicate_lookup_keys_on_facility_kind_and_file_together(
+    seeded: BankDatabase, example_outside: InProcessOutsideRecords, doubles: InProcessDoubles
+) -> None:
+    """SPEC_DECISIONS 53.2: the same bytes under another kind or another facility are new submissions."""
+    other_facility = second_facility(seeded)
+    data = summit_tape([summit_row()])
+    as_of = date(2026, 10, 15)
+    with BankAgentHarness(seeded, Services(example_outside, doubles)) as harness:
+        first = harness.ingest(data, "HARBOR-SUMMIT", TapeKind.PLEDGE, as_of)
+        other_kind = harness.ingest(data, "HARBOR-SUMMIT", TapeKind.BACK_BOOK, as_of)
+        other_place = harness.ingest(data, "HARBOR-SECOND", TapeKind.PLEDGE, as_of)
+        with pytest.raises(TapeDuplicateError) as raised:
+            harness.ingest(data, "HARBOR-SUMMIT", TapeKind.PLEDGE, date(2026, 10, 1))
+        assert raised.value.existing_submission_id == first.submission_id
+        with pytest.raises(TapeDuplicateError) as again:
+            harness.ingest(data, "HARBOR-SECOND", TapeKind.PLEDGE, as_of)
+        assert again.value.existing_submission_id == other_place.submission_id
+    assert len({first.submission_id, other_kind.submission_id, other_place.submission_id}) == 3
+    assert other_place.facts.facility_id == other_facility
+    stored = "SELECT submission_id::text, kind || ' ' || facility_id::text FROM tape_submissions"
+    assert pairs(seeded, stored) == {
+        str(first.submission_id): f"PLEDGE {first.facts.facility_id}",
+        str(other_kind.submission_id): f"BACK_BOOK {first.facts.facility_id}",
+        str(other_place.submission_id): f"PLEDGE {other_facility}",
+    }
 
 
 def test_concurrent_audit_appends_keep_the_chain_gapless(seeded: BankDatabase, app_engine: Engine) -> None:
