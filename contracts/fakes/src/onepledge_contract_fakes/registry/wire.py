@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -14,6 +13,7 @@ from onepledge_contract_fakes.registry.model import (
     SubmissionItem,
     SubmissionKind,
 )
+from onepledge_contract_fakes.validation import CANONICAL_UUID_PATTERN
 
 CODE_PATTERN = r"^[0-9a-f]{64}$"
 KEY_VERSION_PATTERN = r"^[1-9][0-9]*\.[1-9][0-9]*$"
@@ -42,7 +42,7 @@ class SubmissionItemModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    item_ref: uuid.UUID
+    item_ref: Annotated[str, Field(pattern=CANONICAL_UUID_PATTERN)]
     asset_token: Token
     field_tokens: FieldTokensModel | None = None
 
@@ -69,7 +69,7 @@ class SubmissionRequestModel(BaseModel):
         """The domain value of the request."""
         items = tuple(
             SubmissionItem(
-                item_ref=str(item.item_ref),
+                item_ref=item.item_ref,
                 asset_token=item.asset_token,
                 field_tokens=(
                     {kind: getattr(item.field_tokens, kind) for kind in FIELD_KINDS}

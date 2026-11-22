@@ -8,18 +8,18 @@ result does not depend on optional format packages being installed.
 from __future__ import annotations
 
 import re
-import uuid
 from collections.abc import Mapping
 from datetime import date, datetime
 from typing import Any
 
 import jsonschema
 
+from onepledge_contract_fakes.validation import is_canonical_uuid
+
 _DATE_TIME = re.compile(
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
 )
 _DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
-_UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
 def _is_date(value: object) -> bool:
@@ -47,15 +47,8 @@ def _is_date_time(value: object) -> bool:
 
 
 def _is_uuid(value: object) -> bool:
-    if not isinstance(value, str):
-        return True
-    if not _UUID.fullmatch(value):
-        return False
-    try:
-        uuid.UUID(value)
-    except ValueError:
-        return False
-    return True
+    """`format: uuid` holds only the canonical lower case spelling (SPEC_DECISIONS 75)."""
+    return not isinstance(value, str) or is_canonical_uuid(value)
 
 
 # A name from the document is printed only when it is plain, so no output carries brackets,

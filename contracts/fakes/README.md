@@ -10,6 +10,13 @@ verified end to end now, and layer 2 has an executable reference of the draft co
   string (probes add cache busters) and never answers 422.
 - No response is a redirect: a path with a trailing slash is an unknown route, 404
   `NOT_FOUND` in the error envelope. A 405 names the route's methods in `Allow`.
+- Identifiers and encodings are canonical or refused (SPEC_DECISIONS 75): a UUID in a body
+  (`item_ref`, `request_id`) is accepted only as 36 lower case hexadecimal characters with
+  hyphens, anything else is `PATTERN_MISMATCH`; a path id in another spelling is 404; an
+  `X-Request-ID` in another spelling is replaced by a new id, never rewritten; a key holder
+  element whose base64 does not re-encode to the same text (non-zero padding bits) is
+  `NOT_A_VALID_POINT`. A client that hangs up before its request is complete writes one
+  `info` record `client_disconnected` and nothing else.
 - Every 500 writes exactly one `error` log record carrying the response's `request_id`; any
   other 5xx writes one `warning` record. Every record of a 5xx response, the access record
   included, carries `error_code` (the code of the response body), `http_status`,

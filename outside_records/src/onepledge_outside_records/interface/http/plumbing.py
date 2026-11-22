@@ -6,6 +6,7 @@ so a VIN in a URL never reaches the log.
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping
@@ -17,6 +18,7 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
+from starlette.requests import ClientDisconnect
 
 from onepledge_outside_records.domain.errors import (
     DomainError,
@@ -174,13 +176,17 @@ def install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(Exception, unexpected_error)
 
 
+_CANONICAL_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
 def _request_id_from(scope: Scope) -> str:
+    """The caller's X-Request-ID when it is a canonical UUID, otherwise a new one (SPEC_DECISIONS 75)."""
     for name, value in scope.get("headers", []):
         if name.lower() == b"x-request-id":
-            try:
-                return str(uuid.UUID(value.decode("latin-1")))
-            except ValueError:
-                break
+            text = bytes(value).decode("latin-1")
+            if _CANONICAL_UUID.fullmatch(text):
+                return text
+            break
     return str(uuid.uuid4())
 
 
@@ -228,6 +234,11 @@ class AccessLogMiddleware:
         try:
             try:
                 await self._app(scope, receive, sending)
+            except ClientDisconnect:
+                # The client hung up before the request was complete: not a server failure, so
+                # one info record and no response, failure record or access record (decision 75).
+                _log.info(LogEvent.CLIENT_DISCONNECTED, method=scope.get("method", ""))
+                return
             except Exception as error:  # Every failure of the app ends here (SPEC_DECISIONS 34).
                 if exchange.started:
                     # Too late for the envelope: the response already went out with its own status.

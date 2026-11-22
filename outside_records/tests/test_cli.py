@@ -143,13 +143,15 @@ def test_json_results_are_one_document_and_logs_stay_on_stderr(
 
 
 def test_a_row_count_of_one_is_singular(
-    run: Run, database: Database, tmp_path: Path, copy_records: Callable[[Path], Path]
+    run: Run, provisioned_database: Database, tmp_path: Path, copy_records: Callable[[Path], Path]
 ) -> None:
+    # A database of its own: seeding one row each must not replace the session's example records.
+    MigrationRunner(provisioned_database.owner_url, provisioned_database.app_role).upgrade()
     directory = copy_records(tmp_path)
     for name in ("titles.csv", "payments.csv", "contracts.csv"):
         path = directory / "outside_records" / name
         path.write_text("".join(path.read_text().splitlines(keepends=True)[:2]))
-    code, out, _ = run(["seed", "--data-dir", str(directory)], **database.environment())
+    code, out, _ = run(["seed", "--data-dir", str(directory)], **provisioned_database.environment())
     assert code == 0
     assert out.splitlines()[1:] == [
         "  title_records           1 row",

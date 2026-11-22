@@ -8,6 +8,9 @@ value or a name the client invented.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import re
 from collections.abc import Collection, Sequence
 from enum import StrEnum, auto
 
@@ -45,6 +48,29 @@ class Issue(StrEnum):
 
 MAX_DIGITS = 18
 MAX_INTEGER = 10**MAX_DIGITS - 1
+# SPEC_DECISIONS 75: a UUID is accepted only in this one spelling; nothing is rewritten into it.
+CANONICAL_UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+_CANONICAL_UUID = re.compile(CANONICAL_UUID_PATTERN)
+
+
+def is_canonical_uuid(text: str) -> bool:
+    """36 lower case hexadecimal characters with hyphens in the 8-4-4-4-12 positions."""
+    return _CANONICAL_UUID.fullmatch(text) is not None
+
+
+def decode_canonical_base64(text: str) -> bytes | None:
+    """Standard base64 whose decoding re-encodes to the same text, or None (SPEC_DECISIONS 75).
+
+    Non-zero padding bits, missing padding or any other second spelling of the same bytes
+    is refused.
+    """
+    try:
+        raw = base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    return raw if base64.b64encode(raw).decode("ascii") == text else None
+
+
 _DIGITS = "0123456789"
 
 

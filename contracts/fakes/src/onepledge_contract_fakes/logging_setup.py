@@ -47,6 +47,7 @@ class LogEvent(StrEnum):
     UNHANDLED_EXCEPTION = "unhandled_exception"
     INTERNAL_ERROR = "internal_error"
     SERVER_ERROR = "server_error"
+    CLIENT_DISCONNECTED = "client_disconnected"
     LIBRARY_LOG = "library_log"
 
 

@@ -8,8 +8,6 @@ from a mapping through `EnvironmentReader`, so tests pass a plain dict, and its 
 
 from __future__ import annotations
 
-import base64
-import binascii
 import hashlib
 import ipaddress
 import os
@@ -21,7 +19,12 @@ from dataclasses import dataclass
 
 from onepledge_contract_fakes.errors import ConfigurationError
 from onepledge_contract_fakes.json_body import MalformedJsonError, parse_bounded_json
-from onepledge_contract_fakes.validation import MAX_INTEGER, Issue, parse_integer_text
+from onepledge_contract_fakes.validation import (
+    MAX_INTEGER,
+    Issue,
+    decode_canonical_base64,
+    parse_integer_text,
+)
 
 # SHA-256 of the raw bytes of every secret published in contracts/examples/vectors/.
 # A double refuses to start with any of them (SPEC 16.7). The values themselves are
@@ -208,11 +211,8 @@ def _is_uuid(value: str) -> bool:
 
 def decode_base64_32(value: str) -> bytes | None:
     """Decode standard base64 that must hold exactly 32 bytes, or return None."""
-    try:
-        decoded = base64.b64decode(value, validate=True)
-    except (binascii.Error, ValueError):
-        return None
-    return decoded if len(decoded) == SECRET_BYTES else None
+    decoded = decode_canonical_base64(value)
+    return decoded if decoded is not None and len(decoded) == SECRET_BYTES else None
 
 
 def reject_published_vector(name: str, secret: bytes) -> None:

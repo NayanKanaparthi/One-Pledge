@@ -9,7 +9,6 @@ bank that blinds, sends to holder 1, then holder 2, and unblinds obtains
 from __future__ import annotations
 
 import base64
-import binascii
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -26,6 +25,7 @@ from onepledge_contract_fakes.errors import (
 )
 from onepledge_contract_fakes.key_holder.config import KeyHolderConfig
 from onepledge_contract_fakes.members import MemberDirectory
+from onepledge_contract_fakes.validation import decode_canonical_base64
 
 POINT_BYTES = 32
 _IDENTITY = bytes(POINT_BYTES)
@@ -146,11 +146,8 @@ def _evaluate_all(mask: oprf.mask, elements: tuple[str, ...]) -> tuple[str, ...]
 
 
 def _evaluate_one(mask: oprf.mask, encoded: str) -> str | None:
-    try:
-        raw = base64.b64decode(encoded, validate=True)
-    except (binascii.Error, ValueError):
-        return None
-    if len(raw) != POINT_BYTES or raw == _IDENTITY:
+    raw = decode_canonical_base64(encoded)
+    if raw is None or len(raw) != POINT_BYTES or raw == _IDENTITY:
         return None
     try:
         result = bytes(mask.mask(oprf.data(raw)))

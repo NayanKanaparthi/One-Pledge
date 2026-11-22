@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 import structlog
 from fastapi import FastAPI
+from starlette.requests import ClientDisconnect
 
 from onepledge_contract_fakes.errors import (
     DomainError,
@@ -20,7 +21,7 @@ from onepledge_contract_fakes.errors import (
     ValidationFailedError,
 )
 from onepledge_contract_fakes.logging_setup import LogEvent, get_logger
-from onepledge_contract_fakes.validation import MAX_INTEGER, Issue, parse_integer_text
+from onepledge_contract_fakes.validation import MAX_INTEGER, Issue, is_canonical_uuid, parse_integer_text
 from onepledge_contract_fakes.web.envelope import Failure, failure_response, install_error_handlers
 from onepledge_contract_fakes.web.scope import (
     FAILURE_KEY,
@@ -50,12 +51,13 @@ def new_service_app(title: str) -> FastAPI:
 
 
 def _request_id_from(scope: Scope) -> str:
+    """The caller's X-Request-ID when it is a canonical UUID, otherwise a new one (SPEC_DECISIONS 75)."""
     for name, value in scope.get("headers", []):
         if name.lower() == b"x-request-id":
-            try:
-                return str(uuid.UUID(value.decode("latin-1")))
-            except ValueError:
-                break
+            text = bytes(value).decode("latin-1")
+            if is_canonical_uuid(text):
+                return text
+            break
     return str(uuid.uuid4())
 
 
@@ -109,6 +111,11 @@ class RequestContextMiddleware:
                 await self._app(scope, self._limited(receive, problem), sending)
             except DomainError as error:
                 await failure_response(scope, error)(scope, receive, sending)
+            except ClientDisconnect:
+                # The client hung up before the request was complete: not a server failure, so
+                # one info record and no response, failure record or access record (decision 75).
+                _log.info(LogEvent.CLIENT_DISCONNECTED, method=scope.get("method", ""))
+                return
             except Exception as error:  # Every failure of the app ends here (SPEC_DECISIONS 34).
                 if exchange.started:
                     # Too late for the envelope: the response already went out with its own status.

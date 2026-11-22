@@ -34,6 +34,9 @@ synthetic and comes from `onepledge-datagen`.
   and `revision` (SPEC_DECISIONS 5, 43.6). The `service` value of every log line is
   `outside_records`, the health value, and every 500 writes exactly one `error` record
   carrying the response's `request_id` (a 503 for a database outage writes one `warning`).
+  An `X-Request-ID` that is not a canonical lower case UUID is replaced by a new id, never
+  rewritten, and a client that hangs up mid request writes one `info` record
+  `client_disconnected` and nothing else (SPEC_DECISIONS 75).
   Every record of a 5xx response, the access record included, carries `error_code`,
   `http_status`, `request_id` and `exception_type` (SPEC_DECISIONS 66). Every exception
   while `db migrate` runs (a statement PostgreSQL refuses, a missing privilege, any

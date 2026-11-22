@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import Annotated
 
 from fastapi import FastAPI, Request
@@ -15,7 +14,7 @@ from onepledge_contract_fakes.errors import InjectedFailureError
 from onepledge_contract_fakes.json_body import parse_json_request
 from onepledge_contract_fakes.key_holder.config import KeyHolderConfig
 from onepledge_contract_fakes.key_holder.double import EvaluationRequest, KeyHolderDouble
-from onepledge_contract_fakes.validation import QueryParameters
+from onepledge_contract_fakes.validation import CANONICAL_UUID_PATTERN, QueryParameters
 from onepledge_contract_fakes.web import (
     check_test_control,
     contract_routes,
@@ -35,7 +34,7 @@ class EvaluateRequestModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    request_id: uuid.UUID
+    request_id: Annotated[str, Field(pattern=CANONICAL_UUID_PATTERN)]
     key_version: Annotated[int, Field(ge=1)] | None = None
     elements: Annotated[
         list[Annotated[str, Field(pattern=ELEMENT_PATTERN, min_length=44, max_length=44)]],
@@ -66,7 +65,7 @@ def create_key_holder_app(config: KeyHolderConfig, clock: Clock | None = None) -
         parse_json_request(body, request.headers.get("content-type"))
         query = QueryParameters(request.query_params.multi_items(), ())
         model = validate_in_order(query, lambda: parse_model_json(EvaluateRequestModel, body))
-        command = EvaluationRequest(str(model.request_id), model.key_version, tuple(model.elements))
+        command = EvaluationRequest(model.request_id, model.key_version, tuple(model.elements))
         result = double.evaluate(member_id, command)
         return JSONResponse(
             {

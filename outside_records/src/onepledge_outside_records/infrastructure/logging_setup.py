@@ -51,6 +51,7 @@ class LogEvent(StrEnum):
     SCHEMA_MIGRATION_APPLIED = "schema_migration_applied"
     SCHEMA_MIGRATION_REVERTED = "schema_migration_reverted"
     SCHEMA_MIGRATION_FAILED = "schema_migration_failed"
+    CLIENT_DISCONNECTED = "client_disconnected"
     DATABASE_UNAVAILABLE = "database_unavailable"
     LIBRARY_LOG = "library_log"
 
