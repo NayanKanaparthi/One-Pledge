@@ -13,14 +13,19 @@ report` and `integrity verify`.
 
 What a reviewer can check, and where:
 
-- **History cannot be edited, even by the owner.** Nine tables (`loans_raw`,
+- **History cannot be edited, even by the owner.** Ten tables (`loans_raw`,
   `audit_log`, `cleaning_issues`, `submission_items`, `local_checks`, `loan_tokens`,
-  `certificates`, `checkpoints_seen`, `integrity_runs`) have statement triggers that
-  refuse `UPDATE`, `DELETE` and `TRUNCATE` with SQLSTATE `OP001`. Loan state changes
-  outside the table of SPEC 8.4 fail with `OP002`; a loan's identity, and the terms of
-  a tokenised loan, are immutable (`OP003`); the facts of an upload and illegal tape
-  status changes fail with `OP004`; an audit entry that does not extend the chain fails
-  with `OP005` (`migrations/versions/0002_guards.py`). `TRUNCATE loans_raw` by the
+  `certificates`, `checkpoints_seen`, `integrity_runs`, `registry_messages_quarantined`)
+  have statement triggers that refuse `UPDATE`, `DELETE` and `TRUNCATE` with SQLSTATE
+  `OP001`. The state machines are the only path, on insert and on update: a loan is
+  created PENDING and changes only along the table of SPEC 8.4 (`OP002`); a loan's
+  identity, and the terms of a tokenised loan, are immutable (`OP003`); a tape is
+  created RECEIVED, moves exactly one status forward, enters FAILED with its resume
+  status, failed stage and code, and leaves FAILED only to its resume status (`OP004`,
+  SPEC_DECISIONS 46); an alert is created NEW and OPEN and follows SPEC 8.5, with its
+  facts immutable, its position set once and its case leaving OPEN once (`OP006`,
+  SPEC_DECISIONS 47); an audit entry that does not extend the chain fails with `OP005`
+  (`migrations/versions/0002_guards.py`, `0005_state_guards.py`). `TRUNCATE loans_raw` by the
   owner fails with `0A000` first, because other tables reference it by foreign key, and
   `TRUNCATE loans_raw CASCADE` fails with `OP001` (SPEC_DECISIONS 24).
 - **What the lender sent can be rebuilt byte for byte.** Each upload keeps its BOM
@@ -54,11 +59,20 @@ What a reviewer can check, and where:
   (`infrastructure/crypto/blinder.py` is the only module importing `oprf`); the registry
   sees only the eight scrambled codes of each loan; alerts are explained from the
   registry's match facts alone (`AlertFacts` has no loan value).
+- **The process refuses more power than it needs.** `worker` checks the role behind
+  `DATABASE_URL` at startup and exits 1 with one line naming the variable when it is a
+  superuser, owns a table, or holds UPDATE, DELETE or TRUNCATE on an insert-only table,
+  DELETE or TRUNCATE on any table, or CREATE on the schema (SPEC_DECISIONS 43.4).
 - **Others can check us without trusting us, and we check them.** Every certificate and
   checkpoint is verified with the keys of `REGISTRY_PUBLIC_KEYS` only, stored with its
-  verdict, and failures are never removed. One failed checkpoint halts every further
-  submission (`HALT_ON_REGISTRY_INTEGRITY_FAILURE`); turning the rule off is audited at
-  every start. Deep verification recomputes the audit chain, every raw row and file
+  verdict, and failures are never removed: a certificate that failed stays as evidence
+  beside the verified one a retry fetches (SPEC_DECISIONS 61), and an outbox message of
+  a known type whose payload breaks the contract is kept in
+  `registry_messages_quarantined` (SPEC_DECISIONS 57). The halt rule
+  (`HALT_ON_REGISTRY_INTEGRITY_FAILURE`, SPEC_DECISIONS 56) stops every submission,
+  resubmission and case position while a checkpoint failed, a request has a failed
+  certificate and no verified one, or a CHECKPOINT message is quarantined; turning the
+  rule off is audited at every start. Deep verification recomputes the audit chain, every raw row and file
   hash, every certificate and checkpoint signature and the registry's whole hash chain
   from seq 1, so it finds an edit by a superuser and a history rewrite before the
   latest checkpoint, and says where.
@@ -70,7 +84,10 @@ bank_agent/
   pyproject.toml  README.md  alembic.ini
   migrations/          env.py; versions/0001_schema.py (the 18 tables of SPEC 12.1 with
                        named checks and indexes), 0002_guards.py (triggers), 0003_grants.py,
-                       0004_checkpoint_body.py (the signed checkpoint body)
+                       0004_checkpoint_body.py (the signed checkpoint body),
+                       0005_state_guards.py (tape guard, insert guards, alert guard),
+                       0006_quarantine.py (the 19th table), 0007_certificate_evidence.py
+                       (failed certificates kept beside verified ones)
   src/onepledge_bank_agent/
     domain/            values (Vin, Money, Lei, ...), enums, errors (one DomainError tree and
                        the fixed message table), tape and loan state machines, alert,
@@ -157,12 +174,18 @@ Every command takes `--json`, `--quiet` and `--debug`.
 - `registry sync` prints the messages processed, alerts created, case updates applied
   and checkpoints verified or failed, and is audited as `REGISTRY_SYNC_REQUESTED` with
   `via` cli. When another sync holds the bank's outbox lock it does nothing and says so.
-- `integrity report` and `integrity verify` print the five sections, their facts and
-  every failure; with `--json` the document is the `IntegrityReport` of
+- `integrity report` and `integrity verify` print the six sections, their facts and
+  every failure (the twelve database controls among them); with `--json` the document is the `IntegrityReport` of
   `bank_agent.yaml` plus `"ok": true`. `integrity verify` needs the registry: when it
   cannot be reached it prints `DEPENDENCY_UNAVAILABLE` and stores nothing.
 - A transient dependency failure prints `DEPENDENCY_UNAVAILABLE`; a refusal or an
-  answer outside the contract prints `DEPENDENCY_REFUSED`.
+  answer outside the contract prints `DEPENDENCY_REJECTED` (SPEC_DECISIONS 59); the halt
+  rule prints `REGISTRY_INTEGRITY_BROKEN`. Each with its fixed message.
+- `--debug` adds the exception type and its frames (file, line, function) only: no
+  message, no source line, no locals (SPEC_DECISIONS 53.12).
+- `db migrate` logs one `schema_migration_applied` record with its `revision` per
+  applied revision; third party log records below WARNING are dropped (SPEC_DECISIONS
+  43.6).
 
 ## Pipeline
 
@@ -173,10 +196,13 @@ Every command takes `--json`, `--quiet` and `--debug`.
 | CHECKED | `RunLocalChecks` | Looks up each accepted loan's title, payments and contracts, evaluates the four local checks (SPEC 11), stores the results per loan and holds failing loans locally, in chunks of `CHECK_CHUNK_LOANS` that each commit. |
 | TOKENIZED | `TokenizeLoans` | For PENDING loans without their eight tokens, in chunks of `TOKENIZE_CHUNK_LOANS`: blinds the eight inputs of SPEC 9.2, sends them to key holder 1 and its answer to key holder 2, unblinds, derives the tokens and stores them with the key version pair, one transaction per chunk. Both holders must answer for a chunk to be stored; a holder that changes key version mid submission fails it with `KEY_VERSION_MISMATCH`. |
 | SUBMITTED | `SubmitStage` | Checks the halt rule, then plans (once) one registry request per `SUBMIT_BATCH_ITEMS` eligible loans with its idempotency key (SPEC 13.4), and sends every unanswered request in batch order. Each send is counted before it leaves (the client's own retries included); each answer is checked against what was sent and applied in one transaction (SPEC 13.5). RELEASE submissions send only asset codes. |
-| COMPLETED | `CollectCertificates` | Fetches and verifies the certificate of every answered request (SPEC 15.2) and stores it either way; any failure ends the tape FAILED with `CERTIFICATE_INVALID` (loan states are kept). Then one outbox sync. |
+| COMPLETED | `CollectCertificates` | Fetches and verifies the certificate of every answered request that has no verified one (SPEC 15.2) and stores it either way; any failure ends the tape FAILED with `CERTIFICATE_INVALID`, resume status SUBMITTED (loan states are kept as the registry answered). A retry fetches again; the same failed certificate stores nothing new. Then one outbox sync. |
 
 Outside the stages: `SyncRegistryOutbox` processes ALERT, CASE_UPDATE and CHECKPOINT
-messages in position order, one transaction each, then acknowledges (SPEC 14.1);
+messages in position order, one transaction each, then acknowledges (SPEC 14.1); a
+known type whose payload breaks the contract is quarantined with its reason
+(`SCHEMA_MISMATCH`, `UNKNOWN_ASSET_TOKEN_FORMAT`, `OVERSIZED`), audited as
+`REGISTRY_MESSAGE_QUARANTINED` and acknowledged, so it never blocks the outbox;
 `VerifyCheckpoint` applies SPEC 15.3 and stores every checkpoint with its verdict;
 `ReviewAlert`, `ResubmitLoan`, `CreateReleaseInstruction` and `RetryTape` are the
 actions of SPEC 13.8, 14.5 and 14.6 (their HTTP routes come with WP4);
@@ -188,23 +214,30 @@ in upload order. Failures (SPEC 13.7, SPEC_DECISIONS 26):
 | Situation | Handling | Failure code |
 |---|---|---|
 | Outside records unreachable, timed out, 429 or 5xx after the client's two retries | Stage retried with backoff `min(2^attempts, 60)` seconds | `OUTSIDE_RECORDS_UNAVAILABLE` after `PIPELINE_MAX_ATTEMPTS` |
-| 401, 403, 422, any other 4xx except an agreed 404, or an answer outside the contract | FAILED at once | `OUTSIDE_RECORDS_REJECTED` |
+| 401, 403, 422, any other 4xx except an agreed 404, a 3xx (redirects are not followed), or an answer outside the contract (not decodable, not JSON, another object, an incomplete payments window) | FAILED at once | `OUTSIDE_RECORDS_REJECTED` |
 | 404 `TITLE_NOT_FOUND` or `CONTRACT_NOT_FOUND` | A check result, not an error | none |
 | A key holder unreachable, 429 or 5xx | Stage retried with backoff; nothing of the chunk is stored | `KEY_HOLDER_UNAVAILABLE` after `PIPELINE_MAX_ATTEMPTS` |
 | A key holder refusal (any 4xx) or an answer outside the contract (wrong count, an element that is not a point, a float) | FAILED at once | `KEY_HOLDER_REJECTED` |
 | The key version pair changed within a submission, or the registry answered 409 `KEY_VERSION_MISMATCH` | FAILED at once, not retryable | `KEY_VERSION_MISMATCH` |
 | The registry unreachable, 429 or 5xx | Stage retried; answered batches keep their results, the rest are sent again with the same key | `REGISTRY_UNAVAILABLE` after `PIPELINE_MAX_ATTEMPTS` |
 | A registry refusal or an answer that does not match what was sent | FAILED at once | `REGISTRY_REJECTED_REQUEST` |
-| A received checkpoint failed verification and the halt rule is on | FAILED before anything is sent | `REGISTRY_INTEGRITY_BROKEN` |
-| A certificate failed verification | FAILED, not retryable | `CERTIFICATE_INVALID` |
+| The halt rule is on and active (a failed checkpoint, a request with only a failed certificate, or a quarantined CHECKPOINT message) | FAILED before anything is sent | `REGISTRY_INTEGRITY_BROKEN` |
+| A certificate failed verification | FAILED; retryable once the registry serves a valid one | `CERTIFICATE_INVALID` |
 | Any other error | FAILED at once | `INTERNAL_ERROR` |
 
-`TAPE_FAILED` records `dependency` (`outside_records`, `key_holder_1`, `key_holder_2` or
-`registry`) and `http_status` (null when the service was not reached) for a dependency
-failure, and for a refusal also `reason`: `UNAUTHENTICATED`, `FORBIDDEN`,
-`REQUEST_REFUSED` or `MALFORMED_RESPONSE`. Every failure code except
-`KEY_VERSION_MISMATCH` and `CERTIFICATE_INVALID` can be resumed by a retry
-(SPEC_DECISIONS 33).
+Every HTTP failure of the four clients is classified by one table
+(`infrastructure/http/classification.py`, SPEC_DECISIONS 49): connection failures,
+timeouts, 429 and 5xx are transient; 401, 403, other 4xx, 3xx and every answer outside
+the contract are permanent; no exception of the HTTP library reaches a stage as an
+unexpected error. `TAPE_STAGE_ATTEMPT_FAILED` and `TAPE_FAILED` carry the same six keys,
+always present (SPEC_DECISIONS 58): `stage`, `failure_code`, `attempts`, `dependency`
+(`outside_records`, `key_holder_1`, `key_holder_2`, `registry` or null), `http_status`
+(null when no answer arrived) and `reason` (`CONNECTION_FAILED`, `TIMEOUT`,
+`RATE_LIMITED`, `SERVER_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `REQUEST_REFUSED`,
+`MALFORMED_RESPONSE`, `KEY_VERSION_MISMATCH`, `CERTIFICATE_INVALID`, `INTEGRITY_HALT`,
+`PROTOCOL_VIOLATION` or `UNEXPECTED`); `TAPE_FAILED` adds `resume_status`. The log
+records and the worker output carry the same keys. Every failure code except
+`KEY_VERSION_MISMATCH` can be resumed by a retry (SPEC_DECISIONS 26 as amended by 61).
 
 ## Configuration
 
@@ -361,7 +394,10 @@ action and object type checks.
 | checkpoints_seen | `ck_checkpoints_seen_verified`: `verified = (failure_reason IS NULL)` | The same rule SPEC 12.1 states for certificates; a checkpoint is stored once, after verification (SPEC 15.3). |
 | alerts | `ck_alerts_kinds_matched`, `ck_alerts_kinds_not_matched`: subsets of the eight token kinds | The values the registry contract defines. |
 | alerts | `ix_alerts_loan_id` | Lineage and loan pages list a loan's alerts (SPEC 14). |
-| checkpoints_seen | `body jsonb NOT NULL` with `ck_checkpoints_seen_body` (an object), migration 0004 | The signed body exactly as received. SPEC 12.1 stores `signed_at` as a timestamp, but the signature covers its text; deep verification (SPEC 15.6 step 4) re-verifies every stored signature, which needs the exact signed bytes. |
+| checkpoints_seen | `body jsonb NOT NULL` with `ck_checkpoints_seen_body` (an object), migration 0004 | The signed body exactly as received. SPEC 12.1 stores `signed_at` as a timestamp, but the signature covers its text; deep verification (SPEC 15.6 step 4) re-verifies every stored signature, which needs the exact signed bytes (SPEC_DECISIONS 54). |
+| certificates | migration 0007 (SPEC_DECISIONS 61): primary key `certificate_row_id`; `uq_certificates_verified_certificate_id` and `uq_certificates_verified_request_id` (partial, `WHERE verified`); `uq_certificates_delivery` on `(certificate_id, body_hash, signature, md5(body::text))`; `ix_certificates_request_id` | A failed certificate is kept beside the verified one a retry stores. Decision 61 names the key `(certificate_id, body_hash, signature)`; the body is added because the CERTIFICATE_BODY tamper changes only the body, so without it the genuine certificate fetched after the tamper is undone would count as the failed delivery and never be stored. |
+| registry_messages_quarantined | the 19th table, migration 0006 (SPEC_DECISIONS 57): `uq_registry_messages_quarantined_message_id`; value list on `reason`; `payload_sha256` a hex digest; `position >= 1`; `message_type` 1 to 64 characters; `(reason = 'OVERSIZED') = (payload IS NULL)` | One row per message however often it is delivered, and an oversized payload is the only one kept as its hash alone. `REGISTRY_MESSAGE_QUARANTINED` joins the audit action list. |
+| loans, tape_submissions, alerts | insert guards `loans_insert_guard`, `tape_submissions_insert_guard`; `alerts_guard` on insert and update, migration 0005 (SPEC_DECISIONS 46, 47) | Creation in the one state SPEC allows, and the tape and alert machines as the only path. |
 | audit_log | `ck_audit_log_seq`: `>= 1`; `ck_audit_log_actor_user`: `(actor_type = 'USER') = (actor_user_id IS NOT NULL)`; `ck_audit_log_request_id`: at most 64 characters; value lists on `action` and `object_type` | The chain starts at 1; a user entry names its user and a system entry names none; request ids are bounded; actions and object types are those of SPEC 17.2 and SPEC_DECISIONS 30. |
 
 ## Decisions recorded here
@@ -373,20 +409,25 @@ action and object type checks.
 - A deep verification finding (SPEC 15.6 step 4) is reported against the stored
   verified checkpoint that covers the bad seq (the first whose `last_event_seq` is at
   least the seq), because a `CheckpointFailure` names a checkpoint.
-- The halt rule is checked by the submit stage and also by `ResubmitLoan`, before it
-  plans or sends anything (SPEC 15.4 names only the submit stage; a resubmission is a
-  submission too).
-- An outbox message of a known type whose payload is outside the contract is a protocol
-  error: it is not processed, not acknowledged, and the sync ends quietly, so it is
-  retried. An unknown type is acknowledged and audited as `REGISTRY_MESSAGE_IGNORED`.
+- The halt rule is checked by the submit stage, `ResubmitLoan` and the SUBMIT_POSITION
+  action of `ReviewAlert`, before anything is sent (SPEC_DECISIONS 56); a release is
+  accepted and its tape fails at the submit stage.
+- An outbox message of a known type whose payload is outside the contract is
+  quarantined and acknowledged (SPEC_DECISIONS 57); a number with a fraction or an
+  exponent in an outbox page is kept as its text so it fails that payload's schema
+  instead of the whole page. An unknown type is acknowledged and audited as
+  `REGISTRY_MESSAGE_IGNORED`. Only a message without a valid id, position and type
+  makes the page malformed.
+- The certificates section counts as `total` the answered requests and as `verified`
+  those with a verified row; `failures` lists every failed row ever stored with the
+  last deep verification's own findings (a stored failed row is not one). Deep
+  verification re-verifies verified rows only.
 - The key version pair of a submission is the one of the tokens already stored for its
   eligible loans, so a resumed tokenise stage detects a holder that changed version.
 
 - A blank line before the header record is kept in `header_text`, so the
   reconstruction of SPEC_DECISIONS 25 rule 1 also holds for such a file; re-parsing
   `header_text` with blank lines dropped yields `header_cells`.
-- `TAPE_FAILED` for an outage that reached the attempt limit records `dependency` and
-  `http_status` but no `reason`: the closed set of reasons describes refusals.
 - `details[].issue` codes raised by the domain come from the shared vocabulary of
   SPEC_DECISIONS 22 (a test reads them from the source). The duplicate upload detail
   carries the existing submission id in `issue`, as `contracts/examples` shows.

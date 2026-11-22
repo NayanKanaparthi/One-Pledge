@@ -2,8 +2,11 @@
 
 The certificate is fetched with no transaction open, checked against the configured
 trust anchors and against what the bank sent and was told, and stored with its verdict
-in one transaction, whether it verified or not. A request that already has a stored
-certificate is not fetched again.
+in one transaction, whether it verified or not. A request that already has a verified
+certificate is not fetched again. One that has only failed rows is fetched again on
+every call (SPEC_DECISIONS 61): a verified certificate is stored as a new row beside the
+failed ones, which stay as evidence; the same failed delivery fetched again stores
+nothing new and writes no audit entry.
 """
 
 from __future__ import annotations
@@ -57,24 +60,26 @@ class VerifyCertificate:
         self._verifier = verifier
         self._member_id = member_id
         self._clock = runtime.clock
+        self._ids = runtime.ids
         self._faults = runtime.faults
         self._after_unit = runtime.after_unit
         self._log = runtime.log
 
     def collect(self, request: RegistryRequest) -> Certificate:
-        """The stored certificate of the request, fetched and verified now if it was not stored yet."""
+        """The verified certificate of the request, or the one just fetched with its verdict."""
         facts = answered(request)
         with self._units() as unit:
-            stored = unit.certificates.for_requests([request.request_id]).get(request.request_id)
+            stored = unit.certificates.verified_for_requests([request.request_id]).get(request.request_id)
         if stored is not None:
             return stored
         signed = self._registry.certificate(facts.certificate_id)
         with self._units() as unit:
-            existing = unit.certificates.for_requests([request.request_id]).get(request.request_id)
+            existing = unit.certificates.verified_for_requests([request.request_id]).get(request.request_id)
             if existing is not None:
                 return existing
             certificate = self._verified(unit, request, facts, signed)
-            unit.certificates.add(certificate)
+            if not unit.certificates.add(certificate):
+                return certificate
             failure = certificate.failure.value if certificate.failure else None
             unit.record(certificate_checked(certificate.certificate_id, request, failure, facts.as_of_seq))
             unit.commit()
@@ -115,6 +120,7 @@ class VerifyCertificate:
         failure = verify_certificate(signed, expectation, self._verifier)
         now = self._clock.now()
         return Certificate(
+            certificate_row_id=self._ids.new_id(),
             certificate_id=facts.certificate_id,
             request_id=request.request_id,
             registry_submission_id=facts.registry_submission_id,

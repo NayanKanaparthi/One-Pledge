@@ -1,10 +1,14 @@
 """`CollectCertificates`: the COMPLETED stage (SPEC 13.2 certify row, 13.6).
 
-For every answered tape request of the submission that has no certificate row: fetch,
-verify and store it. If any certificate of the submission failed verification, the
-submission fails with CERTIFICATE_INVALID; the loan states are kept and the integrity
-report turns BROKEN. Otherwise the registry outbox is synced once (so the alerts and the
-checkpoint of these decisions arrive now) and the submission is marked COMPLETED.
+For every answered tape request of the submission that has no verified certificate:
+fetch, verify and store it. If any certificate of the submission failed verification, the
+submission fails with CERTIFICATE_INVALID (resume status SUBMITTED); the loan states are
+kept as the registry answered, the failed row stays as evidence, the integrity report's
+certificates section turns BROKEN and the halt rule holds (SPEC_DECISIONS 61). The code
+is retryable: a retry runs this stage again, which fetches again every request still
+without a verified certificate. Otherwise the registry outbox is synced once (so the
+alerts and the checkpoint of these decisions arrive now) and the submission is marked
+COMPLETED.
 """
 
 from __future__ import annotations

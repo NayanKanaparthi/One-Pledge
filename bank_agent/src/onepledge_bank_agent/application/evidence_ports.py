@@ -1,8 +1,9 @@
 """Repository ports of the registry side and of the bank's evidence (SPEC 12.1, 13 to 15).
 
 `registry_requests` with their items, `certificates`, `alerts`, `checkpoints_seen`,
-`integrity_runs`, reads of `audit_log`, the stored forms of every tape for deep
-verification, and the live database controls. The unit of work exposes all of them.
+`registry_messages_quarantined`, `integrity_runs`, reads of `audit_log`, the stored
+forms of every tape for deep verification, and the live database controls. The unit
+of work exposes all of them.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from onepledge_bank_agent.domain.entities import Certificate, Checkpoint, Regist
 from onepledge_bank_agent.domain.enums import IntegrityRunStatus, RegistryItemResult, RequestOrigin
 from onepledge_bank_agent.domain.integrity import DatabaseControl
 from onepledge_bank_agent.domain.raw_evidence import StoredTape
-from onepledge_bank_agent.domain.registry_records import ItemOutcome, RegistryAnswer
+from onepledge_bank_agent.domain.registry_records import ItemOutcome, QuarantinedMessage, RegistryAnswer
 from onepledge_bank_agent.domain.registry_results import StoredResult
 
 
@@ -81,18 +82,43 @@ class RegistryRequestRepository(Protocol):
 
 
 class CertificateRepository(Protocol):
-    """`certificates` (insert-only)."""
+    """`certificates` (insert-only): every certificate received, failed ones kept (SPEC_DECISIONS 61)."""
 
-    def add(self, certificate: Certificate) -> None:
-        """Store a received certificate with its verification result."""
+    def add(self, certificate: Certificate) -> bool:
+        """Store a received certificate with its verdict; False, storing nothing, when this exact
+        delivery (certificate id, body hash, signature and body) is already stored."""
         ...
 
-    def for_requests(self, request_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, Certificate]:
-        """The certificates of these requests, by request id."""
+    def verified_for_requests(self, request_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, Certificate]:
+        """The verified certificate of each of these requests that has one, by request id."""
         ...
 
     def all(self) -> list[Certificate]:
-        """Every stored certificate, oldest first."""
+        """Every stored row, verified or failed, oldest first."""
+        ...
+
+    def expected(self) -> int:
+        """The number of answered registry requests, each of which should have a certificate."""
+        ...
+
+    def any_unproven(self) -> bool:
+        """True when some request has a failed certificate row and no verified one."""
+        ...
+
+
+class QuarantineRepository(Protocol):
+    """`registry_messages_quarantined` (insert-only, SPEC_DECISIONS 57)."""
+
+    def add(self, message: QuarantinedMessage) -> bool:
+        """Store a quarantined message; False, storing nothing, when its message id is already held."""
+        ...
+
+    def count(self) -> int:
+        """The number of quarantined messages."""
+        ...
+
+    def any_checkpoint(self) -> bool:
+        """True when a message of type CHECKPOINT is quarantined."""
         ...
 
 
@@ -176,10 +202,16 @@ class IntegrityRunRepository(Protocol):
 
 
 class EvidenceReader(Protocol):
-    """The stored forms of every tape and the audit log, as deep verification reads them.
+    """The stored forms of every tape and the audit log, as deep verification reads them, and the
+    deep verifications stored.
 
     Audit entries are appended through the unit of work; these are reads only.
     """
+
+    @property
+    def runs(self) -> IntegrityRunRepository:
+        """`integrity_runs`: the deep verifications and their reports."""
+        ...
 
     def audit_entries(self) -> Iterator[AuditEntry]:
         """Every audit entry in seq order."""

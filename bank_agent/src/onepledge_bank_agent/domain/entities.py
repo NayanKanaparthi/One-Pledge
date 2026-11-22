@@ -123,8 +123,14 @@ class RegistryRequest:
 
 @dataclass(frozen=True)
 class Certificate:
-    """A signed registry certificate as received, with the bank's own verification result (SPEC 15.2)."""
+    """A signed registry certificate as received, with the bank's own verification result (SPEC 15.2).
 
+    `certificate_row_id` identifies the stored row: a certificate that failed is kept as
+    evidence, and a verified one fetched later for the same request is a new row
+    (SPEC_DECISIONS 61).
+    """
+
+    certificate_row_id: uuid.UUID
     certificate_id: uuid.UUID
     request_id: uuid.UUID
     registry_submission_id: uuid.UUID

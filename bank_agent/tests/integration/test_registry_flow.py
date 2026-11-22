@@ -13,6 +13,7 @@ from datetime import date
 from pathlib import Path
 
 import oprf
+import psycopg
 import pytest
 
 from bank_testkit.data import seed_reference
@@ -20,8 +21,10 @@ from bank_testkit.database import BankDatabase, pairs
 from bank_testkit.doubles import HolderScalars, InProcessDoubles
 from bank_testkit.outside import InProcessOutsideRecords
 from bank_testkit.pipeline import BankAgentHarness, Services
+from bank_testkit.world import CrashError, Faults
 from onepledge_bank_agent.application.faults import FaultPoint, NoFaults
-from onepledge_bank_agent.domain.enums import TapeKind, TapeStatus
+from onepledge_bank_agent.domain.enums import IntegrityRunStatus, TapeKind, TapeStatus
+from onepledge_bank_agent.domain.integrity import SectionStatus
 from onepledge_bank_agent.infrastructure.stop_signal import EventStopSignal
 
 pytestmark = pytest.mark.integration
@@ -177,3 +180,103 @@ def test_a_stop_ends_the_outbox_sync_after_the_acknowledged_message(
         assert resumed.composition.outbox_sync().sync().messages_processed == 0
     assert rest.messages_processed >= 2
     assert pairs(bank_db, ignored) == {"ignored": "3"}
+
+
+ALERT_PAYLOAD = {
+    "case_id": "6f1c1e9e-6d3e-4a43-9b52-0d4c6a7c2a10",
+    "role": "HOLDER",
+    "asset_token": "d" * 64,
+    "match_kind": "EXACT",
+    "match_basis": "ASSET",
+    "kinds_matched": ["ASSET"],
+    "opened_seq": 4,
+}
+QUARANTINED = (
+    "SELECT message_type || ' ' || reason, (payload IS NULL)::text || ' ' || payload_sha256 "
+    "FROM registry_messages_quarantined"
+)
+
+
+class CrashAfterFirstQuarantine(Faults):
+    """Crashes between commit and acknowledgement of the first quarantined message, once."""
+
+    def __init__(self, database: BankDatabase) -> None:
+        super().__init__()
+        self._database = database
+        self.crashed = False
+
+    def reached(self, point: FaultPoint) -> None:
+        super().reached(point)
+        held = pairs(self._database, "SELECT 'rows', count(*)::text FROM registry_messages_quarantined")
+        if point is FaultPoint.BETWEEN_OUTBOX_COMMIT_AND_ACK and not self.crashed and held == {"rows": "1"}:
+            self.crashed = True
+            raise CrashError(point.value)
+
+
+def test_a_known_message_with_a_payload_outside_the_contract_is_quarantined_and_the_outbox_moves_on(
+    bank_db: BankDatabase, small_data: Path, small_outside: InProcessOutsideRecords, doubles: InProcessDoubles
+) -> None:
+    """SPEC_DECISIONS 57: each reason is stored, audited as a FAILURE, acknowledged, and reported."""
+    seed_reference(bank_db, small_data)
+    faults = CrashAfterFirstQuarantine(bank_db)
+    with BankAgentHarness(bank_db, Services(small_outside, doubles), faults=faults) as bank:
+        doubles.inject_message("HARBOR", "ALERT", {**ALERT_PAYLOAD, "asset_token": "A" * 64})
+        doubles.inject_message("HARBOR", "ALERT", {**ALERT_PAYLOAD, "opened_seq": 1.5})
+        doubles.inject_message("HARBOR", "CASE_UPDATE", {"case_id": "x", "notes": "n" * 70_000})
+        doubles.inject_message("HARBOR", "MARKET_NEWS", {"headline": "an unknown type is not a fault"})
+        doubles.inject_message("HARBOR", "ALERT", ALERT_PAYLOAD)
+        with pytest.raises(CrashError):
+            bank.sync()
+        bank.sync()
+        bank.sync()
+        report = bank.report()
+    assert faults.crashed, "the first quarantined message was delivered again"
+    found = pairs(bank_db, QUARANTINED)
+    assert sorted(found) == [
+        "ALERT SCHEMA_MISMATCH",
+        "ALERT UNKNOWN_ASSET_TOKEN_FORMAT",
+        "CASE_UPDATE OVERSIZED",
+    ], "a redelivery after a crash stored nothing twice"
+    assert found["CASE_UPDATE OVERSIZED"].startswith("true "), "an oversized payload keeps only its hash"
+    assert all(value.startswith("false ") for key, value in found.items() if "OVERSIZED" not in key)
+    audited = (
+        "SELECT detail->>'message_type' || ' ' || (detail->>'reason'), outcome || ' ' || object_type "
+        "FROM audit_log WHERE action = 'REGISTRY_MESSAGE_QUARANTINED'"
+    )
+    assert pairs(bank_db, audited) == dict.fromkeys(found, "FAILURE REGISTRY_MESSAGE")
+    hashes = (
+        "SELECT detail->>'payload_sha256', 'audited' FROM audit_log "
+        "WHERE action = 'REGISTRY_MESSAGE_QUARANTINED'"
+    )
+    assert sorted(pairs(bank_db, hashes)) == sorted(value.split()[1] for value in found.values())
+    others = (
+        "SELECT action, count(*)::text FROM audit_log "
+        "WHERE action IN ('REGISTRY_MESSAGE_IGNORED', 'ALERT_UNMATCHED') GROUP BY 1"
+    )
+    assert pairs(bank_db, others) == {"REGISTRY_MESSAGE_IGNORED": "1", "ALERT_UNMATCHED": "1"}
+    assert (report.registry_messages.status, report.registry_messages.quarantined) == (
+        SectionStatus.BROKEN,
+        3,
+    )
+    assert report.status is IntegrityRunStatus.BROKEN
+    acknowledged = [sent for sent in doubles.sent if sent.path.endswith("/ack")]
+    assert len(acknowledged) >= 5
+
+
+def test_the_quarantine_table_is_insert_only_and_the_app_role_may_only_read_and_append(
+    bank_db: BankDatabase,
+) -> None:
+    grants = (
+        "SELECT privilege_type, 'granted' FROM information_schema.role_table_grants "
+        "WHERE table_name = 'registry_messages_quarantined' AND grantee = %s"
+    )
+    assert pairs(bank_db, grants, (bank_db.app_role,)) == {"SELECT": "granted", "INSERT": "granted"}
+    with bank_db.connect("owner") as connection:
+        for statement in (
+            "UPDATE registry_messages_quarantined SET reason = 'OVERSIZED'",
+            "DELETE FROM registry_messages_quarantined",
+            "TRUNCATE registry_messages_quarantined",
+        ):
+            with pytest.raises(psycopg.Error) as refused:
+                connection.execute(statement)
+            assert refused.value.sqlstate == "OP001", statement

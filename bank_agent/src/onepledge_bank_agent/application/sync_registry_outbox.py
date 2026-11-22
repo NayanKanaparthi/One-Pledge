@@ -5,8 +5,11 @@ request (`POST /v1/registry/sync`, `onepledge-bank registry sync`). It holds the
 lock `onepledge:outbox`, so one sync runs per bank. Messages are read 100 at a time in
 position order; each is processed in one transaction, committed, then acknowledged. A
 crash between commit and acknowledgement causes a redelivery that changes nothing. A
-message type this bank does not know is acknowledged and audited. An outage ends the
-periodic sync quietly; an on-demand sync reports it.
+message type this bank does not know is acknowledged and audited. A known type whose
+payload broke the contract is quarantined (SPEC_DECISIONS 57): in one transaction the
+message is stored in `registry_messages_quarantined` and audited as
+`REGISTRY_MESSAGE_QUARANTINED`, then it is acknowledged and the sync continues. An
+outage ends the periodic sync quietly; an on-demand sync reports it.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ from onepledge_bank_agent.application.events import LogEvent
 from onepledge_bank_agent.application.faults import FaultPoint
 from onepledge_bank_agent.application.outbox_handlers import AlertMessages, CaseUpdateMessages
 from onepledge_bank_agent.application.ports import UnitOfWorkFactory
-from onepledge_bank_agent.application.registry_audit import message_ignored
+from onepledge_bank_agent.application.registry_audit import message_ignored, message_quarantined
 from onepledge_bank_agent.application.registry_ports import OutboxLock, RegistryClient
 from onepledge_bank_agent.application.requester import Requester
 from onepledge_bank_agent.application.runtime import Runtime
@@ -29,6 +32,8 @@ from onepledge_bank_agent.domain.registry_records import (
     AlertNotice,
     CaseNotice,
     OutboxMessage,
+    QuarantinedMessage,
+    QuarantinedPayload,
     SignedCheckpoint,
 )
 
@@ -91,6 +96,8 @@ class SyncRegistryOutbox:
         self._handlers = handlers
         self._faults = runtime.faults
         self._stop = runtime.stop
+        self._clock = runtime.clock
+        self._ids = runtime.ids
         self._log = runtime.log
         self._interval = interval_seconds
 
@@ -155,6 +162,9 @@ class SyncRegistryOutbox:
         if isinstance(payload, SignedCheckpoint):
             self._checkpoint(payload, result)
             return
+        if isinstance(payload, QuarantinedPayload):
+            self._quarantine(message, payload)
+            return
         with self._units() as unit:
             if isinstance(payload, AlertNotice):
                 result.alerts_created += int(self._handlers.alerts.handle(unit, payload))
@@ -164,6 +174,23 @@ class SyncRegistryOutbox:
                 unit.record(message_ignored(message.message_id, message.message_type))
                 self._log.warning(LogEvent.REGISTRY_MESSAGE_IGNORED)
             unit.commit()
+
+    def _quarantine(self, message: OutboxMessage, quarantined: QuarantinedPayload) -> None:
+        row = QuarantinedMessage(
+            self._ids.new_id(), message.message_id, message.position, message.message_type, quarantined,
+            self._clock.now(),
+        )  # fmt: skip
+        with self._units() as unit:
+            stored = unit.quarantine.add(row)
+            if stored:
+                unit.record(message_quarantined(message.message_id, message.message_type, quarantined))
+            unit.commit()
+        if stored:
+            self._log.warning(
+                LogEvent.REGISTRY_MESSAGE_QUARANTINED,
+                kind=message.message_type,
+                reason=quarantined.reason.value,
+            )
 
     def _checkpoint(self, signed: SignedCheckpoint, result: SyncResult) -> None:
         assessment = self._handlers.checkpoints.assess(signed)

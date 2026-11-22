@@ -153,3 +153,31 @@ def test_a_confirmed_double_pledge_escalates_both_alerts_and_keeps_the_loans(ban
         assert one(banks.databases[code], "SELECT state FROM loans WHERE loan_id = %s", (loan,)) == (state,)
     with pytest.raises(LoanNotResubmittableError):
         banks.agents[claimant].resubmit(claimant_loan)
+
+
+def test_a_quarantined_checkpoint_message_halts_case_positions_and_resubmissions(banks: ThreeBanks) -> None:
+    """SPEC_DECISIONS 56 and 57: a CHECKPOINT message that breaks the contract activates the halt rule."""
+    case, _, claimant = open_case(banks, "ASSET")
+    alert, loan = alert_of(banks, claimant, case["case_id"])
+    agent, database = banks.agents[claimant], banks.databases[claimant]
+    agent.review(alert, ReviewAction.START_REVIEW)
+    broken = {"body": {"checkpoint_seq": "one"}, "signature": "not base64", "signing_key_id": "registry-1"}
+    banks.doubles.inject_message(claimant, "CHECKPOINT", broken)
+    agent.sync()
+    assert one(database, "SELECT message_type, reason FROM registry_messages_quarantined") == (
+        "CHECKPOINT",
+        "SCHEMA_MISMATCH",
+    )
+    sent = len(banks.doubles.sent)
+    with pytest.raises(RegistryIntegrityBrokenError):
+        agent.review(alert, ReviewAction.SUBMIT_POSITION, BankPosition.DATA_ERROR)
+    with pytest.raises(RegistryIntegrityBrokenError):
+        agent.resubmit(loan)
+    assert banks.doubles.sent[sent:] == [], "nothing was sent to the registry"
+    assert one(database, "SELECT status, bank_position FROM alerts WHERE alert_id = %s", (alert,)) == (
+        "REVIEWING",
+        None,
+    )
+    with banks.agent_with(claimant, environment={"HALT_ON_REGISTRY_INTEGRITY_FAILURE": "false"}) as operator:
+        recorded = operator.review(alert, ReviewAction.SUBMIT_POSITION, BankPosition.DATA_ERROR)
+    assert recorded.record.review.bank_position is BankPosition.DATA_ERROR

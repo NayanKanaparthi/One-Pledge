@@ -282,6 +282,14 @@ class CertificateFailure(StrEnum):
     CONTENT_MISMATCH = "CONTENT_MISMATCH"
 
 
+class QuarantineReason(StrEnum):
+    """Why a registry outbox message of a known type was quarantined (SPEC_DECISIONS 57)."""
+
+    SCHEMA_MISMATCH = "SCHEMA_MISMATCH"
+    UNKNOWN_ASSET_TOKEN_FORMAT = "UNKNOWN_ASSET_TOKEN_FORMAT"  # noqa: S105 - a reason code, not a secret
+    OVERSIZED = "OVERSIZED"
+
+
 class CheckpointFailure(StrEnum):
     """Why a received checkpoint failed verification (SPEC 15.3)."""
 
@@ -366,6 +374,7 @@ class AuditAction(StrEnum):
     CHECKPOINT_VERIFIED = "CHECKPOINT_VERIFIED"
     CHECKPOINT_REJECTED = "CHECKPOINT_REJECTED"
     REGISTRY_MESSAGE_IGNORED = "REGISTRY_MESSAGE_IGNORED"
+    REGISTRY_MESSAGE_QUARANTINED = "REGISTRY_MESSAGE_QUARANTINED"
     REGISTRY_SYNC_REQUESTED = "REGISTRY_SYNC_REQUESTED"
     INTEGRITY_VERIFICATION_RUN = "INTEGRITY_VERIFICATION_RUN"
     LINEAGE_VIEWED = "LINEAGE_VIEWED"

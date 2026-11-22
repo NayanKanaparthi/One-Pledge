@@ -14,6 +14,7 @@ from onepledge_bank_agent.domain.raw_evidence import StoredRow, StoredTape
 from onepledge_bank_agent.domain.tape_file import TapeLayout
 from onepledge_bank_agent.infrastructure.db.models import RawRowRow, TapeSubmissionRow
 from onepledge_bank_agent.infrastructure.db.repositories.audit_log import SqlAuditLogRepository
+from onepledge_bank_agent.infrastructure.db.repositories.integrity_runs import SqlIntegrityRunRepository
 
 
 def _cells(value: object) -> tuple[str, ...]:
@@ -29,6 +30,12 @@ class SqlEvidenceReader:
     def __init__(self, session: Session) -> None:
         self._session = session
         self._audit = SqlAuditLogRepository(session)
+        self._runs = SqlIntegrityRunRepository(session)
+
+    @property
+    def runs(self) -> SqlIntegrityRunRepository:
+        """`integrity_runs`."""
+        return self._runs
 
     def audit_entries(self) -> Iterator[AuditEntry]:
         """Every audit entry in seq order, read in batches."""

@@ -17,9 +17,9 @@ from onepledge_bank_agent.infrastructure.db.repositories.checkpoints import SqlC
 from onepledge_bank_agent.infrastructure.db.repositories.checks import SqlCheckRepository
 from onepledge_bank_agent.infrastructure.db.repositories.evidence import SqlEvidenceReader
 from onepledge_bank_agent.infrastructure.db.repositories.facilities import SqlFacilityRepository
-from onepledge_bank_agent.infrastructure.db.repositories.integrity_runs import SqlIntegrityRunRepository
 from onepledge_bank_agent.infrastructure.db.repositories.items import SqlSubmissionItemRepository
 from onepledge_bank_agent.infrastructure.db.repositories.loans import SqlLoanRepository
+from onepledge_bank_agent.infrastructure.db.repositories.quarantine import SqlQuarantineRepository
 from onepledge_bank_agent.infrastructure.db.repositories.raw_rows import SqlRawRowRepository
 from onepledge_bank_agent.infrastructure.db.repositories.requests import SqlRegistryRequestRepository
 from onepledge_bank_agent.infrastructure.db.repositories.tapes import SqlTapeRepository
@@ -40,7 +40,7 @@ class SqlUnitOfWork:
     certificates: SqlCertificateRepository
     alerts: SqlAlertRepository
     checkpoints: SqlCheckpointRepository
-    integrity_runs: SqlIntegrityRunRepository
+    quarantine: SqlQuarantineRepository
     evidence: SqlEvidenceReader
 
     def __init__(self, engine: Engine, writer: HashChainedAuditWriter, ids: IdGenerator) -> None:
@@ -65,7 +65,7 @@ class SqlUnitOfWork:
         self.certificates = SqlCertificateRepository(session)
         self.alerts = SqlAlertRepository(session)
         self.checkpoints = SqlCheckpointRepository(session)
-        self.integrity_runs = SqlIntegrityRunRepository(session)
+        self.quarantine = SqlQuarantineRepository(session)
         self.evidence = SqlEvidenceReader(session)
         return self
 

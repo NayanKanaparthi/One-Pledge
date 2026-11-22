@@ -15,7 +15,7 @@ from onepledge_bank_agent.domain.audit import Actor, AuditDraft
 from onepledge_bank_agent.domain.canonical_json import JsonValue
 from onepledge_bank_agent.domain.entities import Checkpoint, RegistryRequest
 from onepledge_bank_agent.domain.enums import AuditAction, AuditObjectType, AuditOutcome
-from onepledge_bank_agent.domain.registry_records import RegistryAnswer
+from onepledge_bank_agent.domain.registry_records import QuarantinedPayload, RegistryAnswer
 
 SYSTEM = Actor.system()
 CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
@@ -134,4 +134,21 @@ def message_ignored(message_id: uuid.UUID, message_type: str) -> AuditDraft:
         AuditObjectType.REGISTRY_MESSAGE,
         message_id,
         {"message_type": message_type if CODE.fullmatch(message_type) else UNREADABLE},
+    )
+
+
+def message_quarantined(
+    message_id: uuid.UUID, message_type: str, quarantined: QuarantinedPayload
+) -> AuditDraft:
+    """`REGISTRY_MESSAGE_QUARANTINED` (SPEC_DECISIONS 57): a known type whose payload broke the contract."""
+    return entry(
+        AuditAction.REGISTRY_MESSAGE_QUARANTINED,
+        AuditObjectType.REGISTRY_MESSAGE,
+        message_id,
+        {
+            "message_type": message_type if CODE.fullmatch(message_type) else UNREADABLE,
+            "reason": quarantined.reason.value,
+            "payload_sha256": quarantined.payload_sha256,
+        },
+        AuditOutcome.FAILURE,
     )

@@ -117,6 +117,8 @@ class InProcessDoubles:
             self._clients[url] = TestClient(create_key_holder_app(config), base_url=url)
         self.down: set[str] = set()
         self._forged: dict[str, list[dict[str, Any]]] = {}
+        self._restored: dict[str, dict[str, Any]] = {}
+        self._originals: dict[str, dict[str, Any]] = {}
         self.sent: list[SentRequest] = []
         self.public_key_b64 = base64.b64encode(
             Ed25519PrivateKey.from_private_bytes(self.signing_seed)
@@ -156,6 +158,9 @@ class InProcessDoubles:
         )
         if base in self.down:
             raise httpx.ConnectError("the service is stopped", request=request)
+        certificate = request.url.path.removeprefix("/v1/certificates/")
+        if base == REGISTRY_URL and request.method == "GET" and certificate in self._restored:
+            return httpx.Response(200, json=self._restored[certificate])
         forged = self._forged.get(request.headers.get("X-API-Key", ""), [])
         if base == REGISTRY_URL and forged and request.url.path.startswith("/v1/outbox/"):
             message_id = request.url.path.split("/")[3]
@@ -171,6 +176,23 @@ class InProcessDoubles:
             extra = [{**message, "position": last + n} for n, message in enumerate(forged, start=1)]
             return httpx.Response(200, json={**page, "messages": [*page["messages"], *extra]})
         return httpx.Response(answer.status_code, headers=answer.headers, content=answer.content)
+
+    def tamper_certificate(self, bank_code: str, certificate_id: str) -> dict[str, Any]:
+        """CERTIFICATE_BODY on the registry double, keeping the certificate as first signed; returns it."""
+        headers = {"X-API-Key": self.members[bank_code].registry_key}
+        original = self._clients[REGISTRY_URL].get(f"/v1/certificates/{certificate_id}", headers=headers)
+        assert original.status_code == 200, original.text
+        self._originals[certificate_id] = original.json()
+        self.tamper(mode="CERTIFICATE_BODY", certificate_id=certificate_id)
+        return dict(self._originals[certificate_id])
+
+    def restore_certificate(self, certificate_id: str) -> None:
+        """Undo `tamper_certificate`: from now on the registry serves the certificate as first signed.
+
+        The double has no control that reverses CERTIFICATE_BODY, so the restored certificate
+        is served here, byte for byte the document the double answered before the tamper.
+        """
+        self._restored[certificate_id] = self._originals[certificate_id]
 
     def forge_checkpoint(self, bank_code: str, body: Mapping[str, object]) -> dict[str, Any]:
         """A compromised registry: a CHECKPOINT message with `body`, signed with the registry's own key,

@@ -1,9 +1,16 @@
 """The SUBMITTED stage: the halt rule, then the use case registered for the tape's kind (SPEC 13.4, 15.4).
 
-Before anything is planned or sent, the halt rule is checked: when
-`HALT_ON_REGISTRY_INTEGRITY_FAILURE` is on and any received checkpoint failed
-verification, nothing is sent and the submission fails with REGISTRY_INTEGRITY_BROKEN.
-Otherwise BACK_BOOK and PLEDGE go to `SubmitPledge`, RELEASE to `ReleaseLoans`.
+Before anything is planned or sent, the halt rule is checked (SPEC 15.4, SPEC_DECISIONS
+56): when `HALT_ON_REGISTRY_INTEGRITY_FAILURE` is on and any of these holds, nothing is
+sent and the submission fails with REGISTRY_INTEGRITY_BROKEN:
+
+1. a received checkpoint failed verification (`checkpoints_seen.verified` false);
+2. a registry request has a failed certificate row and no verified one (decision 61);
+3. a registry message of type CHECKPOINT is quarantined (decision 57).
+
+The same rule stops a resubmission and a case position (`HaltRule.check`); a release is
+accepted and its tape fails here like any other. Otherwise BACK_BOOK and PLEDGE go to
+`SubmitPledge`, RELEASE to `ReleaseLoans`.
 """
 
 from __future__ import annotations
@@ -28,20 +35,27 @@ class SubmissionUseCase(Protocol):
 
 
 class HaltRule:
-    """Refuses to send anything once a received checkpoint failed verification, unless switched off."""
+    """Refuses every state changing call to a registry that failed an integrity check, unless switched off."""
 
     def __init__(self, units: UnitOfWorkFactory, enabled: bool, log: OperationalLog) -> None:
         self._units = units
         self._enabled = enabled
         self._log = log
 
-    def check(self, submission_id: uuid.UUID | None = None) -> None:
-        """Raise `RegistryIntegrityBrokenError` when the rule is on and a checkpoint failed."""
+    def active(self) -> bool:
+        """True when the rule is on and one of its three conditions holds."""
         if not self._enabled:
-            return
+            return False
         with self._units() as unit:
-            broken = unit.checkpoints.any_failed()
-        if broken:
+            return (
+                unit.checkpoints.any_failed()
+                or unit.certificates.any_unproven()
+                or unit.quarantine.any_checkpoint()
+            )
+
+    def check(self, submission_id: uuid.UUID | None = None) -> None:
+        """Raise `RegistryIntegrityBrokenError` when the rule is active."""
+        if self.active():
             submission = str(submission_id) if submission_id is not None else None
             self._log.warning(LogEvent.HALT_RULE_APPLIED, submission_id=submission)
             raise RegistryIntegrityBrokenError

@@ -90,12 +90,35 @@ class RegistryRequestItemRow(Base):
 
 
 class CertificateRow(Base):
-    """`certificates` (insert-only): what the registry signed and the bank's own verification."""
+    """`certificates` (insert-only): every certificate received, failed ones kept (SPEC_DECISIONS 61)."""
 
     __tablename__ = "certificates"
-    __table_args__ = (UniqueConstraint("request_id", name="uq_certificates_request_id"),)
+    __table_args__ = (
+        Index(
+            "uq_certificates_delivery",
+            "certificate_id",
+            "body_hash",
+            "signature",
+            text("md5(body::text)"),
+            unique=True,
+        ),
+        Index(
+            "uq_certificates_verified_certificate_id",
+            "certificate_id",
+            unique=True,
+            postgresql_where=text("verified"),
+        ),
+        Index(
+            "uq_certificates_verified_request_id",
+            "request_id",
+            unique=True,
+            postgresql_where=text("verified"),
+        ),
+        Index("ix_certificates_request_id", "request_id"),
+    )
 
-    certificate_id: Mapped[uuid.UUID] = uuid_pk()
+    certificate_row_id: Mapped[uuid.UUID] = uuid_pk()
+    certificate_id: Mapped[uuid.UUID] = uuid_column()
     request_id: Mapped[uuid.UUID] = uuid_fk("registry_requests.request_id")
     registry_submission_id: Mapped[uuid.UUID] = uuid_column()
     kind: Mapped[str] = mapped_column(Text)

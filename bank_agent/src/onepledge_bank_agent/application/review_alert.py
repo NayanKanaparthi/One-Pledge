@@ -3,9 +3,11 @@
 START_REVIEW (analyst or credit officer) moves NEW to REVIEWING. SUBMIT_POSITION (credit
 officer only, alert REVIEWING) sends the position to the registry with no transaction
 open, then stores it; if the registry reports the case resolved, the outcome is applied
-as a CASE_UPDATE would. A registry answer that the case is already resolved runs a sync
-and returns the alert as it then stands. An outage changes nothing. The note stays in
-the bank: it is never sent, logged or written to the audit log.
+as a CASE_UPDATE would. While the halt rule is active nothing is sent and the action is
+refused with REGISTRY_INTEGRITY_BROKEN (SPEC_DECISIONS 56). A registry answer that the
+case is already resolved runs a sync and returns the alert as it then stands. An outage
+changes nothing. The note stays in the bank: it is never sent, logged or written to the
+audit log.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from onepledge_bank_agent.application.ports import UnitOfWorkFactory
 from onepledge_bank_agent.application.registry_ports import RegistryClient
 from onepledge_bank_agent.application.requester import Requester
 from onepledge_bank_agent.application.runtime import Runtime
+from onepledge_bank_agent.application.submit_stage import HaltRule
 from onepledge_bank_agent.application.sync_registry_outbox import SyncRegistryOutbox
 from onepledge_bank_agent.domain.access_policy import Operation
 from onepledge_bank_agent.domain.alert import Alert
@@ -59,21 +62,25 @@ class ReviewCommand:
     note: str | None = None
 
 
+@dataclass(frozen=True)
+class ReviewParts:
+    """The collaborators of a review: the registry, who may act, the sync and the halt rule."""
+
+    registry: RegistryClient
+    authoriser: Authoriser
+    sync: SyncRegistryOutbox
+    halt: HaltRule
+
+
 class ReviewAlert:
     """Applies one review action to one alert."""
 
-    def __init__(
-        self,
-        units: UnitOfWorkFactory,
-        registry: RegistryClient,
-        authoriser: Authoriser,
-        sync: SyncRegistryOutbox,
-        runtime: Runtime,
-    ) -> None:
+    def __init__(self, units: UnitOfWorkFactory, parts: ReviewParts, runtime: Runtime) -> None:
         self._units = units
-        self._registry = registry
-        self._authoriser = authoriser
-        self._sync = sync
+        self._registry = parts.registry
+        self._authoriser = parts.authoriser
+        self._sync = parts.sync
+        self._halt = parts.halt
         self._clock = runtime.clock
 
     def execute(self, command: ReviewCommand) -> Alert:
@@ -109,6 +116,7 @@ class ReviewAlert:
             raise AlertTransitionInvalidError("alert", alert.status.value, AlertStatus.REVIEWING.value)
         if record.review.bank_position not in (None, position):
             raise PositionAlreadyRecordedError
+        self._halt.check()
         try:
             outcome = self._registry.record_position(record.registry_case_id, position)
         except CaseAlreadyResolvedError:

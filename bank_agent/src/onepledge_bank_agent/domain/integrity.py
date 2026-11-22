@@ -1,9 +1,10 @@
 """The integrity report (SPEC 15.5, 15.6; `IntegrityReport` in `contracts/bank_agent.yaml`).
 
-Five sections: what the bank verified about the registry (checkpoints and the chain),
-the certificates it holds, its own audit chain, its raw rows, and the database controls
-in force. `GET /v1/integrity` combines live counts with the last deep verification; a
-deep verification stores the report it produced. A section is NOT_VERIFIED when nothing
+Six sections: what the bank verified about the registry (checkpoints and the chain),
+the certificates it holds, its own audit chain, its raw rows, the database controls in
+force, and the registry messages it had to quarantine (SPEC_DECISIONS 57).
+`GET /v1/integrity` combines live counts with the last deep verification; a deep
+verification stores the report it produced. A section is NOT_VERIFIED when nothing
 has been verified yet, BROKEN when anything failed, OK otherwise; the report is BROKEN
 when any section is.
 """
@@ -99,7 +100,11 @@ class RegistryChainSection:
 
 @dataclass(frozen=True)
 class CertificateSection:
-    """Certificates held, how many verify, and the failures."""
+    """Requests that should have a certificate, how many have a verified one, and every failed row.
+
+    BROKEN only while some request has a failed row and no verified one, or a deep
+    verification found a verified row whose proof no longer holds (SPEC_DECISIONS 61).
+    """
 
     status: SectionStatus
     total: int
@@ -136,8 +141,16 @@ class ControlsSection:
 
 
 @dataclass(frozen=True)
+class RegistryMessagesSection:
+    """Registry outbox messages of a known type quarantined because their payload broke the contract."""
+
+    status: SectionStatus
+    quarantined: int
+
+
+@dataclass(frozen=True)
 class IntegrityReport:
-    """The five sections, when the report was made and when the last deep verification ran."""
+    """The six sections, when the report was made and when the last deep verification ran."""
 
     generated_at: datetime
     last_deep_verification_at: datetime | None
@@ -146,6 +159,7 @@ class IntegrityReport:
     audit_log: AuditChainSection
     raw_data: RawDataSection
     database_controls: ControlsSection
+    registry_messages: RegistryMessagesSection
 
     @property
     def status(self) -> IntegrityRunStatus:
@@ -156,6 +170,7 @@ class IntegrityReport:
             self.audit_log.status,
             self.raw_data.status,
             self.database_controls.status,
+            self.registry_messages.status,
         )
         broken = SectionStatus.BROKEN in statuses
         return IntegrityRunStatus.BROKEN if broken else IntegrityRunStatus.OK
@@ -168,6 +183,7 @@ class IntegrityReport:
             "audit_log": self.audit_log.status.value,
             "raw_data": self.raw_data.status.value,
             "database_controls": self.database_controls.status.value,
+            "registry_messages": self.registry_messages.status.value,
         }
 
 
@@ -187,12 +203,9 @@ def _problem_order(problem: CheckpointProblem) -> tuple[int, str, str]:
 
 
 def merge_certificate_problems(*groups: Iterable[CertificateProblem]) -> tuple[CertificateProblem, ...]:
-    """One problem per certificate (the first one given wins), ordered by certificate id."""
-    unique: dict[uuid.UUID, CertificateProblem] = {}
-    for group in groups:
-        for problem in group:
-            unique.setdefault(problem.certificate_id, problem)
-    return tuple(sorted(unique.values(), key=lambda p: str(p.certificate_id)))
+    """Every distinct (certificate, reason) pair, ordered by certificate id, then reason."""
+    unique = {(p.certificate_id, p.failure_reason): p for group in groups for p in group}
+    return tuple(sorted(unique.values(), key=lambda p: (str(p.certificate_id), p.failure_reason.value)))
 
 
 def chain_section(
@@ -206,9 +219,16 @@ def chain_section(
     return RegistryChainSection(status, received, verified, last, failures)
 
 
-def certificate_section(total: int, failures: tuple[CertificateProblem, ...]) -> CertificateSection:
-    """BROKEN with any failure; `verified` counts the certificates with none."""
-    return CertificateSection(broken_if(bool(failures)), total, total - len(failures), failures)
+def certificate_section(
+    total: int, verified: int, failures: tuple[CertificateProblem, ...], broken: bool
+) -> CertificateSection:
+    """The section; `broken` is whether a request is unproven or a deep finding exists."""
+    return CertificateSection(broken_if(broken), total, verified, failures)
+
+
+def registry_messages_section(quarantined: int) -> RegistryMessagesSection:
+    """BROKEN while any quarantined message exists (SPEC_DECISIONS 57)."""
+    return RegistryMessagesSection(broken_if(quarantined > 0), quarantined)
 
 
 def controls_section(controls: Mapping[DatabaseControl, bool]) -> ControlsSection:
@@ -282,6 +302,10 @@ def report_json(report: IntegrityReport) -> dict[str, JsonValue]:
         "database_controls": {
             "status": report.database_controls.status.value,
             "controls": [{"name": name.value, "ok": ok} for name, ok in report.database_controls.controls],
+        },
+        "registry_messages": {
+            "status": report.registry_messages.status.value,
+            "quarantined": report.registry_messages.quarantined,
         },
     }
 

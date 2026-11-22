@@ -1,4 +1,7 @@
-"""`audit_log` and `integrity_runs` (SPEC 12.1), both insert-only."""
+"""`audit_log`, `integrity_runs` (SPEC 12.1) and `registry_messages_quarantined` (SPEC_DECISIONS 57).
+
+All three are insert-only.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +9,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, Text
+from sqlalchemy import BigInteger, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import CHAR
@@ -51,3 +54,19 @@ class IntegrityRunRow(Base):
     triggered_by: Mapped[uuid.UUID | None] = uuid_fk("users.user_id", nullable=True)
     status: Mapped[str] = mapped_column(Text)
     report: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+
+class QuarantinedMessageRow(Base):
+    """`registry_messages_quarantined`: a known outbox message whose payload broke the contract."""
+
+    __tablename__ = "registry_messages_quarantined"
+    __table_args__ = (UniqueConstraint("message_id", name="uq_registry_messages_quarantined_message_id"),)
+
+    quarantine_id: Mapped[uuid.UUID] = uuid_pk()
+    message_id: Mapped[uuid.UUID] = uuid_column()
+    position: Mapped[int] = mapped_column(BigInteger)
+    message_type: Mapped[str] = mapped_column(Text)
+    payload: Mapped[Any] = mapped_column(JSONB, nullable=True)
+    payload_sha256: Mapped[str] = hash_column()
+    reason: Mapped[str] = mapped_column(Text)
+    received_at: Mapped[datetime] = timestamp()

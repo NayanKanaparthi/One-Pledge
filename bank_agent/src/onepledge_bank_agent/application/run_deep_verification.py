@@ -3,10 +3,11 @@
 1. Audit log: seqs gapless from 1, each link and each entry hash recomputed.
 2. Raw data: every submission's stored forms agree with each other and with its file
    hash (SPEC_DECISIONS 25 rule 6).
-3. Certificates: key id, body hash and signature of every stored certificate.
+3. Certificates: key id, body hash and signature of every stored verified certificate
+   (a failed row is already reported as failed and stays as evidence).
 4. Checkpoints: every stored verified signature, then the whole ledger chain from seq 1
    to the highest stored checkpoint, and every verified checkpoint's head against it.
-5. Database controls, live.
+5. Database controls, live; quarantined registry messages, counted.
 
 The event headers are read first, with nothing open: if the registry cannot be reached,
 the error is raised and nothing is stored. Otherwise the report is stored in
@@ -20,8 +21,8 @@ from dataclasses import dataclass
 from onepledge_bank_agent.application.events import LogEvent
 from onepledge_bank_agent.application.evidence_ports import DatabaseControlInspector, IntegrityRun
 from onepledge_bank_agent.application.integrity_sections import (
+    certificates_section,
     deep_checkpoint_problems,
-    failed_certificates,
     registry_chain,
 )
 from onepledge_bank_agent.application.ports import UnitOfWork, UnitOfWorkFactory
@@ -39,9 +40,8 @@ from onepledge_bank_agent.domain.integrity import (
     IntegrityReport,
     RawDataSection,
     broken_if,
-    certificate_section,
     controls_section,
-    merge_certificate_problems,
+    registry_messages_section,
     report_json,
 )
 from onepledge_bank_agent.domain.raw_evidence import tape_is_intact
@@ -76,24 +76,24 @@ class RunDeepVerification:
             audit = self._audit_chain(unit)
             raw = self._raw_data(unit)
             certificates = unit.certificates.all()
+            expected = unit.certificates.expected()
+            quarantined = unit.quarantine.count()
         verifier = self._sources.verifier
         broken_proofs = [
             CertificateProblem(row.certificate_id, failure)
             for row in certificates
-            if (failure := verify_proof(row.as_received(), verifier)) is not None
+            if row.verified and (failure := verify_proof(row.as_received(), verifier)) is not None
         ]
         now = self._clock.now()
         report = IntegrityReport(
             generated_at=now,
             last_deep_verification_at=now,
             registry_chain=registry_chain(checkpoints, deep_checkpoint_problems(findings)),
-            certificates=certificate_section(
-                len(certificates),
-                merge_certificate_problems(failed_certificates(certificates), broken_proofs),
-            ),
+            certificates=certificates_section(expected, certificates, broken_proofs),
             audit_log=audit,
             raw_data=raw,
             database_controls=controls_section(self._sources.controls.controls()),
+            registry_messages=registry_messages_section(quarantined),
         )
         self._store(report, requester)
         return report
@@ -125,7 +125,7 @@ class RunDeepVerification:
             report_json(report),
         )
         with self._units() as unit:
-            unit.integrity_runs.add(run)
+            unit.evidence.runs.add(run)
             unit.record(
                 AuditDraft(
                     AuditAction.INTEGRITY_VERIFICATION_RUN,

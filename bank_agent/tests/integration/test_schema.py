@@ -1,4 +1,5 @@
-"""The migrated schema (SPEC 12.1, 12.5): all 18 tables, models equal migrations, CHECK lists equal enums."""
+"""The migrated schema (SPEC 12.1, 12.5, SPEC_DECISIONS 57): all 19 tables, models equal migrations,
+CHECK lists equal enums."""
 
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ TABLES = {
     "lenders", "facilities", "users", "login_attempts", "tape_submissions", "loans_raw", "cleaning_issues",
     "submission_items", "loans", "local_checks", "loan_tokens", "registry_requests", "registry_request_items",
     "certificates", "alerts", "checkpoints_seen", "audit_log", "integrity_runs",
+    "registry_messages_quarantined",
 }  # fmt: skip
 ENUM_CHECKS: dict[str, type[StrEnum] | tuple[str, ...]] = {
     "ck_facilities_status": enums.FacilityStatus,
@@ -49,6 +51,7 @@ ENUM_CHECKS: dict[str, type[StrEnum] | tuple[str, ...]] = {
     "ck_certificates_kind": enums.TapeKind,
     "ck_certificates_failure_reason": enums.CertificateFailure,
     "ck_checkpoints_seen_failure_reason": enums.CheckpointFailure,
+    "ck_registry_messages_quarantined_reason": enums.QuarantineReason,
     "ck_alerts_role": enums.AlertRole,
     "ck_alerts_match_kind": enums.MatchKind,
     "ck_alerts_match_basis": enums.MatchBasis,
@@ -140,7 +143,7 @@ def test_the_schema_status_reads_the_revision_as_the_app_role(bank_db: BankDatab
         status = SchemaInspector(engine).status()
         assert (status.current_revision, status.head_revision, status.at_head) == (
             head_revision(),
-            "0005_state_guards",
+            "0007_certificate_evidence",
             True,
         )
         SchemaInspector(engine).require_head()

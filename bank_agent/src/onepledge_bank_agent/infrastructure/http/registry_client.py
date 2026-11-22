@@ -9,8 +9,13 @@
 | a success outside the contract | `RegistryProtocolError` |
 
 An outbox message of a type the bank does not know is returned without a payload, so
-the sync can acknowledge and audit it; a known type with a malformed payload is a
-protocol error and stays unacknowledged.
+the sync can acknowledge and audit it. A known type whose payload does not match the
+contract is returned as a `QuarantinedPayload` (SPEC_DECISIONS 57): OVERSIZED when the
+serialised payload exceeds 64 KiB, UNKNOWN_ASSET_TOKEN_FORMAT when only the asset code is
+not the agreed format, SCHEMA_MISMATCH otherwise, so the sync keeps it as evidence and
+the outbox is never blocked. A number with a fraction or an exponent in an outbox page is
+kept as its text, so it fails the payload's schema instead of the whole page. Only an
+envelope without a valid message id, position and type is a protocol error.
 """
 
 from __future__ import annotations
@@ -18,18 +23,19 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Callable, Mapping
+from types import MappingProxyType
 
 import httpx
 from pydantic import BaseModel, ValidationError
 
-from onepledge_bank_agent.domain.canonical_json import JsonValue
+from onepledge_bank_agent.domain.canonical_json import JsonValue, canonical_json, sha256_hex
 from onepledge_bank_agent.domain.dependency_errors import (
     REGISTRY,
     CaseAlreadyResolvedError,
     KeyVersionMismatchError,
     RegistryProtocolError,
 )
-from onepledge_bank_agent.domain.enums import BankPosition
+from onepledge_bank_agent.domain.enums import BankPosition, QuarantineReason
 from onepledge_bank_agent.domain.errors import PositionAlreadyRecordedError
 from onepledge_bank_agent.domain.registry_records import (
     CaseOutcome,
@@ -37,6 +43,7 @@ from onepledge_bank_agent.domain.registry_records import (
     MessagePayload,
     OutboxMessage,
     OutboxPage,
+    QuarantinedPayload,
     RegistryAnswer,
     RegistrySubmission,
     SignedCertificate,
@@ -92,15 +99,50 @@ def _validate[M: BaseModel](model: type[M], value: object, status: int) -> M:
         raise RegistryProtocolError(status) from None
 
 
+class _FloatText(str):
+    """A JSON number with a fraction or an exponent, kept as its text (the contract has none)."""
+
+
+KNOWN_MESSAGES: Mapping[str, type[BaseModel]] = MappingProxyType(
+    {"ALERT": AlertMessageBody, "CASE_UPDATE": CaseMessageBody, "CHECKPOINT": CheckpointMessageBody}
+)
+MAX_QUARANTINED_PAYLOAD_BYTES = 64 * 1024
+ASSET_TOKEN_LOCATION = ("payload", "asset_token")
+
+
+def _quarantined(model: type[BaseModel], value: object, payload: JsonValue) -> QuarantinedPayload | None:
+    """None when the message matches its model; otherwise the payload as evidence, with its reason."""
+    serialised = canonical_json(payload)
+    digest = sha256_hex(serialised)
+    if len(serialised) > MAX_QUARANTINED_PAYLOAD_BYTES:
+        return QuarantinedPayload(QuarantineReason.OVERSIZED, None, digest)
+    try:
+        model.model_validate_json(json.dumps(value))
+    except ValidationError as error:
+        locations = {tuple(detail["loc"]) for detail in error.errors()}
+        only_token = locations == {ASSET_TOKEN_LOCATION}
+        reason = (
+            QuarantineReason.UNKNOWN_ASSET_TOKEN_FORMAT if only_token else QuarantineReason.SCHEMA_MISMATCH
+        )
+        return QuarantinedPayload(reason, payload, digest)
+    return None
+
+
 def _message(value: object, status: int) -> OutboxMessage:
     envelope = _validate(MessageEnvelope, value, status)
     document = json_object(value)
-    payload: MessagePayload = None
+    model = KNOWN_MESSAGES.get(envelope.type)
+    if model is None:
+        return OutboxMessage(envelope.message_id, envelope.position, envelope.type, None)
+    quarantined = _quarantined(model, value, document.get("payload"))
+    if quarantined is not None:
+        return OutboxMessage(envelope.message_id, envelope.position, envelope.type, quarantined)
+    payload: MessagePayload
     if envelope.type == "ALERT":
         payload = _validate(AlertMessageBody, value, status).payload.notice()
     elif envelope.type == "CASE_UPDATE":
         payload = _validate(CaseMessageBody, value, status).payload.notice()
-    elif envelope.type == "CHECKPOINT":
+    else:
         body = _validate(CheckpointMessageBody, value, status)
         payload = body.payload.record(json_object(document.get("payload")))
     return OutboxMessage(envelope.message_id, envelope.position, envelope.type, payload)
@@ -153,7 +195,13 @@ class RegistryHttpClient:
     def outbox(self, limit: int) -> OutboxPage:
         """`GET /v1/outbox?limit=`."""
         response = self._ok(self._caller.get(OUTBOX, OUTBOX, {"limit": limit}))
-        document = self._document(response)
+        try:
+            page = json.loads(response.content, parse_float=_FloatText)
+        except ValueError:
+            raise RegistryProtocolError(response.status_code) from None
+        if not isinstance(page, dict):
+            raise RegistryProtocolError(response.status_code)
+        document = json_object(page)
         messages, more = document.get("messages"), document.get("has_more")
         if not isinstance(messages, list) or not isinstance(more, bool):
             raise RegistryProtocolError(response.status_code)

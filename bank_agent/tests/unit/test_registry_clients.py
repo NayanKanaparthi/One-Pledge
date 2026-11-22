@@ -8,6 +8,7 @@ with the status is a protocol error; unknown fields are ignored; every send is c
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import uuid
 from collections.abc import Callable
@@ -16,6 +17,7 @@ import httpx
 import pytest
 
 from bank_testkit.clocks import CountingIds
+from onepledge_bank_agent.domain.canonical_json import canonical_json
 from onepledge_bank_agent.domain.dependency_errors import (
     CaseAlreadyResolvedError,
     KeyHolderProtocolError,
@@ -28,7 +30,7 @@ from onepledge_bank_agent.domain.dependency_errors import (
 )
 from onepledge_bank_agent.domain.enums import BankPosition, CaseStatus, FailureReason, TapeKind, TokenKind
 from onepledge_bank_agent.domain.errors import PipelineStageError, PositionAlreadyRecordedError
-from onepledge_bank_agent.domain.registry_records import RegistryItem, RegistrySubmission
+from onepledge_bank_agent.domain.registry_records import QuarantinedPayload, RegistryItem, RegistrySubmission
 from onepledge_bank_agent.infrastructure.http.base import RetryingHttpCaller
 from onepledge_bank_agent.infrastructure.http.key_holder_client import KeyHolderHttpClient
 from onepledge_bank_agent.infrastructure.http.registry_client import RegistryHttpClient
@@ -243,3 +245,78 @@ def test_an_acknowledgement_must_be_204_and_an_outbox_page_must_be_well_formed()
         100
     )
     assert [(m.message_type, m.payload) for m in page.messages] == [("NEWS", None)]
+
+
+ALERT = {
+    "case_id": str(uuid.uuid4()),
+    "role": "HOLDER",
+    "asset_token": "d" * 64,
+    "match_kind": "EXACT",
+    "match_basis": "ASSET",
+    "kinds_matched": ["ASSET"],
+    "opened_seq": 4,
+}
+
+
+def message(message_type: str, payload: object) -> dict[str, object]:
+    return {
+        "message_id": str(uuid.uuid4()),
+        "position": 1,
+        "type": message_type,
+        "created_at": "2026-11-20T12:00:00Z",
+        "payload": payload,
+    }
+
+
+QUARANTINE_CASES = [
+    ("a valid alert", message("ALERT", ALERT), None),
+    (
+        "an asset code in capitals",
+        message("ALERT", {**ALERT, "asset_token": "D" * 64}),
+        "UNKNOWN_ASSET_TOKEN_FORMAT",
+    ),
+    (
+        "a short asset code",
+        message("ALERT", {**ALERT, "asset_token": "d" * 63}),
+        "UNKNOWN_ASSET_TOKEN_FORMAT",
+    ),
+    ("a missing field", message("ALERT", {k: v for k, v in ALERT.items() if k != "role"}), "SCHEMA_MISMATCH"),
+    (
+        "a bad code and a missing field",
+        message("ALERT", {**ALERT, "asset_token": "x", "role": None}),
+        "SCHEMA_MISMATCH",
+    ),
+    ("no payload", message("CASE_UPDATE", None), "SCHEMA_MISMATCH"),
+    ("a fraction", message("ALERT", {**ALERT, "opened_seq": 4.5}), "SCHEMA_MISMATCH"),
+    ("an exponent", message("CHECKPOINT", {"body": {"checkpoint_seq": 1e3}}), "SCHEMA_MISMATCH"),
+    ("over 64 KiB", message("CASE_UPDATE", {"case_id": "x", "notes": "n" * 66_000}), "OVERSIZED"),
+]
+
+
+@pytest.mark.parametrize("case", QUARANTINE_CASES, ids=[c[0] for c in QUARANTINE_CASES])
+def test_a_known_message_outside_the_contract_is_quarantined_with_its_reason_and_hash(
+    case: tuple[str, dict[str, object], str | None],
+) -> None:
+    """SPEC_DECISIONS 57: the page is never refused for one bad payload; the hash is over the payload."""
+    _, sent, reason = case
+    body = json.dumps({"messages": [sent], "has_more": False}).encode()
+    (received,) = registry(lambda r: httpx.Response(200, content=body)).outbox(100).messages
+    if reason is None:
+        assert not isinstance(received.payload, QuarantinedPayload)
+        return
+    assert isinstance(received.payload, QuarantinedPayload)
+    quarantined = received.payload
+    assert (received.message_type, quarantined.reason.value) == (sent["type"], reason)
+    assert len(quarantined.payload_sha256) == 64
+    if reason == "OVERSIZED":
+        assert quarantined.payload is None
+    elif "fraction" not in case[0] and "exponent" not in case[0]:
+        assert quarantined.payload == sent["payload"]
+        assert quarantined.payload_sha256 == hashlib.sha256(canonical_json(sent["payload"])).hexdigest()
+
+
+def test_an_envelope_without_a_message_id_is_still_a_malformed_page() -> None:
+    broken = {k: v for k, v in message("ALERT", ALERT).items() if k != "message_id"}
+    with pytest.raises(RegistryProtocolError) as raised:
+        registry(lambda r: httpx.Response(200, json={"messages": [broken], "has_more": False})).outbox(100)
+    assert raised.value.reason is FailureReason.MALFORMED_RESPONSE

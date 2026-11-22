@@ -20,6 +20,7 @@ from onepledge_bank_agent.domain.enums import (
     CaseStatus,
     MatchBasis,
     MatchKind,
+    QuarantineReason,
     TapeKind,
     TokenKind,
 )
@@ -152,12 +153,26 @@ class CaseNotice:
     resolved_seq: int | None
 
 
-type MessagePayload = AlertNotice | CaseNotice | SignedCheckpoint | None
+@dataclass(frozen=True)
+class QuarantinedPayload:
+    """The payload of a known message type that breaks the contract, kept as evidence (SPEC_DECISIONS 57).
+
+    `payload` is the payload as received, or None when its serialised form exceeds 64 KiB
+    (reason OVERSIZED); `payload_sha256` is always the hash of that serialised form.
+    """
+
+    reason: QuarantineReason
+    payload: JsonValue
+    payload_sha256: str
+
+
+type MessagePayload = AlertNotice | CaseNotice | SignedCheckpoint | QuarantinedPayload | None
 
 
 @dataclass(frozen=True)
 class OutboxMessage:
-    """One outbox message. `payload` is None for a message type this bank does not know."""
+    """One outbox message. `payload` is None for a message type this bank does not know, and a
+    `QuarantinedPayload` for a known type whose payload does not match the contract."""
 
     message_id: uuid.UUID
     position: int
@@ -180,3 +195,15 @@ class CaseOutcome:
     case_id: uuid.UUID
     status: CaseStatus
     your_position: BankPosition | None
+
+
+@dataclass(frozen=True)
+class QuarantinedMessage:
+    """A row of `registry_messages_quarantined`: the message, why it was quarantined, and when."""
+
+    quarantine_id: uuid.UUID
+    message_id: uuid.UUID
+    position: int
+    message_type: str
+    quarantined: QuarantinedPayload
+    received_at: datetime

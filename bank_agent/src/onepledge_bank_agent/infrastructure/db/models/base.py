@@ -18,7 +18,7 @@ from sqlalchemy.types import CHAR
 
 
 class Base(DeclarativeBase):
-    """Declarative base of the 18 bank tables."""
+    """Declarative base of the 19 bank tables."""
 
 
 def uuid_pk() -> Mapped[uuid.UUID]:

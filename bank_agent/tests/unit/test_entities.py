@@ -85,6 +85,7 @@ def test_registry_proofs_report_whether_they_verified() -> None:
     with pytest.raises(InvalidValueError):
         replace(request, item_count=501)
     certificate = Certificate(
+        certificate_row_id=uuid.uuid4(),
         certificate_id=uuid.uuid4(),
         request_id=request.request_id,
         registry_submission_id=uuid.uuid4(),

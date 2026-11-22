@@ -5,7 +5,9 @@ test controls (CERTIFICATE_BODY, BAD_CHECKPOINT_SIGNATURE, EDIT_IN_PLACE), by a 
 misconfigured against it (an unknown key id, a wrong public key, another member's id),
 or by a compromised registry that signs a forked or regressing checkpoint with its own
 key. Each failure is stored, audited, kept in the integrity report, and the halt rule
-stops the next submission until an operator disables it (audited at startup).
+stops the next submission until an operator disables it (audited at startup). A tape
+whose certificate failed is retryable (SPEC_DECISIONS 61): the failed row stays as
+evidence and a retry fetches the certificate again.
 """
 
 from __future__ import annotations
@@ -34,7 +36,6 @@ from onepledge_bank_agent.domain.enums import (
     IntegrityRunStatus,
     TapeKind,
 )
-from onepledge_bank_agent.domain.errors import TapeNotRetryableError
 from onepledge_bank_agent.domain.integrity import SectionStatus
 from onepledge_bank_agent.domain.tape import TapeSubmission
 
@@ -96,7 +97,8 @@ def bank(
 def assert_certificate_invalid(
     bank: Bank, agent: BankAgentHarness, tape: TapeSubmission, reason: str
 ) -> None:
-    """FAILED with CERTIFICATE_INVALID, loan states kept, the reason stored and reported, retry refused."""
+    """FAILED with CERTIFICATE_INVALID, loan states kept, the reason stored and reported; a retry
+    fetches the same bad certificate again, stores nothing new and fails the same way."""
     assert bank.tape(tape) == ("FAILED", "CERTIFICATE_INVALID")
     assert bank.one("SELECT count(*) FROM loans WHERE state = 'PENDING'") == (0,)
     locked = bank.one("SELECT count(*) FROM loans WHERE state = 'LOCKED'")
@@ -107,8 +109,26 @@ def assert_certificate_invalid(
     report = agent.report()
     assert report.status is IntegrityRunStatus.BROKEN and report.certificates.status is SectionStatus.BROKEN
     assert reason in {f.failure_reason.value for f in report.certificates.failures}
-    with pytest.raises(TapeNotRetryableError):
-        agent.retry(tape)
+    assert report.certificates.verified < report.certificates.total
+    rows, rejected = certificate_rows(bank), rejected_entries(bank)
+    fetched = certificate_fetches(bank)
+    agent.retry(tape)
+    agent.run_worker()
+    assert bank.tape(tape) == ("FAILED", "CERTIFICATE_INVALID")
+    assert certificate_fetches(bank) > fetched, "the retry fetched the certificate again"
+    assert (certificate_rows(bank), rejected_entries(bank)) == (rows, rejected), "nothing new stored"
+
+
+def certificate_rows(bank: Bank) -> int:
+    return bank.count("SELECT count(*) FROM certificates")
+
+
+def rejected_entries(bank: Bank) -> int:
+    return bank.count("SELECT count(*) FROM audit_log WHERE action = 'CERTIFICATE_REJECTED'")
+
+
+def certificate_fetches(bank: Bank) -> int:
+    return sum(1 for sent in bank.doubles.sent if sent.path.startswith("/v1/certificates/"))
 
 
 def test_a_certificate_and_checkpoints_under_an_unknown_signing_key_are_refused(bank: Bank) -> None:
@@ -142,21 +162,85 @@ class TamperCertificate(Faults):
     def __init__(self, bank: Bank) -> None:
         super().__init__()
         self._bank = bank
+        self.certificate_id = ""
 
     def reached(self, point: FaultPoint) -> None:
         if point is FaultPoint.AFTER_RESPONSE_STORED and point not in self.passed:
             (certificate_id,) = self._bank.one(
                 "SELECT certificate_id FROM registry_requests WHERE certificate_id IS NOT NULL LIMIT 1"
             )
-            self._bank.doubles.tamper(mode="CERTIFICATE_BODY", certificate_id=str(certificate_id))
+            self.certificate_id = str(certificate_id)
+            self._bank.doubles.tamper_certificate("HARBOR", self.certificate_id)
         super().reached(point)
 
 
 def test_a_certificate_body_changed_at_the_registry_is_refused_with_body_hash_mismatch(bank: Bank) -> None:
-    with bank.agent(TamperCertificate(bank)) as agent:
+    with bank.agent(TamperCertificate(bank), HALT_ON_REGISTRY_INTEGRITY_FAILURE="false") as agent:
         tape = bank.upload(agent)
         agent.run_worker()
         assert_certificate_invalid(bank, agent, tape, CertificateFailure.BODY_HASH_MISMATCH.value)
+
+
+def test_a_tampered_certificate_fails_the_tape_halts_the_bank_and_a_retry_after_restore_recovers(
+    bank: Bank,
+) -> None:
+    """SPEC_DECISIONS 61, end to end with the halt rule on: fail, break, halt; restore, retry, recover."""
+    tamper = TamperCertificate(bank)
+    with bank.agent(tamper) as agent:
+        tape = bank.upload(agent)
+        agent.run_worker()
+        assert bank.tape(tape) == ("FAILED", "CERTIFICATE_INVALID")
+        resume = "SELECT resume_status, failed_stage FROM tape_submissions WHERE submission_id = %s"
+        assert bank.one(resume, (tape.submission_id,)) == ("SUBMITTED", "COMPLETED")
+        broken = agent.report()
+        assert broken.certificates.status is SectionStatus.BROKEN
+        assert broken.status is IntegrityRunStatus.BROKEN
+        failed = [(str(f.certificate_id), f.failure_reason) for f in broken.certificates.failures]
+        assert failed == [(tamper.certificate_id, CertificateFailure.BODY_HASH_MISMATCH)]
+
+        submissions = bank.doubles.member_stats("HARBOR")["submissions"]
+        halted = bank.upload(agent, SECOND)
+        agent.run_worker()
+        assert bank.tape(halted) == ("FAILED", "REGISTRY_INTEGRITY_BROKEN"), "the halt rule is active"
+        assert bank.doubles.member_stats("HARBOR")["submissions"] == submissions, "nothing was sent"
+
+        bank.doubles.restore_certificate(tamper.certificate_id)
+        agent.retry(tape)
+        agent.run_worker()
+        assert bank.tape(tape) == ("COMPLETED", None)
+        recovered = agent.report()
+        assert recovered.certificates.status is SectionStatus.OK
+        assert recovered.certificates.verified == recovered.certificates.total > 0
+        assert [(str(f.certificate_id), f.failure_reason) for f in recovered.certificates.failures] == failed
+        rows = "SELECT verified, count(*)::text FROM certificates WHERE certificate_id = %s GROUP BY 1"
+        assert pairs(bank.database, rows, (tamper.certificate_id,)) == {"False": "1", "True": "1"}, (
+            "the failed row stays as evidence beside the verified one"
+        )
+        assert agent.verify().certificates.status is SectionStatus.OK
+
+        agent.retry(halted)
+        agent.run_worker()
+        assert bank.tape(halted) == ("COMPLETED", None), (
+            "the halt rule released: a new submission goes through"
+        )
+        assert bank.doubles.member_stats("HARBOR")["submissions"] > submissions
+        assert agent.report().status is IntegrityRunStatus.OK
+
+
+def test_with_the_halt_rule_on_a_checkpoint_under_a_wrong_key_fails_first_and_nothing_is_submitted(
+    bank: Bank,
+) -> None:
+    """SPEC_DECISIONS 60: a wrong REGISTRY_PUBLIC_KEYS is caught by checkpoint verification first."""
+    keys = json.dumps({SIGNING_KEY_ID: other_public_key()})
+    with bank.agent(REGISTRY_PUBLIC_KEYS=keys) as agent:
+        bank.doubles.control(REGISTRY_URL, "POST", "/_test/checkpoint")
+        tape = bank.upload(agent)
+        agent.run_worker()
+        failed = "SELECT failure_reason, 'stored' FROM checkpoints_seen GROUP BY 1"
+        assert pairs(bank.database, failed) == {CheckpointFailure.BAD_SIGNATURE.value: "stored"}
+        assert bank.tape(tape) == ("FAILED", "REGISTRY_INTEGRITY_BROKEN")
+        assert bank.doubles.member_stats("HARBOR").get("submissions", 0) == 0
+        assert bank.count("SELECT count(*) FROM certificates") == 0
 
 
 def test_a_signed_certificate_for_another_member_is_refused_with_content_mismatch(bank: Bank) -> None:

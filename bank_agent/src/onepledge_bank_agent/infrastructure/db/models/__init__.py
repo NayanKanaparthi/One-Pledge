@@ -1,7 +1,11 @@
 """SQLAlchemy models of the bank database (SPEC 12.1), one module per group of tables."""
 
 from onepledge_bank_agent.infrastructure.db.models.base import Base
-from onepledge_bank_agent.infrastructure.db.models.evidence import AuditLogRow, IntegrityRunRow
+from onepledge_bank_agent.infrastructure.db.models.evidence import (
+    AuditLogRow,
+    IntegrityRunRow,
+    QuarantinedMessageRow,
+)
 from onepledge_bank_agent.infrastructure.db.models.loans import LoanRow, LoanTokenRow, LocalCheckRow
 from onepledge_bank_agent.infrastructure.db.models.reference import (
     FacilityRow,
@@ -37,6 +41,7 @@ __all__ = [
     "LoanTokenRow",
     "LocalCheckRow",
     "LoginAttemptRow",
+    "QuarantinedMessageRow",
     "RawRowRow",
     "RegistryRequestItemRow",
     "RegistryRequestRow",

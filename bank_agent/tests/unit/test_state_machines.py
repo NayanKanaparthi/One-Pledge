@@ -121,17 +121,15 @@ def test_a_failed_tape_goes_back_only_to_its_resume_status(resume: TapeStatus) -
     assert tape.progress.resume_status is None and tape.progress.failed_stage is None
 
 
-@pytest.mark.parametrize("code", [FailureCode.KEY_VERSION_MISMATCH, FailureCode.CERTIFICATE_INVALID])
-def test_a_failure_that_is_not_retryable_cannot_be_resumed(code: FailureCode) -> None:
+def test_only_a_key_version_mismatch_cannot_be_resumed() -> None:
+    """SPEC_DECISIONS 61 amends 26: KEY_VERSION_MISMATCH is the one failure that cannot be retried."""
     with pytest.raises(IllegalTransitionError):
-        tape_at(T.FAILED, T.CHECKED, code).resume(AT)
+        tape_at(T.FAILED, T.CHECKED, FailureCode.KEY_VERSION_MISMATCH).resume(AT)
 
 
-@pytest.mark.parametrize(
-    "code", sorted(set(FailureCode) - {FailureCode.KEY_VERSION_MISMATCH, FailureCode.CERTIFICATE_INVALID})
-)
+@pytest.mark.parametrize("code", sorted(set(FailureCode) - {FailureCode.KEY_VERSION_MISMATCH}))
 def test_every_other_failure_can_be_resumed_after_an_operator_fix(code: FailureCode) -> None:
-    """SPEC_DECISIONS 26 amends SPEC 13.8: rejections are retryable once the cause is fixed."""
+    """SPEC_DECISIONS 26 amends SPEC 13.8 and 61 adds CERTIFICATE_INVALID: retryable after a fix."""
     assert tape_at(T.FAILED, T.CHECKED, code).resume(AT) is T.CHECKED
 
 

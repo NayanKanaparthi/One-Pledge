@@ -27,10 +27,9 @@ NEXT_STAGE: Mapping[TapeStatus, TapeStatus] = MappingProxyType(
 )
 RESUMABLE: frozenset[TapeStatus] = frozenset(NEXT_STAGE)
 UNFINISHED: frozenset[TapeStatus] = RESUMABLE
-# Every failure may be retried by a credit officer except these two (SPEC_DECISIONS 26, amending SPEC 13.8).
-NOT_RETRYABLE: frozenset[FailureCode] = frozenset(
-    {FailureCode.KEY_VERSION_MISMATCH, FailureCode.CERTIFICATE_INVALID}
-)
+# Every failure may be retried by a credit officer except KEY_VERSION_MISMATCH (SPEC_DECISIONS 26 as
+# amended by 61, amending SPEC 13.8): a CERTIFICATE_INVALID retry fetches the certificate again.
+NOT_RETRYABLE: frozenset[FailureCode] = frozenset({FailureCode.KEY_VERSION_MISMATCH})
 RETRYABLE_FAILURES: frozenset[FailureCode] = frozenset(FailureCode) - NOT_RETRYABLE
 MAX_BACKOFF_SECONDS = 60
 

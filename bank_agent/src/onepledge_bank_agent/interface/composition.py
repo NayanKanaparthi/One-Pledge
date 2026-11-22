@@ -35,7 +35,7 @@ from onepledge_bank_agent.application.release_loans import ReleaseLoans
 from onepledge_bank_agent.application.resubmit_loan import ResubmitLoan, ResubmitParts
 from onepledge_bank_agent.application.result_application import ResultApplier
 from onepledge_bank_agent.application.retry_tape import RetryTape
-from onepledge_bank_agent.application.review_alert import ReviewAlert
+from onepledge_bank_agent.application.review_alert import ReviewAlert, ReviewParts
 from onepledge_bank_agent.application.run_deep_verification import RunDeepVerification, VerificationSources
 from onepledge_bank_agent.application.run_local_checks import OutsideRecordsClients, RunLocalChecks
 from onepledge_bank_agent.application.run_pipeline_worker import RunPipelineWorker, WorkerSettings
@@ -245,9 +245,10 @@ class RuntimeComposition(_Resources):
 
     def review_alert(self) -> ReviewAlert:
         """Start a review or record a position."""
-        return ReviewAlert(
-            self._app_units(), self._clients.registry(), self._authoriser(), self.outbox_sync(), self._runtime
+        parts = ReviewParts(
+            self._clients.registry(), self._authoriser(), self.outbox_sync(), self._halt_rule()
         )
+        return ReviewAlert(self._app_units(), parts, self._runtime)
 
     def resubmit_loan(self) -> ResubmitLoan:
         """Resubmit a cleared CONFLICT loan."""

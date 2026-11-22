@@ -1,8 +1,9 @@
 """`RetryTape`: resume a FAILED submission from the status it failed at (SPEC 13.8, SPEC_DECISIONS 26).
 
-Allowed for every failure code except KEY_VERSION_MISMATCH and CERTIFICATE_INVALID: a
-rejection is usually a configuration fault an operator fixes and then retries, and every
-stage is idempotent, so if the cause persists the tape fails again with the same code.
+Allowed for every failure code except KEY_VERSION_MISMATCH (SPEC_DECISIONS 26 as amended
+by 61): a rejection is usually a configuration fault an operator fixes and then retries,
+and every stage is idempotent, so if the cause persists the tape fails again with the
+same code. A CERTIFICATE_INVALID retry fetches every unverified certificate again.
 The retry clears the failure fields and the attempt count and is audited.
 """
 

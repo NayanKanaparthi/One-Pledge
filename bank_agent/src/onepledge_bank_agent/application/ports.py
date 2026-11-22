@@ -22,7 +22,7 @@ from onepledge_bank_agent.application.evidence_ports import (
     CertificateRepository,
     CheckpointRepository,
     EvidenceReader,
-    IntegrityRunRepository,
+    QuarantineRepository,
     RegistryRequestRepository,
 )
 from onepledge_bank_agent.domain.audit import AuditDraft
@@ -280,13 +280,13 @@ class UnitOfWork(Protocol):
         ...
 
     @property
-    def integrity_runs(self) -> IntegrityRunRepository:
-        """Deep verifications."""
+    def quarantine(self) -> QuarantineRepository:
+        """Registry messages quarantined."""
         ...
 
     @property
     def evidence(self) -> EvidenceReader:
-        """The stored forms of every tape and reads of the audit log."""
+        """The stored forms of every tape, reads of the audit log, and the deep verifications."""
         ...
 
     def __enter__(self) -> Self:

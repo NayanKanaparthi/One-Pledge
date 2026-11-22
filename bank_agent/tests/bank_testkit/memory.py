@@ -31,7 +31,7 @@ from onepledge_bank_agent.domain.errors import ConcurrentUploadError
 from onepledge_bank_agent.domain.integrity import DatabaseControl
 from onepledge_bank_agent.domain.loan import Loan
 from onepledge_bank_agent.domain.raw_evidence import StoredRow, StoredTape
-from onepledge_bank_agent.domain.registry_records import ItemOutcome, RegistryAnswer
+from onepledge_bank_agent.domain.registry_records import ItemOutcome, QuarantinedMessage, RegistryAnswer
 from onepledge_bank_agent.domain.registry_results import StoredResult
 from onepledge_bank_agent.domain.tape import UNFINISHED, TapeSubmission
 from onepledge_bank_agent.domain.tape_file import RawRow, TapeLayout, raw_payload
@@ -52,7 +52,8 @@ class MemoryState:
     requests: dict[uuid.UUID, RegistryRequest] = field(default_factory=dict)
     request_items: dict[uuid.UUID, list[ItemRecord]] = field(default_factory=dict)
     answers: dict[uuid.UUID, RegistryAnswer] = field(default_factory=dict)
-    certificates: dict[uuid.UUID, Certificate] = field(default_factory=dict)
+    certificates: list[Certificate] = field(default_factory=list)
+    quarantined: list[QuarantinedMessage] = field(default_factory=list)
     alerts: dict[uuid.UUID, Alert] = field(default_factory=dict)
     checkpoints: list[Checkpoint] = field(default_factory=list)
     integrity_runs: list[IntegrityRun] = field(default_factory=list)
@@ -288,15 +289,49 @@ class _Certificates:
     def __init__(self, state: MemoryState) -> None:
         self._state = state
 
-    def add(self, certificate: Certificate) -> None:
-        self._state.certificates[certificate.certificate_id] = certificate
+    def add(self, certificate: Certificate) -> bool:
+        delivery = (
+            certificate.certificate_id,
+            certificate.body_hash,
+            certificate.signature,
+            certificate.body,
+        )
+        held = ((c.certificate_id, c.body_hash, c.signature, c.body) for c in self._state.certificates)
+        if delivery in held:
+            return False
+        self._state.certificates.append(certificate)
+        return True
 
-    def for_requests(self, request_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, Certificate]:
+    def verified_for_requests(self, request_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, Certificate]:
         wanted = set(request_ids)
-        return {c.request_id: c for c in self._state.certificates.values() if c.request_id in wanted}
+        return {c.request_id: c for c in self._state.certificates if c.verified and c.request_id in wanted}
 
     def all(self) -> list[Certificate]:
-        return list(self._state.certificates.values())
+        return list(self._state.certificates)
+
+    def expected(self) -> int:
+        return sum(1 for request in self._state.requests.values() if request.certificate_id is not None)
+
+    def any_unproven(self) -> bool:
+        proven = {c.request_id for c in self._state.certificates if c.verified}
+        return any(not c.verified and c.request_id not in proven for c in self._state.certificates)
+
+
+class _Quarantine:
+    def __init__(self, state: MemoryState) -> None:
+        self._state = state
+
+    def add(self, message: QuarantinedMessage) -> bool:
+        if any(held.message_id == message.message_id for held in self._state.quarantined):
+            return False
+        self._state.quarantined.append(message)
+        return True
+
+    def count(self) -> int:
+        return len(self._state.quarantined)
+
+    def any_checkpoint(self) -> bool:
+        return any(held.message_type == "CHECKPOINT" for held in self._state.quarantined)
 
 
 class _Alerts:
@@ -384,6 +419,10 @@ class _Evidence:
     def __init__(self, state: MemoryState) -> None:
         self._state = state
 
+    @property
+    def runs(self) -> _IntegrityRuns:
+        return _IntegrityRuns(self._state)
+
     def audit_entries(self) -> Iterator[AuditEntry]:
         previous: tuple[int, str] | None = None
         for index, draft in enumerate(self._state.audit):
@@ -456,7 +495,7 @@ def _outcome[T](existing: T | None, new: T) -> Upserted:
 
 REPOSITORIES = (
     "tapes", "raw_rows", "items", "loans", "checks", "tokens", "facilities", "requests", "certificates",
-    "alerts", "checkpoints", "integrity_runs", "evidence",
+    "alerts", "checkpoints", "quarantine", "evidence",
 )  # fmt: skip
 
 
@@ -480,7 +519,7 @@ class MemoryUnitOfWork:
         self.certificates = _Certificates(self._state)
         self.alerts = _Alerts(self._state)
         self.checkpoints = _Checkpoints(self._state)
-        self.integrity_runs = _IntegrityRuns(self._state)
+        self.quarantine = _Quarantine(self._state)
         self.evidence = _Evidence(self._state)
         return self
 

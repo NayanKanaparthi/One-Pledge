@@ -16,7 +16,7 @@ from onepledge_bank_agent.domain.integrity import DatabaseControl
 
 INSERT_ONLY_EVIDENCE = (
     "cleaning_issues", "submission_items", "local_checks", "loan_tokens", "certificates", "checkpoints_seen",
-    "integrity_runs",
+    "integrity_runs", "registry_messages_quarantined",
 )  # fmt: skip
 ENABLED = ("O", "A")
 TRIGGERS = text(

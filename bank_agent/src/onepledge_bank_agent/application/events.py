@@ -37,6 +37,7 @@ class LogEvent(StrEnum):
     ALERT_CREATED = "alert_created"
     ALERT_CASE_UPDATED = "alert_case_updated"
     REGISTRY_MESSAGE_IGNORED = "registry_message_ignored"
+    REGISTRY_MESSAGE_QUARANTINED = "registry_message_quarantined"
     HALT_RULE_APPLIED = "halt_rule_applied"
     HALT_RULE_DISABLED = "halt_rule_disabled"
     INTEGRITY_VERIFIED = "integrity_verified"
