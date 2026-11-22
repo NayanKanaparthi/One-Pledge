@@ -10,6 +10,7 @@ from datetime import date
 from onepledge_datagen.application.model import TapeFile
 from onepledge_datagen.domain.entities import ContractRecord, PaymentRecord, TitleRecord
 from onepledge_datagen.domain.errors import DataSetUnreadableError
+from onepledge_datagen.domain.text_values import MAX_INTEGER, IntegerIssue, parse_integer_text, parse_iso_date
 
 TITLE_HEADER = ("vin", "state", "title_status", "lienholder_name", "lien_recorded_on")
 PAYMENT_HEADER = ("payment_id", "vin", "paid_on", "amount_cents", "deposit_bank_code")
@@ -80,43 +81,66 @@ def _table(data: bytes, header: Sequence[str], name: str) -> list[list[str]]:
     except (UnicodeDecodeError, csv.Error):
         raise DataSetUnreadableError(f"{name} is not valid UTF-8 CSV.") from None
     if not rows or tuple(rows[0]) != tuple(header):
-        raise DataSetUnreadableError(f"{name} does not start with the expected header.")
-    body = rows[1:]
-    if any(len(row) != len(header) for row in body):
-        raise DataSetUnreadableError(f"{name} has a row with the wrong number of cells.")
-    return body
+        raise DataSetUnreadableError(f"{name} does not start with the header {', '.join(header)}.")
+    for line, row in enumerate(rows[1:], start=2):
+        if len(row) != len(header):
+            raise DataSetUnreadableError(f"{name} line {line} has {len(row)} cells instead of {len(header)}.")
+    return rows[1:]
+
+
+class _Cells:
+    """The cells of one row of an outside records file; a bad cell names its file, line and column."""
+
+    def __init__(self, name: str, header: Sequence[str], line: int, row: list[str]) -> None:
+        self._name, self._header, self._line, self._row = name, header, line, row
+
+    def _refuse(self, column: int, problem: str) -> DataSetUnreadableError:
+        return DataSetUnreadableError(
+            f"{self._name} line {self._line} column {self._header[column]} {problem}."
+        )
+
+    def text(self, column: int) -> str:
+        return self._row[column]
+
+    def day(self, column: int) -> date:
+        value = parse_iso_date(self._row[column])
+        if value is None:
+            raise self._refuse(column, "is not a YYYY-MM-DD date")
+        return value
+
+    def optional_day(self, column: int) -> date | None:
+        return self.day(column) if self._row[column] else None
+
+    def cents(self, column: int) -> int:
+        value = parse_integer_text(self._row[column], 1, MAX_INTEGER)
+        if isinstance(value, IntegerIssue):
+            raise self._refuse(column, "is not a positive whole number of cents")
+        return value
+
+
+def _rows(data: bytes, header: Sequence[str], name: str) -> list[_Cells]:
+    return [_Cells(name, header, line, row) for line, row in enumerate(_table(data, header, name), start=2)]
 
 
 def parse_titles(data: bytes) -> list[TitleRecord]:
     """Read titles.csv."""
-    try:
-        return [
-            TitleRecord(
-                row[0], row[1], row[2], row[3] or None, date.fromisoformat(row[4]) if row[4] else None
-            )
-            for row in _table(data, TITLE_HEADER, "titles.csv")
-        ]
-    except ValueError:
-        raise DataSetUnreadableError("titles.csv holds a malformed date.") from None
+    return [
+        TitleRecord(c.text(0), c.text(1), c.text(2), c.text(3) or None, c.optional_day(4))
+        for c in _rows(data, TITLE_HEADER, "titles.csv")
+    ]
 
 
 def parse_payments(data: bytes) -> list[PaymentRecord]:
     """Read payments.csv."""
-    try:
-        return [
-            PaymentRecord(row[0], row[1], date.fromisoformat(row[2]), int(row[3]), row[4])
-            for row in _table(data, PAYMENT_HEADER, "payments.csv")
-        ]
-    except ValueError:
-        raise DataSetUnreadableError("payments.csv holds a malformed date or amount.") from None
+    return [
+        PaymentRecord(c.text(0), c.text(1), c.day(2), c.cents(3), c.text(4))
+        for c in _rows(data, PAYMENT_HEADER, "payments.csv")
+    ]
 
 
 def parse_contracts(data: bytes) -> list[ContractRecord]:
     """Read contracts.csv."""
-    try:
-        return [
-            ContractRecord(row[0], row[1], row[2], int(row[3]), date.fromisoformat(row[4]), row[5])
-            for row in _table(data, CONTRACT_HEADER, "contracts.csv")
-        ]
-    except ValueError:
-        raise DataSetUnreadableError("contracts.csv holds a malformed date or amount.") from None
+    return [
+        ContractRecord(c.text(0), c.text(1), c.text(2), c.cents(3), c.day(4), c.text(5))
+        for c in _rows(data, CONTRACT_HEADER, "contracts.csv")
+    ]

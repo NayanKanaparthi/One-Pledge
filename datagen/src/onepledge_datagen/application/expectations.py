@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from onepledge_datagen.application.view import KeyExpectation, KeyMessiness, KeyRow
 from onepledge_datagen.domain.oracle.model import Action, CheckOutcome, Disposition, RowObservation
+from onepledge_datagen.domain.text import plain_list, plain_pairs
 
 ACCEPTED_DISPOSITIONS = frozenset(
     {Disposition.ACCEPTED_NEW, Disposition.ACCEPTED_REPRESENTED, Disposition.RELEASE_REQUESTED}
@@ -53,10 +54,10 @@ def _problem_mismatch(expectation: RowExpectation, observation: RowObservation) 
     wanted = set(expectation.expected.cleaning_problems)
     if expectation.exact_problems:
         if observed - expectation.allowed_extra_fixes != wanted - expectation.allowed_extra_fixes:
-            return f"cleaning problems {sorted(observed)} instead of {sorted(wanted)}"
+            return f"cleaning problems {plain_list(sorted(observed))} instead of {plain_list(sorted(wanted))}"
         return None
     if not wanted <= observed:
-        return f"cleaning problems {sorted(observed)} do not include {sorted(wanted)}"
+        return f"cleaning problems {plain_list(sorted(observed))} do not include {plain_list(sorted(wanted))}"
     return None
 
 
@@ -65,10 +66,11 @@ def _check_mismatch(expected: KeyExpectation, observation: RowObservation) -> st
         c.check_type.value: c.reason.value for c in observation.checks if c.outcome == CheckOutcome.FAIL
     }
     if set(failed) != set(expected.failed_checks):
-        return f"failed checks {sorted(failed)} instead of {sorted(expected.failed_checks)}"
+        wanted = plain_list(sorted(expected.failed_checks))
+        return f"failed checks {plain_list(sorted(failed))} instead of {wanted}"
     for check, reason in expected.failed_check_reasons.items():
         if failed.get(check) != reason:
-            return f"check {check} failed with {failed.get(check)} instead of {reason}"
+            return f"check {check} failed with {failed.get(check) or 'no failure'} instead of {reason}"
     return None
 
 
@@ -78,15 +80,15 @@ def _match_mismatch(expected: KeyExpectation, observation: RowObservation) -> st
         return f"match {observed} instead of {expected.match_kind}/{expected.match_basis}"
     matched = set(observation.kinds_matched)
     if not set(expected.include) <= matched or matched & set(expected.exclude):
-        rule = f"include {list(expected.include)} exclude {list(expected.exclude)}"
-        return f"kinds matched {sorted(matched)} break {rule}"
+        rule = f"include {plain_list(expected.include)}, exclude {plain_list(expected.exclude)}"
+        return f"kinds matched {plain_list(sorted(matched))} break the rule {rule}"
     return None
 
 
 def _alert_mismatch(expected: KeyExpectation, observation: RowObservation) -> str | None:
     wanted = [] if expected.alert is None else [expected.alert]
     if sorted(observation.alerts) != wanted:
-        return f"alerts {observation.alerts} instead of {wanted}"
+        return f"alerts {plain_pairs(observation.alerts)} instead of {plain_pairs(wanted)}"
     return None
 
 
@@ -109,7 +111,7 @@ def compare(expectation: RowExpectation, observation: RowObservation) -> list[st
                 _alert_mismatch(expected, observation),
             ]
         )
-    location = f"{observation.step_id} row {observation.row_number} ({expectation.source})"
+    location = f"{observation.step_id} row {observation.row_number}, {expectation.source}"
     return [f"{location}: {problem}" for problem in problems if problem is not None]
 
 
@@ -120,15 +122,16 @@ def race_violations(pairs: Mapping[str, Sequence[RowObservation]]) -> list[str]:
         locked = [o for o in observations if o.outcome.value == "LOCKED"]
         conflicts = [o for o in observations if o.outcome.value == "CONFLICT"]
         if len(locked) != 1 or len(conflicts) != 1:
-            violations.append(f"{case_id}: race outcomes {[o.outcome.value for o in observations]}")
+            violations.append(f"{case_id}: race outcomes {plain_list(o.outcome.value for o in observations)}")
             continue
         if sorted(locked[0].alerts) != [("HOLDER", "EXACT")]:
-            violations.append(f"{case_id}: the winning row has alerts {locked[0].alerts}")
+            violations.append(f"{case_id}: the winning row has alerts {plain_pairs(locked[0].alerts)}")
         loser = conflicts[0]
         if (loser.match_kind, loser.match_basis) != ("EXACT", "ASSET") or loser.alerts != [
             ("CLAIMANT", "EXACT")
         ]:
             violations.append(
-                f"{case_id}: the losing row is {loser.match_kind}/{loser.match_basis} {loser.alerts}"
+                f"{case_id}: the losing row is {loser.match_kind}/{loser.match_basis} "
+                f"with alerts {plain_pairs(loser.alerts)}"
             )
     return violations

@@ -12,11 +12,29 @@ from onepledge_datagen.application.verify import VerifyDataSet
 from onepledge_datagen.domain.entities import Profile
 from onepledge_datagen.domain.errors import DataGenError, InvariantsViolatedError
 from onepledge_datagen.domain.text import plural
+from onepledge_datagen.domain.text_values import MAX_INTEGER, IntegerIssue, parse_integer_text
 from onepledge_datagen.infrastructure.codec import FileCodec
 from onepledge_datagen.infrastructure.directory import LocalDataDirectory
 from onepledge_datagen.interface.output import Console, Json, common_options, run_guarded
 
 MAX_LISTED_VIOLATIONS = 50
+
+
+def seed_argument(text: str) -> int:
+    """`--seed`: ASCII digits only, 0 to 999,999,999,999,999,999 (SPEC_DECISIONS 37)."""
+    seed = parse_integer_text(text, 0, MAX_INTEGER)
+    if isinstance(seed, IntegerIssue):
+        raise argparse.ArgumentTypeError(
+            "must be a whole number from 0 to 999,999,999,999,999,999 in ASCII digits"
+        )
+    return seed
+
+
+def directory_argument(text: str) -> Path:
+    """A directory argument: an empty value is a usage error, not the current directory."""
+    if not text.strip():
+        raise argparse.ArgumentTypeError("must name a directory, not be empty")
+    return Path(text)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,7 +52,11 @@ def build_parser() -> argparse.ArgumentParser:
         "Every invariant is checked on the rendered files before anything is written.",
     )
     generate.add_argument(
-        "--seed", type=int, required=True, help="integer seed; the same seed gives the same bytes"
+        "--seed",
+        type=seed_argument,
+        required=True,
+        metavar="INT",
+        help="whole number seed from 0 to 999,999,999,999,999,999; the same seed gives the same bytes",
     )
     generate.add_argument(
         "--profile",
@@ -43,17 +65,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="size profile: full, small or example",
     )
     generate.add_argument(
-        "--out", type=Path, required=True, help="output directory (must be empty unless --force)"
+        "--out",
+        type=directory_argument,
+        required=True,
+        metavar="DIR",
+        help="output directory (must be empty unless --force)",
     )
     generate.add_argument("--force", action="store_true", help="replace an existing data set in --out")
     verify = commands.add_parser(
         "verify",
         parents=[common_options()],
-        help="re-check checksums and every invariant of a data directory",
-        description="Re-check the checksums and every invariant of SPEC 5.8 on an existing data directory. "
-        "Exits 1 and lists the violations when any is found.",
+        help="re-check checksums and every invariant, then compare with a regeneration",
+        description="Re-check the checksums and every invariant of SPEC 5.8 on an existing data directory, "
+        "then regenerate it in memory from the seed and profile of its manifest and require every file "
+        "to be byte identical. Exits 1 and lists the problems when any is found.",
     )
-    verify.add_argument("--data-dir", type=Path, required=True, help="the data directory to verify")
+    verify.add_argument(
+        "--data-dir",
+        type=directory_argument,
+        required=True,
+        metavar="DIR",
+        help="the data directory to verify",
+    )
     return parser
 
 
@@ -116,14 +149,17 @@ def run(arguments: argparse.Namespace, console: Console) -> int:
         _report_generation(console, summary, target)
         return 0
     source: Path = arguments.data_dir
-    report = VerifyDataSet(codec, directory, checker).run(source)
+    generator = GenerateDataSet(codec, directory, checker)
+    report = VerifyDataSet(codec, directory, checker, generator.files_for).run(source)
     if report.ok:
         files, rows = plural(report.files, "file"), plural(report.rows_checked, "tape row")
-        console.line(f"verify: OK ({files}, {rows}, every invariant holds)")
+        console.line(
+            f"verify: OK ({files}, {rows}, every invariant holds, byte identical to its regeneration)"
+        )
         console.result({"data_dir": str(source), "files": report.files, "rows_checked": report.rows_checked})
         return 0
-    sentence = f"verify: {plural(len(report.violations), 'invariant violation')} in {source}:"
-    console.failure("INVARIANTS_VIOLATED", sentence, {"violations": list(report.violations)})
+    sentence = f"verify: {plural(len(report.violations), 'problem')} in {source}:"
+    console.failure("VERIFICATION_FAILED", sentence, {"violations": list(report.violations)})
     _list_violations(console, report.violations)
     return 1
 

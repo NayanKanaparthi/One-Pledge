@@ -12,6 +12,7 @@ from datetime import date
 
 from onepledge_datagen.domain.entities import ContractRecord, PaymentRecord, TitleRecord
 from onepledge_datagen.domain.errors import DataSetUnreadableError
+from onepledge_datagen.domain.text_values import parse_iso_date
 
 
 @dataclass(frozen=True)
@@ -119,6 +120,13 @@ def _number(document: object, name: str, where: str) -> int:
     return value
 
 
+def _day(document: object, name: str, where: str) -> date:
+    value = parse_iso_date(_text(document, name, where))
+    if value is None:
+        raise DataSetUnreadableError(f"{where}: field {name} is not a YYYY-MM-DD date.")
+    return value
+
+
 def _optional_text(document: object, name: str, where: str) -> str | None:
     value = _field(document, name, where)
     if value is not None and not isinstance(value, str):
@@ -151,7 +159,7 @@ def parse_steps(manifest: object) -> tuple[ManifestStep, ...]:
                 bank_code=_text(entry, "bank_code", where),
                 facility_code=_text(entry, "facility_code", where),
                 kind=_text(entry, "kind", where),
-                as_of=date.fromisoformat(_text(entry, "as_of_date", where)),
+                as_of=_day(entry, "as_of_date", where),
                 file=_text(entry, "file", where),
                 concurrent_group=_optional_text(entry, "concurrent_group", where),
                 data_rows=_number(entry, "data_rows", where),

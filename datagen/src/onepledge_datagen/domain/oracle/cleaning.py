@@ -1,10 +1,15 @@
-"""Tape parsing, header mapping and row cleaning rules of SPEC 10.2 to 10.4 (oracle implementation)."""
+"""Tape parsing, header mapping and row cleaning rules of SPEC 10.2 to 10.4 (oracle implementation).
+
+Independent of the bank agent in technique as well as code (SPEC_DECISIONS 50): there is
+no regular expression here. Every value is parsed by walking the cell, classifying each
+character against literal ASCII sets, and building numbers by arithmetic over the ten
+ASCII digits (SPEC_DECISIONS 45). Trimming removes ASCII space, tab, CR and LF only.
+"""
 
 from __future__ import annotations
 
 import csv
 import io
-import re
 import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -14,6 +19,7 @@ from types import MappingProxyType
 from onepledge_datagen.domain.calendar import MONTH_ABBREVIATIONS
 from onepledge_datagen.domain.errors import DataGenError
 from onepledge_datagen.domain.oracle.model import Action, CleanedRow, Issue, Problem, Terms
+from onepledge_datagen.domain.text_values import digits_value, is_ascii_digits
 from onepledge_datagen.domain.vin import ALPHABET, VIN_LENGTH, is_valid_vin
 
 HEADER_ALIASES: Mapping[str, tuple[str, ...]] = MappingProxyType(
@@ -33,16 +39,35 @@ UNSAFE_LEADING = frozenset("=+@\t\r")
 EARLIEST_DATE = date(2000, 1, 1)
 MIN_ORIGINAL_CENTS = 10_000
 MAX_ORIGINAL_CENTS = 25_000_000
-_BORROWER = re.compile(r"^[A-Z0-9]{4,32}$")
-_LOAN_NUMBER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-_/]{0,39}$")
-_ISO = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
-_US = re.compile(r"^(\d{2})/(\d{2})/(\d{4})$")
-_DAY_MONTH_YEAR = re.compile(r"^(\d{2})-([A-Za-z]{3})-(\d{4})$")
-_AMOUNT_EXACT = re.compile(r"^\$?(\d{1,3}(?:,\d{3})+|\d+)\.(\d{2})$")
-_AMOUNT_FIXABLE = re.compile(r"^\$?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d))?$")
+ASCII_WHITESPACE = " \t\r\n"
+ASCII_UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+ASCII_LOWER = "abcdefghijklmnopqrstuvwxyz"
+ASCII_LETTERS_AND_DIGITS = frozenset(ASCII_UPPER + ASCII_LOWER + "0123456789")
+_CANONICAL_BORROWER = frozenset(ASCII_UPPER + "0123456789")
+BORROWER_SEPARATORS = frozenset(" -_./")
+BORROWER_LENGTHS = range(4, 33)
+VIN_SEPARATORS = frozenset(" -")
+LOAN_NUMBER_REST = ASCII_LETTERS_AND_DIGITS | frozenset("-_/")
+MAX_LOAN_NUMBER_LENGTH = 40
+_THOUSANDS_GROUP = 3
 _MONTHS: Mapping[str, int] = MappingProxyType(
-    {name.upper(): index + 1 for index, name in enumerate(MONTH_ABBREVIATIONS)}
+    {ascii_name.upper(): index + 1 for index, ascii_name in enumerate(MONTH_ABBREVIATIONS)}
 )
+
+
+def ascii_upper(text: str) -> str:
+    """Upper case for the 26 ASCII letters only; every other character is left as it is."""
+    return "".join(ASCII_UPPER[ASCII_LOWER.index(char)] if char in ASCII_LOWER else char for char in text)
+
+
+def ascii_lower(text: str) -> str:
+    """Lower case for the 26 ASCII letters only."""
+    return "".join(ASCII_LOWER[ASCII_UPPER.index(char)] if char in ASCII_UPPER else char for char in text)
+
+
+def ascii_trim(text: str) -> str:
+    """The cell without leading and trailing ASCII space, tab, CR and LF."""
+    return text.strip(ASCII_WHITESPACE)
 
 
 class TapeFormatError(DataGenError):
@@ -82,7 +107,7 @@ def map_header(header: Sequence[str], required: Sequence[str]) -> dict[str, int]
     mapping: dict[str, int] = {}
     seen: set[str] = set()
     for index, cell in enumerate(header):
-        name = " ".join(cell.strip().lower().split())
+        name = " ".join(_ascii_words(ascii_lower(cell)))
         if not name or name in seen:
             raise TapeFormatError("empty or duplicate header name")
         seen.add(name)
@@ -95,6 +120,19 @@ def map_header(header: Sequence[str], required: Sequence[str]) -> dict[str, int]
     if any(field not in mapping for field in required):
         raise TapeFormatError("required field missing")
     return mapping
+
+
+def _ascii_words(text: str) -> list[str]:
+    """The text split at runs of ASCII whitespace, empty parts dropped."""
+    words, current = [], ""
+    for char in text:
+        if char in ASCII_WHITESPACE:
+            if current:
+                words.append(current)
+            current = ""
+        else:
+            current += char
+    return [*words, current] if current else words
 
 
 def _unsafe(raw: str, trimmed: str) -> bool:
@@ -118,14 +156,14 @@ def _rejected(field: str, problem: Problem, *fixed: Issue) -> _FieldResult:
 
 
 def clean_vin(text: str) -> _FieldResult:
-    """VIN rules of SPEC 10.4 on a trimmed, non-empty cell."""
+    """VIN rules of SPEC 10.4 on a trimmed, non-empty cell; only ASCII letters change case."""
     fixed: list[Issue] = []
     value = text
-    if any(char.islower() for char in value):
-        value = value.upper()
+    if any(char in ASCII_LOWER for char in value):
+        value = ascii_upper(value)
         fixed.append(Issue("vin", Problem.VIN_CASE_NORMALISED, Action.FIXED))
-    if " " in value or "-" in value:
-        value = value.replace(" ", "").replace("-", "")
+    if any(char in VIN_SEPARATORS for char in value):
+        value = "".join(char for char in value if char not in VIN_SEPARATORS)
         fixed.append(Issue("vin", Problem.VIN_SEPARATORS_REMOVED, Action.FIXED))
     if len(value) != VIN_LENGTH:
         return _rejected("vin", Problem.VIN_LENGTH_INVALID, *fixed)
@@ -142,34 +180,67 @@ def clean_vin(text: str) -> _FieldResult:
 
 
 def clean_borrower(text: str) -> _FieldResult:
-    """Upper case, characters outside A-Z0-9 removed, then the pattern."""
-    canonical = re.sub(r"[^A-Z0-9]", "", text.upper())
+    """ASCII upper case and the five separators removed (SPEC_DECISIONS 45), then 4 to 32 of A-Z0-9.
+
+    Any other character is never dropped: it stays in the value and fails the pattern.
+    """
+    canonical = "".join(char for char in ascii_upper(text) if char not in BORROWER_SEPARATORS)
     fixed = (
         () if canonical == text else (Issue("borrower_ref", Problem.BORROWER_REF_NORMALISED, Action.FIXED),)
     )
-    if not _BORROWER.fullmatch(canonical):
+    if len(canonical) not in BORROWER_LENGTHS or any(char not in _CANONICAL_BORROWER for char in canonical):
         return _rejected("borrower_ref", Problem.BORROWER_REF_INVALID, *fixed)
     return _FieldResult(canonical, fixed)
 
 
 def clean_loan_number(text: str) -> _FieldResult:
-    """The loan number pattern."""
-    if not _LOAN_NUMBER.fullmatch(text):
+    """1 to 40 characters: an ASCII letter or digit, then ASCII letters, digits, `-`, `_` or `/`."""
+    valid = (
+        1 <= len(text) <= MAX_LOAN_NUMBER_LENGTH
+        and text[0] in ASCII_LETTERS_AND_DIGITS
+        and all(char in LOAN_NUMBER_REST for char in text[1:])
+    )
+    if not valid:
         return _rejected("lender_loan_number", Problem.LOAN_NUMBER_INVALID)
     return _FieldResult(text, ())
 
 
+def _split_fixed(text: str, separator: str, widths: tuple[int, ...]) -> list[str] | None:
+    """The parts of `text` split at `separator`, when there are exactly `widths` parts of those lengths."""
+    parts = text.split(separator)
+    if len(parts) != len(widths) or any(
+        len(part) != width for part, width in zip(parts, widths, strict=True)
+    ):
+        return None
+    return parts
+
+
+def _calendar_day(year: str, month: int | None, day: str) -> date | None:
+    """The real calendar day of ASCII digit year and day texts and a month number, or None."""
+    if month is None or not (is_ascii_digits(year) and is_ascii_digits(day)):
+        return None
+    try:
+        return date(digits_value(year), month, digits_value(day))
+    except ValueError:
+        return None
+
+
+def _month_number(text: str) -> int | None:
+    """The month of two ASCII digits (range checked by the calendar), or None."""
+    return digits_value(text) if is_ascii_digits(text) else None
+
+
 def _parse_date(text: str) -> tuple[date | None, bool]:
     """The date of an ISO, US or 14-Aug-2026 cell, and whether the third (alternative) form was used."""
-    try:
-        if match := _ISO.fullmatch(text):
-            return date(int(match[1]), int(match[2]), int(match[3])), False
-        if match := _US.fullmatch(text):
-            return date(int(match[3]), int(match[1]), int(match[2])), False
-        if (match := _DAY_MONTH_YEAR.fullmatch(text)) and match[2].upper() in _MONTHS:
-            return date(int(match[3]), _MONTHS[match[2].upper()], int(match[1])), True
-    except ValueError:
-        return None, False
+    if iso := _split_fixed(text, "-", (4, 2, 2)):
+        return _calendar_day(iso[0], _month_number(iso[1]), iso[2]), False
+    if us := _split_fixed(text, "/", (2, 2, 4)):
+        return _calendar_day(us[2], _month_number(us[0]), us[1]), False
+    if named := _split_fixed(text, "-", (2, 3, 4)):
+        letters_only = all(char in ASCII_UPPER or char in ASCII_LOWER for char in named[1])
+        month = _MONTHS.get(ascii_upper(named[1])) if letters_only else None
+        parsed = _calendar_day(named[2], month, named[0])
+        return parsed, parsed is not None
     return None, False
 
 
@@ -186,21 +257,46 @@ def clean_date(text: str, as_of: date) -> _FieldResult:
     return _FieldResult(parsed.isoformat(), fixed)
 
 
+def _whole_dollars(text: str) -> int | None:
+    """`23450` or `23,450` (commas exactly every three digits from the right), in ASCII digits."""
+    if "," not in text:
+        return digits_value(text) if is_ascii_digits(text) else None
+    groups = text.split(",")
+    head_ok = 1 <= len(groups[0]) <= _THOUSANDS_GROUP and is_ascii_digits(groups[0])
+    if not head_ok or any(len(g) != _THOUSANDS_GROUP or not is_ascii_digits(g) for g in groups[1:]):
+        return None
+    return digits_value("".join(groups))
+
+
+def _parse_amount(text: str) -> tuple[int, bool] | None:
+    """Cents and whether the form was a fixable one, for an amount without its sign."""
+    body = text.removeprefix("$")
+    whole_text, point, fraction = body.partition(".")
+    whole = _whole_dollars(whole_text)
+    if whole is None or (point and (len(fraction) not in (1, 2) or not is_ascii_digits(fraction))):
+        return None
+    cents = digits_value(fraction) * (10 if len(fraction) == 1 else 1) if fraction else 0
+    return whole * 100 + cents, len(fraction) != len("00")
+
+
 def clean_amount(field: str, text: str) -> _FieldResult:
     """Amount formats of SPEC 10.4; a leading minus is out of range."""
     negative = text.startswith("-")
-    body = text[1:] if negative else text
-    fixed: tuple[Issue, ...] = ()
-    if match := _AMOUNT_EXACT.fullmatch(body):
-        cents = int(match[1].replace(",", "")) * 100 + int(match[2])
-    elif match := _AMOUNT_FIXABLE.fullmatch(body):
-        cents = int(match[1].replace(",", "")) * 100 + int(match[2] or 0) * 10
-        fixed = (Issue(field, Problem.AMOUNT_FORMAT_NORMALISED, Action.FIXED),)
-    else:
+    parsed = _parse_amount(text[1:] if negative else text)
+    if parsed is None:
         return _rejected(field, Problem.AMOUNT_UNPARSEABLE)
+    cents, fixable = parsed
+    fixed = (Issue(field, Problem.AMOUNT_FORMAT_NORMALISED, Action.FIXED),) if fixable else ()
     if negative:
         return _rejected(field, Problem.AMOUNT_OUT_OF_RANGE, *fixed)
     return _FieldResult(cents, fixed)
+
+
+def _cents(value: str | int | None) -> int:
+    """An amount field of a row with no rejection: always the cents the amount rule produced."""
+    if not isinstance(value, int):
+        raise TypeError
+    return value
 
 
 class RowCleaner:
@@ -214,7 +310,10 @@ class RowCleaner:
 
     def clean(self, record: Sequence[str]) -> CleanedRow:
         """Every issue of one record, and its canonical values when nothing was rejected."""
-        if not any(cell.strip() for cell in record) or record[0].strip().upper() in NON_DATA_MARKERS:
+        if (
+            not any(ascii_trim(cell) for cell in record)
+            or ascii_upper(ascii_trim(record[0])) in NON_DATA_MARKERS
+        ):
             return CleanedRow((Issue("row", Problem.NON_DATA_ROW, Action.REJECTED),))
         if len(record) != self._width:
             return CleanedRow((Issue("row", Problem.COLUMN_COUNT_MISMATCH, Action.REJECTED),))
@@ -235,15 +334,15 @@ class RowCleaner:
             vin=vin,
             borrower_ref=str(values["borrower_ref"]),
             origination_date=str(values["origination_date"]),
-            original_amount_cents=int(values["original_amount"] or 0),
+            original_amount_cents=_cents(values["original_amount"]),
             lender_loan_number=str(values["lender_loan_number"]),
-            current_balance_cents=int(values["current_balance"] or 0),
+            current_balance_cents=_cents(values["current_balance"]),
         )
         return CleanedRow(ordered, vin=vin, terms=terms)
 
     def _clean_field(self, field: str, raw: str) -> _FieldResult:
         """Trim, then empty, then unsafe, then the field's own rule; the first rejection ends the field."""
-        trimmed = raw.strip()
+        trimmed = ascii_trim(raw)
         trim_issue = (Issue(field, Problem.WHITESPACE_TRIMMED, Action.FIXED),) if trimmed != raw else ()
         if not trimmed:
             return _FieldResult(

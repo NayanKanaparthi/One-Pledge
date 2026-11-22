@@ -16,11 +16,18 @@ onepledge-datagen verify --data-dir DIR [--json] [--quiet] [--debug]
 With `--json`, stdout holds exactly one JSON document: `{"ok": true, ...}` with the facts
 of the text output (steps and their rows, outside record counts, cases, data quality rows,
 rows checked, files), or `{"ok": false, "error": {"code": ..., "message": ...}}` (plus the
-`violations` list when invariants fail) with the same sentence on stderr. Every failure is
-one sentence and exit 1, including a path the file system refuses ("Cannot write the data
-set to PATH: permission denied; choose another --out."); an unexpected error prints
-`Unexpected error. Run with --debug for details.` and `--debug` adds the traceback. The
-generator writes no log lines, so `--quiet` changes nothing.
+`violations` list when verify finds problems) with the same sentence on stderr. Every
+failure is one sentence and exit 1, including a path the file system refuses ("Cannot
+write the data set to PATH: permission denied; choose another --out.") and a malformed
+data set file, which is named with what is wrong ("outside_records/payments.csv line 2
+column amount_cents is not a positive whole number of cents."). An unexpected error
+prints `Unexpected error. Run with --debug for details.`; `--debug` adds the exception
+type and its frames (file, line, function), never the exception message, a source line or
+a local variable. No output holds a Python repr: lists are comma separated, alerts are
+written `ROLE MATCH_KIND`, an empty list is `none`. The generator writes no log lines;
+`--quiet` is kept for one interface across layer 1 and its help says it has no effect.
+`--seed` is ASCII digits only, 0 to 999,999,999,999,999,999; an empty `--out` or
+`--data-dir` is a usage error (exit 2).
 
 `generate` builds the data set in memory, renders every file, parses the rendered bytes
 back and checks every invariant of SPEC 5.8 on them before anything is written. It
@@ -29,8 +36,16 @@ directory that already holds a data set. It prints the steps with their row coun
 outside record counts, the number of planted cases and data quality rows, and the
 number of tape rows the invariants were checked over.
 
-`verify` re-checks an existing directory: every file against `checksums.json` (and no
-file that is not listed), then every invariant. It exits 1 with the list of violations.
+`verify` checks an existing directory in two stages. First every file against
+`checksums.json` (and no file that is not listed), then every invariant of SPEC 5.8.
+Then conformance (SPEC_DECISIONS 43.2): it regenerates the data set in memory from the
+manifest's `seed` and `profile` and requires every file on disk, `manifest.json`,
+`reference.json` and the answer key included, to be byte identical to the regenerated
+one; each file that differs is named ("answer_key/answer_key.json differs from what seed
+20261117, profile full generates"), as is a missing or an extra file. A manifest whose
+`seed` or `profile` is missing or invalid is reported as such. A data set written by
+another `generator_version` cannot be regenerated, so `verify` says so in one sentence and
+exits 1. It exits 1 with the list of problems.
 
 From the repository root, `make data` generates `var/data/$(PROFILE)-$(SEED)` (defaults
 `full` and `20261117`) and skips when that directory already verifies; `FORCE=1`
@@ -48,6 +63,13 @@ DIR/
   answer_key/answer_key.json
   contract_example/      example profile only: the files committed under contracts/examples/tapes/
 ```
+
+Reserved whole-dollar loans: to plant the `23450` and `$23,450` spellings of
+`M_AMOUNT_ALT_FORMAT` without changing an amount, the generator reserves a deterministic
+set of honest loans whose original amount and balance have zero cents; this departs from
+SPEC 5.4 ("plus uniform random cents 0 to 99") for those loans only, because a whole
+dollar spelling of an amount with cents would change the amount and break the contract
+match (SPEC_DECISIONS 39), and `verify` checks the forms rotate.
 
 Profiles (SPEC 5.6): `full` holds 4,700 honest baseline loans and every planted case of
 SPEC 5.7 (about 5,000 distinct VINs over 15 tapes); `small` is the same timeline at about
@@ -92,7 +114,15 @@ invariant checker walks every tape of the timeline through it, in both orders fo
 concurrent S14 and S15 pair, and compares the result of every row with the answer key.
 It also checks check digits, repeated VINs, case wiring, row counts and that no label
 word appears outside the answer key. The bank agent shares no code with the oracle, so
-each checks the other.
+each checks the other, and no technique either (SPEC_DECISIONS 50): the oracle's cleaning
+module has no regular expression; it walks each cell, classifies characters against
+literal ASCII sets and builds values by arithmetic. Digits are ASCII digits only, trimming
+removes ASCII space, tab, CR and LF only, a borrower reference loses only the separators
+space, `-`, `_`, `.` and `/`, and only ASCII letters change case (SPEC_DECISIONS 45). Its
+tests run every case of the neutral table `contracts/examples/cleaning_cases.json`, which
+none of the implementations produced. `domain/text_values.py` is the one place text
+becomes an integer or a date; an architecture test forbids `int()`, `isdigit` and its
+kin, the `\d` class and `fromisoformat` anywhere else.
 
 ## Layout
 
@@ -100,6 +130,7 @@ each checks the other.
 src/onepledge_datagen/
   domain/          entities, catalog (banks, lenders, facilities, steps), VIN rules, money,
                    calendar, amortisation, tape formats, seeded random streams, errors,
+                   text_values (integers and dates from text), bounded_json,
                    oracle/ (cleaning, checks, lender names, registry, simulation)
   application/     workspace, factories, planting kit, portfolio, planters/ (one class per
                    case type), messiness, layout, records, reference, answer key, profiles,
@@ -126,4 +157,6 @@ The tests cover the VIN rules (with Hypothesis properties), money, calendar and
 amortisation, every cleaning rule of SPEC 10.4 in both formats, the check boundaries,
 the registry rules, determinism and seed sensitivity, the exact case counts of both
 profiles, the file formats, the absence of labels, the committed example, independent
-construction checks of every case type, and `verify` on tampered copies.
+construction checks of every case type, every case of `contracts/examples/cleaning_cases.json`,
+and `verify` on tampered copies, including every tampering that keeps the data set
+consistent and is found only by the regeneration.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from onepledge_datagen.application.ports import DataSetCodec, DataSetDirectory
 from onepledge_datagen.application.profiles import ProfilePlan, plan_for
 from onepledge_datagen.application.records import OutsideRecordsBuilder
 from onepledge_datagen.application.reference import ReferenceBuilder
+from onepledge_datagen.application.view import DataSetView
 from onepledge_datagen.application.workspace import Workspace
 from onepledge_datagen.domain import catalog
 from onepledge_datagen.domain.entities import Profile
@@ -50,6 +52,15 @@ class GenerationSummary:
     rows_checked: int
 
 
+@dataclass(frozen=True)
+class RenderedDataSet:
+    """A generated data set in memory: its files, their typed view and the invariant report."""
+
+    files: dict[str, bytes]
+    view: DataSetView
+    report: CheckReport
+
+
 def checksums_document(files: dict[str, bytes]) -> dict[str, object]:
     """SHA-256 of every other output file, sorted by path."""
     return {
@@ -66,8 +77,8 @@ class GenerateDataSet:
         self._directory = directory
         self._checker = checker
 
-    def run(self, seed: int, profile: Profile, target: Path, force: bool) -> GenerationSummary:
-        """Generate, check every invariant on the rendered bytes, then write."""
+    def render(self, seed: int, profile: Profile) -> RenderedDataSet:
+        """Every file of the data set of a seed and a profile, checked, in memory (nothing is written)."""
         plan = plan_for(profile)
         model = self._build(seed, plan)
         files = self._codec.render(model)
@@ -78,11 +89,21 @@ class GenerateDataSet:
         if plan.writes_contract_example:
             files.update(self._contract_example(files, model, report))
         files[CHECKSUMS] = self._codec.render_json(checksums_document(files))
-        self._directory.write(files, target, force)
+        return RenderedDataSet(files, view, report)
+
+    def files_for(self, seed: int, profile: Profile) -> Mapping[str, bytes]:
+        """The bytes of every file a seed and a profile generate (what `verify` compares against)."""
+        return self.render(seed, profile).files
+
+    def run(self, seed: int, profile: Profile, target: Path, force: bool) -> GenerationSummary:
+        """Generate, check every invariant on the rendered bytes, then write."""
+        rendered = self.render(seed, profile)
+        view, report = rendered.view, rendered.report
+        self._directory.write(rendered.files, target, force)
         return GenerationSummary(
             profile=profile.value,
             seed=seed,
-            files=len(files),
+            files=len(rendered.files),
             steps=tuple(
                 (s.step_id, s.bank_code, s.facility_code, s.kind, s.as_of.isoformat(), s.data_rows)
                 for s in view.steps

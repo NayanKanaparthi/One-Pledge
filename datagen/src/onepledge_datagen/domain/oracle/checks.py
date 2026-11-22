@@ -15,6 +15,15 @@ from typing import Protocol
 from onepledge_datagen.domain.entities import ContractRecord, PaymentRecord, TitleRecord
 from onepledge_datagen.domain.oracle.lender_names import names_match
 from onepledge_datagen.domain.oracle.model import CheckOutcome, CheckResult, CheckType, Reason, Terms
+from onepledge_datagen.domain.text_values import parse_iso_date
+
+
+def canonical_date(text: str) -> date:
+    """The day of a canonical `YYYY-MM-DD` date the cleaning rules produced."""
+    day = parse_iso_date(text)
+    if day is None:
+        raise ValueError(text)
+    return day
 
 
 @dataclass(frozen=True)
@@ -53,7 +62,7 @@ class LocalChecks:
     def run(self, terms: Terms, lender_legal_name: str, as_of: date) -> tuple[CheckResult, ...]:
         """The four results in the fixed check order."""
         settings = self._settings
-        origination = date.fromisoformat(terms.origination_date)
+        origination = canonical_date(terms.origination_date)
         age = (as_of - origination).days
         title = self._records.title(terms.vin)
         if title is not None:
@@ -98,7 +107,7 @@ class LocalChecks:
         lender_matching = [c for c in contracts if names_match(c.lender_name, lender_legal_name)]
         if not lender_matching:
             return CheckResult(CheckType.CONTRACT_PRESENT, CheckOutcome.FAIL, Reason.CONTRACT_LENDER_MISMATCH)
-        origination = date.fromisoformat(terms.origination_date)
+        origination = canonical_date(terms.origination_date)
         tolerance = self._settings.contract_date_tolerance_days
         if any(
             c.amount_cents == terms.original_amount_cents

@@ -164,3 +164,13 @@ def test_the_app_is_built_only_with_slash_redirection_off() -> None:
                 assert isinstance(flag, ast.Constant) and flag.value is False, path.name
                 builders.append(path.name)
     assert builders == ["plumbing.py"]
+
+
+def test_no_argument_is_converted_with_int_or_float() -> None:
+    """`type=int` would accept `+5`, ` 7` and non-ASCII digits (SPEC_DECISIONS 37)."""
+    for path in sorted(SOURCE.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.keyword) and node.arg == "type" and isinstance(node.value, ast.Name):
+                assert node.value.id not in ("int", "float"), (
+                    f"{path.name} converts an argument with {node.value.id}"
+                )

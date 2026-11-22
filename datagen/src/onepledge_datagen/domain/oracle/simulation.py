@@ -125,7 +125,7 @@ class TimelineOracle:
             tape = parse_tape(step.data)
             cleaner = RowCleaner(tape.header, step.is_release, step.as_of)
         except TapeFormatError as error:
-            state.problems.append(f"{step.step_id}: the tape cannot be read ({error})")
+            state.problems.append(f"{step.step_id}: the tape cannot be read: {error}")
             return
         bank = state.banks[step.bank_code]
         facility = self._facilities[step.facility_code]

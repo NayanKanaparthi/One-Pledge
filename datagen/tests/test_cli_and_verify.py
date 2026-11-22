@@ -73,7 +73,9 @@ def test_verify_reports_tampering(small_dir: Path, tmp_path: Path) -> None:
     assert code == 1
     assert "outside_records/titles.csv does not match its checksum" in err
     assert "stray.txt is present but not listed" in err
-    assert "(baseline): outcome HELD_LOCAL instead of LOCKED" in err
+    assert ", baseline: outcome HELD_LOCAL instead of LOCKED" in err
+    assert "outside_records/titles.csv differs from what seed 20261117, profile small generates" in err
+    assert "stray.txt is not part of what seed 20261117, profile small generates" in err
 
 
 def test_verify_reports_a_wrong_answer_key(small_dir: Path, tmp_path: Path) -> None:
@@ -93,7 +95,7 @@ def test_verify_of_a_missing_or_broken_directory_is_one_sentence(tmp_path: Path)
     assert code == 1 and err.endswith("is not a directory.\n")
     (tmp_path / "manifest.json").write_text("{not json")
     code, _, err = run("verify", "--data-dir", str(tmp_path))
-    assert code == 1 and err == "manifest.json is not valid JSON.\n"
+    assert code == 1 and err == "manifest.json is not valid JSON at line 1, column 2.\n"
 
 
 def test_verify_checks_the_example_contract_files(example_dir: Path, tmp_path: Path) -> None:
@@ -102,7 +104,7 @@ def test_verify_checks_the_example_contract_files(example_dir: Path, tmp_path: P
     expected = copy / "contract_example" / "example_tape_20.expected.json"
     expected.write_text(expected.read_text().replace("PENDING", "HELD_LOCAL", 1))
     code, _, err = run("verify", "--data-dir", str(copy))
-    assert code == 1 and "differs from the oracle's results" in err
+    assert code == 1 and "differs from the results of the oracle" in err
 
 
 LAKESIDE_FIX = ["BORROWER_REF_NORMALISED"]
@@ -137,10 +139,10 @@ def test_verify_refuses_a_key_without_the_lakeside_inherent_fix(small_dir: Path,
     code, _, err = run("verify", "--data-dir", str(tampered_key(small_dir, tmp_path / "copy", drop)))
     assert code == 1
     assert (
-        "answer key inherent_fixes of HARBOR-LAKESIDE is [], its lender format causes "
-        "['BORROWER_REF_NORMALISED']" in err
+        "answer key inherent_fixes of HARBOR-LAKESIDE is none, its lender format causes "
+        "BORROWER_REF_NORMALISED" in err
     )
-    assert "(baseline): cleaning problems ['BORROWER_REF_NORMALISED'] instead of []" in err
+    assert ", baseline: cleaning problems BORROWER_REF_NORMALISED instead of none" in err
 
 
 def test_verify_refuses_an_inherent_fix_the_format_does_not_cause(small_dir: Path, tmp_path: Path) -> None:
@@ -149,7 +151,7 @@ def test_verify_refuses_an_inherent_fix_the_format_does_not_cause(small_dir: Pat
 
     code, _, err = run("verify", "--data-dir", str(tampered_key(small_dir, tmp_path / "copy", add)))
     assert code == 1
-    assert "inherent_fixes of HARBOR-SUMMIT is ['WHITESPACE_TRIMMED'], its lender format causes []" in err
+    assert "inherent_fixes of HARBOR-SUMMIT is WHITESPACE_TRIMMED, its lender format causes none" in err
 
 
 def test_verify_refuses_a_key_that_omits_a_facility(small_dir: Path, tmp_path: Path) -> None:
@@ -158,7 +160,7 @@ def test_verify_refuses_a_key_that_omits_a_facility(small_dir: Path, tmp_path: P
 
     code, _, err = run("verify", "--data-dir", str(tampered_key(small_dir, tmp_path / "copy", omit)))
     assert code == 1
-    assert "reference.json has ['CALDER-SUMMIT', 'HARBOR-LAKESIDE'" in err
+    assert "reference.json has CALDER-SUMMIT, HARBOR-LAKESIDE" in err
 
 
 @pytest.mark.parametrize(
@@ -246,7 +248,9 @@ def test_an_unexpected_error_is_one_sentence_and_debug_adds_the_traceback(
     code, out, err = run(*argv)
     assert (code, out, err) == (1, "", "Unexpected error. Run with --debug for details.\n")
     code, _, err = run(*argv, "--debug")
-    assert code == 1 and "Traceback (most recent call last)" in err and "RuntimeError: boom" in err
+    # SPEC_DECISIONS 53.12: the type and the frames, never the message or a source line.
+    assert code == 1 and err.startswith("RuntimeError, raised at:\n") and " explode\n" in err
+    assert "boom" not in err and "Traceback" not in err and 'raise RuntimeError("boom")' not in err
     code, document, _ = run_json(*argv)
     assert (code, document["error"]["code"]) == (1, "UNEXPECTED_ERROR")
 
@@ -260,9 +264,12 @@ def test_generate_and_verify_print_one_json_document(tmp_path: Path) -> None:
     assert (code, document["ok"], document["rows_checked"]) == (0, True, 20)
     (target / "stray.txt").write_text("x")
     code, document, err = run_json("verify", "--data-dir", str(target))
-    assert (code, document["ok"], document["error"]["code"]) == (1, False, "INVARIANTS_VIOLATED")
-    assert document["violations"] == ["stray.txt is present but not listed in checksums.json"]
-    assert err.splitlines()[0] == f"verify: 1 invariant violation in {target}:"
+    assert (code, document["ok"], document["error"]["code"]) == (1, False, "VERIFICATION_FAILED")
+    assert document["violations"] == [
+        "stray.txt is present but not listed in checksums.json",
+        "stray.txt is not part of what seed 7, profile example generates",
+    ]
+    assert err.splitlines()[0] == f"verify: 2 problems in {target}:"
     code, document, _ = run_json("generate", "--seed", "7", "--profile", "example", "--out", str(target))
     assert (code, document["error"]["code"]) == (1, "OUTPUT_DIRECTORY")
 
@@ -271,10 +278,16 @@ def test_counted_messages_use_the_singular_for_one(tmp_path: Path) -> None:
     target = tmp_path / "data"
     _, out, _ = run("generate", "--seed", "7", "--profile", "example", "--out", str(target))
     assert "Invariants: all checks passed over 20 tape rows" in out
-    (target / "a.txt").write_text("x")
-    (target / "b.txt").write_text("x")
+    checksums = target / "checksums.json"
+    checksums.write_text(json.dumps(json.loads(checksums.read_text())))
     _, _, err = run("verify", "--data-dir", str(target))
-    assert err.splitlines()[0] == f"verify: 2 invariant violations in {target}:"
+    assert err.splitlines() == [
+        f"verify: 1 problem in {target}:",
+        "  checksums.json differs from what seed 7, profile example generates",
+    ]
+    (target / "a.txt").write_text("x")
+    _, _, err = run("verify", "--data-dir", str(target))
+    assert err.splitlines()[0] == f"verify: 3 problems in {target}:"
 
 
 AMOUNT_FORMS = (r"[0-9]+", r"\$[0-9]{1,3}(,[0-9]{3})*", r"[0-9]+\.[0-9]")

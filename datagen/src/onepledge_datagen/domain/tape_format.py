@@ -10,6 +10,7 @@ from onepledge_datagen.domain.amortisation import balance_after_months
 from onepledge_datagen.domain.calendar import iso_date, us_date, whole_months_between
 from onepledge_datagen.domain.entities import LoanRecord
 from onepledge_datagen.domain.money import dollar_amount, plain_amount
+from onepledge_datagen.domain.text_values import digits_value, is_ascii_digits
 
 COLUMN_LOAN_NUMBER = 0
 COLUMN_VIN = 1
@@ -20,6 +21,7 @@ COLUMN_BALANCE = 5
 COLUMN_COUNT = 12
 TOTALS_MARKER = "TOTAL"
 CENT_DIGITS = 2
+ASCII_WHITESPACE = " \t\r\n"
 
 
 @dataclass(frozen=True)
@@ -127,8 +129,8 @@ def format_for(lender_code: str) -> LenderFormat:
 
 def balance_cents(cells: list[str]) -> int:
     """The balance of rendered cells in either lender's format, or 0 when the cell is not an amount."""
-    text = cells[COLUMN_BALANCE].strip().replace("$", "").replace(",", "")
+    text = cells[COLUMN_BALANCE].strip(ASCII_WHITESPACE).replace("$", "").replace(",", "")
     whole, _, fraction = text.partition(".")
-    if not whole.isdigit() or len(fraction) != CENT_DIGITS or not fraction.isdigit():
+    if not is_ascii_digits(whole) or len(fraction) != CENT_DIGITS or not is_ascii_digits(fraction):
         return 0
-    return int(whole) * 100 + int(fraction)
+    return digits_value(whole) * 100 + digits_value(fraction)

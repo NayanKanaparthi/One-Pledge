@@ -41,3 +41,9 @@ class DataSetUnreadableError(DataGenError):
     """A data directory is missing files or holds files that cannot be parsed."""
 
     code = "DATA_SET_UNREADABLE"
+
+
+class GeneratorVersionError(DataGenError):
+    """A data set written by another generator version, which this one cannot regenerate."""
+
+    code = "GENERATOR_VERSION_MISMATCH"

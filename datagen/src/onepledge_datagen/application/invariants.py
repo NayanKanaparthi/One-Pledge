@@ -34,7 +34,7 @@ from onepledge_datagen.domain.oracle.simulation import (
     TimelineOracle,
 )
 from onepledge_datagen.domain.tape_format import COLUMN_AMOUNT, COLUMN_VIN, format_for
-from onepledge_datagen.domain.text import plural
+from onepledge_datagen.domain.text import plain_list, plural
 from onepledge_datagen.domain.vin import is_valid_vin
 
 INVALID_VIN_PROBLEMS = frozenset(
@@ -152,7 +152,7 @@ class InvariantChecker:
         for places in occurrences.values():
             if len(places) > 1 and not _explained(set(places), case_sets, duplicates):
                 report.violations.append(
-                    f"a VIN appears in {plural(len(places), 'row')} ({', '.join(places)}) "
+                    f"a VIN appears in {plural(len(places), 'row')}, {plain_list(places)}, "
                     "with no planted reason"
                 )
 
@@ -190,7 +190,7 @@ class InvariantChecker:
             upper = text.upper()
             found = [word for word in catalog.LABEL_WORDS if word in upper]
             if found:
-                report.violations.append(f"{name} contains the label words {found}")
+                report.violations.append(f"{name} contains the label words {plain_list(found)}")
 
     @staticmethod
     def _check_amount_forms(
@@ -215,7 +215,7 @@ class InvariantChecker:
                 f"{form.name}: {count}" for form, count in zip(AMOUNT_FORMS, counts, strict=True)
             )
             report.violations.append(
-                f"{AMOUNT_KIND} rows are not spread over the three forms in rotation ({shown})"
+                f"{AMOUNT_KIND} rows are not spread over the three forms in rotation: {shown}"
             )
 
     @staticmethod
@@ -223,16 +223,16 @@ class InvariantChecker:
         """The key declares, for every facility, exactly the fixes its lender's format always causes."""
         if set(view.inherent_fixes) != set(view.facilities):
             report.violations.append(
-                f"answer key inherent_fixes names {sorted(view.inherent_fixes)}, "
-                f"reference.json has {sorted(view.facilities)}"
+                f"answer key inherent_fixes names {plain_list(sorted(view.inherent_fixes))}, "
+                f"reference.json has {plain_list(sorted(view.facilities))}"
             )
         for code, facility in view.facilities.items():
             declared = view.inherent_fixes.get(code)
             wanted = format_for(facility.lender_code).inherent_fixes
             if declared is not None and declared != wanted:
                 report.violations.append(
-                    f"answer key inherent_fixes of {code} is {sorted(declared)}, "
-                    f"its lender format causes {sorted(wanted)}"
+                    f"answer key inherent_fixes of {code} is {plain_list(sorted(declared))}, "
+                    f"its lender format causes {plain_list(sorted(wanted))}"
                 )
 
     def _check_outcomes(self, view: DataSetView, report: CheckReport) -> None:

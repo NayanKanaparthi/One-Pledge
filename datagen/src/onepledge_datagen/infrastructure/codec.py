@@ -21,6 +21,7 @@ from onepledge_datagen.application.view import (
     parse_inherent_fixes,
     parse_steps,
 )
+from onepledge_datagen.domain.bounded_json import parse_bounded_json
 from onepledge_datagen.domain.errors import DataSetUnreadableError
 from onepledge_datagen.infrastructure.csv_files import (
     parse_contracts,
@@ -88,7 +89,4 @@ class FileCodec:
         return files[path]
 
     def _json(self, files: Mapping[str, bytes], path: str) -> object:
-        try:
-            return json.loads(self._file(files, path))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            raise DataSetUnreadableError(f"{path} is not valid JSON.") from None
+        return parse_bounded_json(self._file(files, path), path)

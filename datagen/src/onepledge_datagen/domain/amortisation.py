@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from decimal import ROUND_FLOOR, ROUND_HALF_UP, Context, Decimal
 
 _CONTEXT = Context(prec=40)
@@ -18,7 +19,7 @@ def monthly_payment_cents(principal_cents: int, apr_tenths: int, term_months: in
     rate = _monthly_rate(apr_tenths)
     growth = _CONTEXT.power(1 + rate, term_months)
     payment = _CONTEXT.divide(_CONTEXT.multiply(Decimal(principal_cents) * rate, growth), growth - 1)
-    return int(payment.quantize(_CENT, rounding=ROUND_HALF_UP, context=_CONTEXT))
+    return math.floor(payment.quantize(_CENT, rounding=ROUND_HALF_UP, context=_CONTEXT))
 
 
 def balance_after_months(principal_cents: int, apr_tenths: int, term_months: int, months: int) -> int:
@@ -31,5 +32,5 @@ def balance_after_months(principal_cents: int, apr_tenths: int, term_months: int
     payment = Decimal(monthly_payment_cents(principal_cents, apr_tenths, term_months))
     growth = _CONTEXT.power(1 + rate, months)
     balance = Decimal(principal_cents) * growth - _CONTEXT.divide(payment * (growth - 1), rate)
-    cents = int(balance.quantize(_CENT, rounding=ROUND_FLOOR, context=_CONTEXT))
+    cents = math.floor(balance.quantize(_CENT, rounding=ROUND_FLOOR, context=_CONTEXT))
     return min(max(cents, 1), principal_cents)
