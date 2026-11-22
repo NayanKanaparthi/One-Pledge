@@ -13,6 +13,7 @@ from typing import Any
 from openapi_spec_validator import OpenAPIV31SpecValidator
 
 from onepledge_contract_fakes.cli_output import plural
+from onepledge_contract_fakes.contracts_check.cleaning_cases import check_cleaning_cases
 from onepledge_contract_fakes.contracts_check.documents import DocumentError, load_json, load_yaml_mapping
 from onepledge_contract_fakes.contracts_check.schemas import ContractSchemas
 from onepledge_contract_fakes.contracts_check.vectors import (
@@ -88,6 +89,7 @@ class ContractsChecker:
         outcomes.append(examples)
         outcomes.append(self._check_references(specs, index))
         outcomes.extend(self._check_vectors(invalid))
+        outcomes.append(self._check_cleaning_cases())
         return CheckReport(tuple(outcomes), len(CONTRACT_FILES), len(index))
 
     def _load_and_validate_specs(self) -> tuple[dict[str, Mapping[str, Any]], list[CheckOutcome]]:
@@ -173,6 +175,20 @@ class ContractsChecker:
                 outcome.problems.append(
                     f"examples/index.json lists examples/{entry.get('file')}, which does not exist"
                 )
+        return outcome
+
+    def _check_cleaning_cases(self) -> CheckOutcome:
+        """The neutral cleaning table exists and every case has the documented shape."""
+        outcome = CheckOutcome("cleaning cases", "cleaning_cases.json")
+        try:
+            document = load_json(self._examples / "cleaning_cases.json")
+        except DocumentError as error:
+            outcome.problems.append(f"cleaning_cases.json {error.problem}")
+            return outcome
+        outcome.problems.extend(check_cleaning_cases(document))
+        cases = document.get("cases") if isinstance(document, dict) else None
+        count = len(cases) if isinstance(cases, list) else 0
+        outcome.summary = f"{plural(count, 'case')} have the documented shape"
         return outcome
 
     def _check_vectors(self, invalid_examples: set[str]) -> list[CheckOutcome]:

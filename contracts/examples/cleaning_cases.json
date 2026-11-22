@@ -1,0 +1,3439 @@
+{
+  "format_version": 1,
+  "description": "Neutral cleaning cases of SPEC 10.4, written by hand from SPEC 10.4, 9.1 and 8 (LenderLoanNumber) and SPEC_DECISIONS 13 and 45 (SPEC_DECISIONS 50). Every implementation of the cleaning rules runs every case. A field case puts `input` into one required cell of that field and evaluates the field rules in the order of decision 13: trim ASCII space, tab, CR and LF (WHITESPACE_TRIMMED); empty (MISSING_REQUIRED_FIELD); a leading = + @ tab or CR, or any character of Unicode category Cc (UNSAFE_CHARACTERS); then the field's own rules, the first rejection ending the field. `original_amount` cases include its range 100.00 to 250,000.00; `current_balance` cases include ZERO_BALANCE. A `row` case gives a header and the cells of one record and evaluates the row rules first. `problems` lists every issue as field and problem; compare it as a multiset. `action` is ACCEPT with no issue, FIXED with FIXED issues only, REJECTED with at least one REJECTED issue. `canonical` is the cleaned value (amounts in integer cents; for a row an object of the canonical fields cleaned for that tape kind), or null when rejected. Digits are ASCII digits only.",
+  "cases": [
+    {
+      "id": "vin-001",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633A004352",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": "1HGCM82633A004352"
+      },
+      "note": "canonical VIN, valid check digit"
+    },
+    {
+      "id": "vin-002",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1M8GDM9AXKP042788",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": "1M8GDM9AXKP042788"
+      },
+      "note": "check digit X"
+    },
+    {
+      "id": "vin-003",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1hgcm82633a004352",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CASE_NORMALISED"
+          }
+        ],
+        "canonical": "1HGCM82633A004352"
+      },
+      "note": "lower case letters"
+    },
+    {
+      "id": "vin-004",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1m8gdm9axkp042788",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CASE_NORMALISED"
+          }
+        ],
+        "canonical": "1M8GDM9AXKP042788"
+      },
+      "note": "lower case with check digit x"
+    },
+    {
+      "id": "vin-005",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM-82633-A004352",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_SEPARATORS_REMOVED"
+          }
+        ],
+        "canonical": "1HGCM82633A004352"
+      },
+      "note": "hyphens removed"
+    },
+    {
+      "id": "vin-006",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM 82633 A004352",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_SEPARATORS_REMOVED"
+          }
+        ],
+        "canonical": "1HGCM82633A004352"
+      },
+      "note": "inner spaces removed"
+    },
+    {
+      "id": "vin-007",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1hgcm-82633-a004352",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CASE_NORMALISED"
+          },
+          {
+            "field": "vin",
+            "problem": "VIN_SEPARATORS_REMOVED"
+          }
+        ],
+        "canonical": "1HGCM82633A004352"
+      },
+      "note": "case and separators"
+    },
+    {
+      "id": "vin-008",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "-1HGCM82633A004352",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_SEPARATORS_REMOVED"
+          }
+        ],
+        "canonical": "1HGCM82633A004352"
+      },
+      "note": "a leading hyphen is a separator, not unsafe"
+    },
+    {
+      "id": "vin-009",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633AO04352",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CHARACTER_SUBSTITUTED"
+          }
+        ],
+        "canonical": "1HGCM82633A004352"
+      },
+      "note": "O written for 0"
+    },
+    {
+      "id": "vin-010",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633AQ04352",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CHARACTER_SUBSTITUTED"
+          }
+        ],
+        "canonical": "1HGCM82633A004352"
+      },
+      "note": "Q written for 0"
+    },
+    {
+      "id": "vin-011",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "IHGCM82633A004352",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CHARACTER_SUBSTITUTED"
+          }
+        ],
+        "canonical": "1HGCM82633A004352"
+      },
+      "note": "I written for 1"
+    },
+    {
+      "id": "vin-012",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "ihgcm82633ao04352",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CASE_NORMALISED"
+          },
+          {
+            "field": "vin",
+            "problem": "VIN_CHARACTER_SUBSTITUTED"
+          }
+        ],
+        "canonical": "1HGCM82633A004352"
+      },
+      "note": "lower case i and o"
+    },
+    {
+      "id": "vin-013",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM8263OA004352",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CHARACTER_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "O where the 0 substitution would fail the check digit stays outside the alphabet"
+    },
+    {
+      "id": "vin-014",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633A00435",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_LENGTH_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "16 characters"
+    },
+    {
+      "id": "vin-015",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633A0043521",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_LENGTH_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "18 characters"
+    },
+    {
+      "id": "vin-016",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM-82633-A00435",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_SEPARATORS_REMOVED"
+          },
+          {
+            "field": "vin",
+            "problem": "VIN_LENGTH_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "16 characters after the separators are removed"
+    },
+    {
+      "id": "vin-017",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633A004353",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CHECK_DIGIT_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "last character changed"
+    },
+    {
+      "id": "vin-018",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633A0043S2",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CHECK_DIGIT_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "valid characters, wrong check digit"
+    },
+    {
+      "id": "vin-019",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633A00435*",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CHARACTER_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "punctuation"
+    },
+    {
+      "id": "vin-020",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633А004352",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CHARACTER_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "Cyrillic capital A"
+    },
+    {
+      "id": "vin-021",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1hgcm82633а004352",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CHARACTER_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "Cyrillic small a: only ASCII letters are lower case letters of the VIN alphabet"
+    },
+    {
+      "id": "vin-022",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633A0043ſ2",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CHARACTER_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "long s: not an ASCII letter, never upper cased to S"
+    },
+    {
+      "id": "vin-023",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633A00435٢",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CHARACTER_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "Arabic-Indic digit two"
+    },
+    {
+      "id": "vin-024",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "１HGCM82633A004352",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CHARACTER_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "full width digit one"
+    },
+    {
+      "id": "vin-025",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633A00435²",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CHARACTER_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "superscript two"
+    },
+    {
+      "id": "vin-026",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633A 004352",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_LENGTH_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "a non-breaking space is not a separator: 18 characters"
+    },
+    {
+      "id": "vin-027",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633A​004352",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_LENGTH_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "zero width space: 18 characters"
+    },
+    {
+      "id": "vin-028",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "‏1HGCM82633A004352",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_LENGTH_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "right-to-left mark: 18 characters"
+    },
+    {
+      "id": "vin-029",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "  1HGCM82633A004352 ",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": "1HGCM82633A004352"
+      },
+      "note": "leading and trailing ASCII spaces"
+    },
+    {
+      "id": "vin-030",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": " 1HGCM82633A004352",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_LENGTH_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "a non-breaking space is not trimmed"
+    },
+    {
+      "id": "vin-031",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "MISSING_REQUIRED_FIELD"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "empty"
+    },
+    {
+      "id": "vin-032",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "   ",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "WHITESPACE_TRIMMED"
+          },
+          {
+            "field": "vin",
+            "problem": "MISSING_REQUIRED_FIELD"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "spaces only"
+    },
+    {
+      "id": "vin-033",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "=1HGCM82633A004352",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "UNSAFE_CHARACTERS"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "formula leading ="
+    },
+    {
+      "id": "vin-034",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "@1HGCM82633A004352",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "UNSAFE_CHARACTERS"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "formula leading @"
+    },
+    {
+      "id": "vin-035",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "+1HGCM82633A004352",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "UNSAFE_CHARACTERS"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "formula leading +"
+    },
+    {
+      "id": "vin-036",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": " =1HGCM82633A004352",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "WHITESPACE_TRIMMED"
+          },
+          {
+            "field": "vin",
+            "problem": "UNSAFE_CHARACTERS"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "= after trimming"
+    },
+    {
+      "id": "vin-037",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "\t1HGCM82633A004352",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "WHITESPACE_TRIMMED"
+          },
+          {
+            "field": "vin",
+            "problem": "UNSAFE_CHARACTERS"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "a leading tab is trimmed and is still unsafe (raw first character, and a control character)"
+    },
+    {
+      "id": "vin-038",
+      "field": "vin",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM826\u00073A004352",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "UNSAFE_CHARACTERS"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "a control character inside"
+    },
+    {
+      "id": "vin-039",
+      "field": "vin",
+      "kind": "RELEASE",
+      "as_of_date": "2026-11-05",
+      "input": "1hgcm82633a004352",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CASE_NORMALISED"
+          }
+        ],
+        "canonical": "1HGCM82633A004352"
+      },
+      "note": "release tapes apply the same VIN rules"
+    },
+    {
+      "id": "vin-040",
+      "field": "vin",
+      "kind": "RELEASE",
+      "as_of_date": "2026-11-05",
+      "input": "1HGCM82633A00435",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_LENGTH_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "release tape, 16 characters"
+    },
+    {
+      "id": "borrower_ref-001",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "C0048213",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": "C0048213"
+      },
+      "note": "Summit form"
+    },
+    {
+      "id": "borrower_ref-002",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "c0048213",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_NORMALISED"
+          }
+        ],
+        "canonical": "C0048213"
+      },
+      "note": "lower case"
+    },
+    {
+      "id": "borrower_ref-003",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "LK-123456",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_NORMALISED"
+          }
+        ],
+        "canonical": "LK123456"
+      },
+      "note": "Lakeside form, hyphen removed"
+    },
+    {
+      "id": "borrower_ref-004",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "LK 123456",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_NORMALISED"
+          }
+        ],
+        "canonical": "LK123456"
+      },
+      "note": "space removed"
+    },
+    {
+      "id": "borrower_ref-005",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "LK_123456",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_NORMALISED"
+          }
+        ],
+        "canonical": "LK123456"
+      },
+      "note": "underscore removed"
+    },
+    {
+      "id": "borrower_ref-006",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "LK.123456",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_NORMALISED"
+          }
+        ],
+        "canonical": "LK123456"
+      },
+      "note": "dot removed"
+    },
+    {
+      "id": "borrower_ref-007",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "LK/123456",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_NORMALISED"
+          }
+        ],
+        "canonical": "LK123456"
+      },
+      "note": "slash removed"
+    },
+    {
+      "id": "borrower_ref-008",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "lk-12",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_NORMALISED"
+          }
+        ],
+        "canonical": "LK12"
+      },
+      "note": "four characters after normalising"
+    },
+    {
+      "id": "borrower_ref-009",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "C004",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": "C004"
+      },
+      "note": "four characters, the minimum"
+    },
+    {
+      "id": "borrower_ref-010",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "C0000000000000000000000000000000",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": "C0000000000000000000000000000000"
+      },
+      "note": "32 characters, the maximum"
+    },
+    {
+      "id": "borrower_ref-011",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "C00",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "three characters"
+    },
+    {
+      "id": "borrower_ref-012",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "C00000000000000000000000000000000",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "33 characters"
+    },
+    {
+      "id": "borrower_ref-013",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "LK#123456",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "# is not a separator and is never dropped"
+    },
+    {
+      "id": "borrower_ref-014",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "LK,123456",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "comma is not a separator"
+    },
+    {
+      "id": "borrower_ref-015",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "C０048213",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "full width digit zero"
+    },
+    {
+      "id": "borrower_ref-016",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "C٠048213",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "Arabic-Indic digit zero"
+    },
+    {
+      "id": "borrower_ref-017",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "Cé048213",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "accented letter"
+    },
+    {
+      "id": "borrower_ref-018",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "C0048213​",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "zero width space"
+    },
+    {
+      "id": "borrower_ref-019",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "C0048 213",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "non-breaking space is not a separator"
+    },
+    {
+      "id": "borrower_ref-020",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "--",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_NORMALISED"
+          },
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "nothing left after the separators are removed"
+    },
+    {
+      "id": "borrower_ref-021",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": " C0048213 ",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": "C0048213"
+      },
+      "note": "ASCII spaces trimmed"
+    },
+    {
+      "id": "borrower_ref-022",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "@SUM(1+1)",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "UNSAFE_CHARACTERS"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "formula"
+    },
+    {
+      "id": "borrower_ref-023",
+      "field": "borrower_ref",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "borrower_ref",
+            "problem": "MISSING_REQUIRED_FIELD"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "empty"
+    },
+    {
+      "id": "lender_loan_number-001",
+      "field": "lender_loan_number",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "SAF-2253103-49",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": "SAF-2253103-49"
+      },
+      "note": "Summit form"
+    },
+    {
+      "id": "lender_loan_number-002",
+      "field": "lender_loan_number",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "LMC_000123/7",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": "LMC_000123/7"
+      },
+      "note": "underscore and slash allowed"
+    },
+    {
+      "id": "lender_loan_number-003",
+      "field": "lender_loan_number",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "ab-12",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": "ab-12"
+      },
+      "note": "lower case is allowed and kept"
+    },
+    {
+      "id": "lender_loan_number-004",
+      "field": "lender_loan_number",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "A",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": "A"
+      },
+      "note": "one character"
+    },
+    {
+      "id": "lender_loan_number-005",
+      "field": "lender_loan_number",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      },
+      "note": "40 characters, the maximum"
+    },
+    {
+      "id": "lender_loan_number-006",
+      "field": "lender_loan_number",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "lender_loan_number",
+            "problem": "LOAN_NUMBER_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "41 characters"
+    },
+    {
+      "id": "lender_loan_number-007",
+      "field": "lender_loan_number",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "-123",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "lender_loan_number",
+            "problem": "LOAN_NUMBER_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "must start with a letter or digit"
+    },
+    {
+      "id": "lender_loan_number-008",
+      "field": "lender_loan_number",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "_123",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "lender_loan_number",
+            "problem": "LOAN_NUMBER_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "must start with a letter or digit"
+    },
+    {
+      "id": "lender_loan_number-009",
+      "field": "lender_loan_number",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "AB CD",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "lender_loan_number",
+            "problem": "LOAN_NUMBER_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "inner space"
+    },
+    {
+      "id": "lender_loan_number-010",
+      "field": "lender_loan_number",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "AB.CD",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "lender_loan_number",
+            "problem": "LOAN_NUMBER_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "dot"
+    },
+    {
+      "id": "lender_loan_number-011",
+      "field": "lender_loan_number",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "ÄB12",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "lender_loan_number",
+            "problem": "LOAN_NUMBER_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "non-ASCII letter"
+    },
+    {
+      "id": "lender_loan_number-012",
+      "field": "lender_loan_number",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "AB٣",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "lender_loan_number",
+            "problem": "LOAN_NUMBER_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "Arabic-Indic digit"
+    },
+    {
+      "id": "lender_loan_number-013",
+      "field": "lender_loan_number",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "AB12 ",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "lender_loan_number",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": "AB12"
+      },
+      "note": "trailing space trimmed"
+    },
+    {
+      "id": "lender_loan_number-014",
+      "field": "lender_loan_number",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "=HYPERLINK(\"http://x\",\"y\")",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "lender_loan_number",
+            "problem": "UNSAFE_CHARACTERS"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "formula"
+    },
+    {
+      "id": "lender_loan_number-015",
+      "field": "lender_loan_number",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "lender_loan_number",
+            "problem": "MISSING_REQUIRED_FIELD"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "empty"
+    },
+    {
+      "id": "origination_date-001",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "2026-08-14",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": "2026-08-14"
+      },
+      "note": "ISO"
+    },
+    {
+      "id": "origination_date-002",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "08/14/2026",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": "2026-08-14"
+      },
+      "note": "US"
+    },
+    {
+      "id": "origination_date-003",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "14-Aug-2026",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_FORMAT_NORMALISED"
+          }
+        ],
+        "canonical": "2026-08-14"
+      },
+      "note": "DD-Mon-YYYY"
+    },
+    {
+      "id": "origination_date-004",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "14-aug-2026",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_FORMAT_NORMALISED"
+          }
+        ],
+        "canonical": "2026-08-14"
+      },
+      "note": "month in lower case"
+    },
+    {
+      "id": "origination_date-005",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "14-AUG-2026",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_FORMAT_NORMALISED"
+          }
+        ],
+        "canonical": "2026-08-14"
+      },
+      "note": "month in upper case"
+    },
+    {
+      "id": "origination_date-006",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "2026-11-05",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": "2026-11-05"
+      },
+      "note": "on the as-of date"
+    },
+    {
+      "id": "origination_date-007",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "2026-11-06",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_IN_FUTURE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "one day after the as-of date"
+    },
+    {
+      "id": "origination_date-008",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "06-Nov-2026",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_FORMAT_NORMALISED"
+          },
+          {
+            "field": "origination_date",
+            "problem": "DATE_IN_FUTURE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "fixable form, then future"
+    },
+    {
+      "id": "origination_date-009",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "2000-01-01",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": "2000-01-01"
+      },
+      "note": "earliest accepted date"
+    },
+    {
+      "id": "origination_date-010",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "12/31/1999",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_TOO_OLD"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "one day before 2000-01-01"
+    },
+    {
+      "id": "origination_date-011",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "2024-02-29",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": "2024-02-29"
+      },
+      "note": "leap day"
+    },
+    {
+      "id": "origination_date-012",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "2025-02-29",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "29 February of a common year"
+    },
+    {
+      "id": "origination_date-013",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "2026-02-30",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "30 February"
+    },
+    {
+      "id": "origination_date-014",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "2026-13-01",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "month 13"
+    },
+    {
+      "id": "origination_date-015",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "13/45/2026",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "month 13, day 45"
+    },
+    {
+      "id": "origination_date-016",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "14/08/2026",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "day first is month 14"
+    },
+    {
+      "id": "origination_date-017",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "08/14/26",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "two digit year"
+    },
+    {
+      "id": "origination_date-018",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "14-Aug-26",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "two digit year"
+    },
+    {
+      "id": "origination_date-019",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "2026-8-14",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "one digit month"
+    },
+    {
+      "id": "origination_date-020",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1-Aug-2026",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "one digit day"
+    },
+    {
+      "id": "origination_date-021",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "14-Sept-2026",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "four letter month"
+    },
+    {
+      "id": "origination_date-022",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "14-Agu-2026",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "not an English month"
+    },
+    {
+      "id": "origination_date-023",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "20260814",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "no separators"
+    },
+    {
+      "id": "origination_date-024",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "2026-08-14T00:00",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "time attached"
+    },
+    {
+      "id": "origination_date-025",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "٢٠٢٦-٠٨-١٤",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "Arabic-Indic digits"
+    },
+    {
+      "id": "origination_date-026",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "２０２６-08-14",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "full width year"
+    },
+    {
+      "id": "origination_date-027",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "14-Ａug-2026",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "full width A in the month"
+    },
+    {
+      "id": "origination_date-028",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": " 2026-08-14 ",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": "2026-08-14"
+      },
+      "note": "ASCII spaces trimmed"
+    },
+    {
+      "id": "origination_date-029",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": " 2026-08-14",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "DATE_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "a non-breaking space is not trimmed"
+    },
+    {
+      "id": "origination_date-030",
+      "field": "origination_date",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "origination_date",
+            "problem": "MISSING_REQUIRED_FIELD"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "empty"
+    },
+    {
+      "id": "original_amount-001",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "23450.17",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": 2345017
+      },
+      "note": "d+.dd"
+    },
+    {
+      "id": "original_amount-002",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "$23,450.17",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": 2345017
+      },
+      "note": "dollar sign and thousands comma"
+    },
+    {
+      "id": "original_amount-003",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "$123,456.78",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": 12345678
+      },
+      "note": "comma in the right place"
+    },
+    {
+      "id": "original_amount-004",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "23450",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_FORMAT_NORMALISED"
+          }
+        ],
+        "canonical": 2345000
+      },
+      "note": "no decimals"
+    },
+    {
+      "id": "original_amount-005",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "23450.5",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_FORMAT_NORMALISED"
+          }
+        ],
+        "canonical": 2345050
+      },
+      "note": "one decimal"
+    },
+    {
+      "id": "original_amount-006",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "$23,450",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_FORMAT_NORMALISED"
+          }
+        ],
+        "canonical": 2345000
+      },
+      "note": "dollar sign and comma, no decimals"
+    },
+    {
+      "id": "original_amount-007",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "100.00",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": 10000
+      },
+      "note": "lower bound"
+    },
+    {
+      "id": "original_amount-008",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "99.99",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_OUT_OF_RANGE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "below the lower bound"
+    },
+    {
+      "id": "original_amount-009",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "250000.00",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": 25000000
+      },
+      "note": "upper bound"
+    },
+    {
+      "id": "original_amount-010",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "$250,000.00",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": 25000000
+      },
+      "note": "upper bound with separators"
+    },
+    {
+      "id": "original_amount-011",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "250000.01",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_OUT_OF_RANGE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "above the upper bound"
+    },
+    {
+      "id": "original_amount-012",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1111111111111111111111111111111111111111.00",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_OUT_OF_RANGE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "40 digit amount"
+    },
+    {
+      "id": "original_amount-013",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "-23450.00",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_OUT_OF_RANGE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "leading minus"
+    },
+    {
+      "id": "original_amount-014",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "-$23,450.00",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_OUT_OF_RANGE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "leading minus before an accepted form"
+    },
+    {
+      "id": "original_amount-015",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "$-23450.00",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "minus after the dollar sign"
+    },
+    {
+      "id": "original_amount-016",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "+23450.00",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "UNSAFE_CHARACTERS"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "a leading + is a formula character"
+    },
+    {
+      "id": "original_amount-017",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "23450.171",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "three decimals"
+    },
+    {
+      "id": "original_amount-018",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "(23450.17)",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "parentheses"
+    },
+    {
+      "id": "original_amount-019",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "N/A",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "text"
+    },
+    {
+      "id": "original_amount-020",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "$23,45.00",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "comma in the wrong place"
+    },
+    {
+      "id": "original_amount-021",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "$2,3450.00",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "comma in the wrong place"
+    },
+    {
+      "id": "original_amount-022",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "$23,4500.00",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "four digits after a comma"
+    },
+    {
+      "id": "original_amount-023",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "23450.",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "a point without decimals"
+    },
+    {
+      "id": "original_amount-024",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": ".50",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "no whole dollars"
+    },
+    {
+      "id": "original_amount-025",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1e3",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "exponent"
+    },
+    {
+      "id": "original_amount-026",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "0x10",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "hexadecimal"
+    },
+    {
+      "id": "original_amount-027",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "1_000.00",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "underscore separator"
+    },
+    {
+      "id": "original_amount-028",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "23 450.00",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "space separator"
+    },
+    {
+      "id": "original_amount-029",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "٢٣٤٥٠.00",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "Arabic-Indic digits"
+    },
+    {
+      "id": "original_amount-030",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "$٣٣,٤٥٦.٧٨",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "Arabic-Indic digits with separators"
+    },
+    {
+      "id": "original_amount-031",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "２３４５０.00",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "full width digits"
+    },
+    {
+      "id": "original_amount-032",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "2345².00",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "superscript two"
+    },
+    {
+      "id": "original_amount-033",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "23450.١٧",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "Arabic-Indic decimals"
+    },
+    {
+      "id": "original_amount-034",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": " 23450.17",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "a non-breaking space is not trimmed"
+    },
+    {
+      "id": "original_amount-035",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": " 23450.17 ",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "WHITESPACE_TRIMMED"
+          }
+        ],
+        "canonical": 2345017
+      },
+      "note": "ASCII spaces trimmed"
+    },
+    {
+      "id": "original_amount-036",
+      "field": "original_amount",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "MISSING_REQUIRED_FIELD"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "empty"
+    },
+    {
+      "id": "current_balance-001",
+      "field": "current_balance",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "18234.55",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": 1823455
+      },
+      "note": "d+.dd"
+    },
+    {
+      "id": "current_balance-002",
+      "field": "current_balance",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "$18,234.55",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": 1823455
+      },
+      "note": "dollar sign and comma"
+    },
+    {
+      "id": "current_balance-003",
+      "field": "current_balance",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "0.01",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": 1
+      },
+      "note": "one cent: a balance has no lower bound above zero"
+    },
+    {
+      "id": "current_balance-004",
+      "field": "current_balance",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "0.00",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "current_balance",
+            "problem": "ZERO_BALANCE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "zero"
+    },
+    {
+      "id": "current_balance-005",
+      "field": "current_balance",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "0",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "current_balance",
+            "problem": "AMOUNT_FORMAT_NORMALISED"
+          },
+          {
+            "field": "current_balance",
+            "problem": "ZERO_BALANCE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "zero without decimals"
+    },
+    {
+      "id": "current_balance-006",
+      "field": "current_balance",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "-5.00",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "current_balance",
+            "problem": "AMOUNT_OUT_OF_RANGE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "negative"
+    },
+    {
+      "id": "current_balance-007",
+      "field": "current_balance",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "18234.5",
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "current_balance",
+            "problem": "AMOUNT_FORMAT_NORMALISED"
+          }
+        ],
+        "canonical": 1823450
+      },
+      "note": "one decimal"
+    },
+    {
+      "id": "current_balance-008",
+      "field": "current_balance",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "18,234.55",
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": 1823455
+      },
+      "note": "commas without a dollar sign"
+    },
+    {
+      "id": "current_balance-009",
+      "field": "current_balance",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": "abc",
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "current_balance",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "text"
+    },
+    {
+      "id": "row-001",
+      "field": "row",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": {
+        "header": [
+          "Loan #",
+          "VIN",
+          "Cust ID",
+          "Orig Date",
+          "Orig Amt",
+          "Curr Bal",
+          "APR"
+        ],
+        "cells": [
+          "SAF-1",
+          "1HGCM82633A004352",
+          "C0048213",
+          "08/14/2026",
+          "$23,450.17",
+          "$18,234.55",
+          "7.9"
+        ]
+      },
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": {
+          "lender_loan_number": "SAF-1",
+          "vin": "1HGCM82633A004352",
+          "borrower_ref": "C0048213",
+          "origination_date": "2026-08-14",
+          "original_amount": 2345017,
+          "current_balance": 1823455
+        }
+      },
+      "note": "a clean Summit row; other columns are ignored"
+    },
+    {
+      "id": "row-002",
+      "field": "row",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": {
+        "header": [
+          "loan_id",
+          "vehicle_vin",
+          "borrower_id",
+          "origination_date",
+          "original_amount",
+          "current_balance"
+        ],
+        "cells": [
+          "LMC-77",
+          "1hgcm82633a004352",
+          "LK-123456",
+          "2026-08-14",
+          "23450.17",
+          "18234.55"
+        ]
+      },
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CASE_NORMALISED"
+          },
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_NORMALISED"
+          }
+        ],
+        "canonical": {
+          "lender_loan_number": "LMC-77",
+          "vin": "1HGCM82633A004352",
+          "borrower_ref": "LK123456",
+          "origination_date": "2026-08-14",
+          "original_amount": 2345017,
+          "current_balance": 1823455
+        }
+      },
+      "note": "a Lakeside row with two fixes"
+    },
+    {
+      "id": "row-003",
+      "field": "row",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": {
+        "header": [
+          "Loan #",
+          "VIN",
+          "Cust ID",
+          "Orig Date",
+          "Orig Amt",
+          "Curr Bal",
+          "APR"
+        ],
+        "cells": [
+          "SAF-1",
+          "1HGCM82633A004352",
+          "C0048213",
+          "08/14/2026",
+          "$23,450.17",
+          "$23,450.17",
+          "7.9"
+        ]
+      },
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": {
+          "lender_loan_number": "SAF-1",
+          "vin": "1HGCM82633A004352",
+          "borrower_ref": "C0048213",
+          "origination_date": "2026-08-14",
+          "original_amount": 2345017,
+          "current_balance": 2345017
+        }
+      },
+      "note": "balance equal to the original"
+    },
+    {
+      "id": "row-004",
+      "field": "row",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": {
+        "header": [
+          "Loan #",
+          "VIN",
+          "Cust ID",
+          "Orig Date",
+          "Orig Amt",
+          "Curr Bal",
+          "APR"
+        ],
+        "cells": [
+          "SAF-1",
+          "1HGCM82633A004352",
+          "C0048213",
+          "08/14/2026",
+          "$23,450.17",
+          "$23,450.18",
+          "7.9"
+        ]
+      },
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "current_balance",
+            "problem": "BALANCE_EXCEEDS_ORIGINAL"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "balance one cent above the original"
+    },
+    {
+      "id": "row-005",
+      "field": "row",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": {
+        "header": [
+          "Loan #",
+          "VIN",
+          "Cust ID",
+          "Orig Date",
+          "Orig Amt",
+          "Curr Bal",
+          "APR"
+        ],
+        "cells": [
+          "SAF-1",
+          "1HGCM82633A004352",
+          "C0048213",
+          "08/14/2026",
+          "$23,450.17",
+          "0.00",
+          "7.9"
+        ]
+      },
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "current_balance",
+            "problem": "ZERO_BALANCE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "zero balance"
+    },
+    {
+      "id": "row-006",
+      "field": "row",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": {
+        "header": [
+          "Loan #",
+          "VIN",
+          "Cust ID",
+          "Orig Date",
+          "Orig Amt",
+          "Curr Bal",
+          "APR"
+        ],
+        "cells": [
+          "SAF-1",
+          "1HGCM82633A004352",
+          "C0048213",
+          "08/14/2026",
+          "99.99",
+          "50.00",
+          "7.9"
+        ]
+      },
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_OUT_OF_RANGE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "original below 100.00"
+    },
+    {
+      "id": "row-007",
+      "field": "row",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": {
+        "header": [
+          "Loan #",
+          "VIN",
+          "Cust ID",
+          "Orig Date",
+          "Orig Amt",
+          "Curr Bal",
+          "APR"
+        ],
+        "cells": [
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          ""
+        ]
+      },
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "row",
+            "problem": "NON_DATA_ROW"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "all cells empty"
+    },
+    {
+      "id": "row-008",
+      "field": "row",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": {
+        "header": [
+          "Loan #",
+          "VIN",
+          "Cust ID",
+          "Orig Date",
+          "Orig Amt",
+          "Curr Bal",
+          "APR"
+        ],
+        "cells": [
+          " ",
+          "  ",
+          "",
+          "",
+          "",
+          "",
+          ""
+        ]
+      },
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "row",
+            "problem": "NON_DATA_ROW"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "all cells blank"
+    },
+    {
+      "id": "row-009",
+      "field": "row",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": {
+        "header": [
+          "Loan #",
+          "VIN",
+          "Cust ID",
+          "Orig Date",
+          "Orig Amt",
+          "Curr Bal",
+          "APR"
+        ],
+        "cells": [
+          "TOTAL",
+          "",
+          "",
+          "",
+          "$23,724,122.75",
+          "",
+          ""
+        ]
+      },
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "row",
+            "problem": "NON_DATA_ROW"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "Summit totals row"
+    },
+    {
+      "id": "row-010",
+      "field": "row",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": {
+        "header": [
+          "Loan #",
+          "VIN",
+          "Cust ID",
+          "Orig Date",
+          "Orig Amt",
+          "Curr Bal",
+          "APR"
+        ],
+        "cells": [
+          " totals ",
+          "",
+          "",
+          "",
+          "",
+          "",
+          ""
+        ]
+      },
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "row",
+            "problem": "NON_DATA_ROW"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "totals word in any case after trimming"
+    },
+    {
+      "id": "row-011",
+      "field": "row",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": {
+        "header": [
+          "Loan #",
+          "VIN",
+          "Cust ID",
+          "Orig Date",
+          "Orig Amt",
+          "Curr Bal",
+          "APR"
+        ],
+        "cells": [
+          "Grand Total",
+          "",
+          "",
+          "",
+          "1.00",
+          "",
+          ""
+        ]
+      },
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "row",
+            "problem": "NON_DATA_ROW"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "grand total"
+    },
+    {
+      "id": "row-012",
+      "field": "row",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": {
+        "header": [
+          "Loan #",
+          "VIN",
+          "Cust ID",
+          "Orig Date",
+          "Orig Amt",
+          "Curr Bal",
+          "APR"
+        ],
+        "cells": [
+          "SUBTOTAL",
+          "x"
+        ]
+      },
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "row",
+            "problem": "NON_DATA_ROW"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "a totals row with too few cells is a non-data row, not a count mismatch"
+    },
+    {
+      "id": "row-013",
+      "field": "row",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": {
+        "header": [
+          "Loan #",
+          "VIN",
+          "Cust ID",
+          "Orig Date",
+          "Orig Amt",
+          "Curr Bal",
+          "APR"
+        ],
+        "cells": [
+          "TOTALLY",
+          "1HGCM82633A004352",
+          "C0048213",
+          "08/14/2026",
+          "$23,450.17",
+          "$18,234.55",
+          "7.9"
+        ]
+      },
+      "expected": {
+        "action": "ACCEPT",
+        "problems": [],
+        "canonical": {
+          "lender_loan_number": "TOTALLY",
+          "vin": "1HGCM82633A004352",
+          "borrower_ref": "C0048213",
+          "origination_date": "2026-08-14",
+          "original_amount": 2345017,
+          "current_balance": 1823455
+        }
+      },
+      "note": "a word that only starts with TOTAL is data"
+    },
+    {
+      "id": "row-014",
+      "field": "row",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": {
+        "header": [
+          "Loan #",
+          "VIN",
+          "Cust ID",
+          "Orig Date",
+          "Orig Amt",
+          "Curr Bal",
+          "APR"
+        ],
+        "cells": [
+          "SAF-1",
+          "1HGCM82633A004352",
+          "C0048213",
+          "08/14/2026",
+          "$23,450.17",
+          "$18,234.55"
+        ]
+      },
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "row",
+            "problem": "COLUMN_COUNT_MISMATCH"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "one cell fewer than the header"
+    },
+    {
+      "id": "row-015",
+      "field": "row",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": {
+        "header": [
+          "Loan #",
+          "VIN",
+          "Cust ID",
+          "Orig Date",
+          "Orig Amt",
+          "Curr Bal",
+          "APR"
+        ],
+        "cells": [
+          "SAF-1",
+          "1HGCM82633A004352",
+          "C0048213",
+          "08/14/2026",
+          "$23,450.17",
+          "$18,234.55",
+          "7.9",
+          "extra"
+        ]
+      },
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "row",
+            "problem": "COLUMN_COUNT_MISMATCH"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "one cell more than the header"
+    },
+    {
+      "id": "row-016",
+      "field": "row",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": {
+        "header": [
+          "Loan #",
+          "VIN",
+          "Cust ID",
+          "Orig Date",
+          "Orig Amt",
+          "Curr Bal",
+          "APR"
+        ],
+        "cells": [
+          "SAF-1",
+          "1hgcm82633a004352",
+          "C0048213",
+          "2026-02-30",
+          "N/A",
+          "$18,234.55",
+          "7.9"
+        ]
+      },
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CASE_NORMALISED"
+          },
+          {
+            "field": "origination_date",
+            "problem": "DATE_UNPARSEABLE"
+          },
+          {
+            "field": "original_amount",
+            "problem": "AMOUNT_UNPARSEABLE"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "every field is evaluated: one fix and two rejections"
+    },
+    {
+      "id": "row-017",
+      "field": "row",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": {
+        "header": [
+          "Loan #",
+          "VIN",
+          "Cust ID",
+          "Orig Date",
+          "Orig Amt",
+          "Curr Bal",
+          "APR"
+        ],
+        "cells": [
+          "=1+1",
+          "1HGCM82633A004352",
+          "c00",
+          "08/14/2026",
+          "$23,450.17",
+          "$18,234.55",
+          "7.9"
+        ]
+      },
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "lender_loan_number",
+            "problem": "UNSAFE_CHARACTERS"
+          },
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_NORMALISED"
+          },
+          {
+            "field": "borrower_ref",
+            "problem": "BORROWER_REF_INVALID"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "unsafe loan number reports only UNSAFE_CHARACTERS for that field"
+    },
+    {
+      "id": "row-018",
+      "field": "row",
+      "kind": "PLEDGE",
+      "as_of_date": "2026-11-05",
+      "input": {
+        "header": [
+          "Loan #",
+          "VIN",
+          "Cust ID",
+          "Orig Date",
+          "Orig Amt",
+          "Curr Bal",
+          "APR"
+        ],
+        "cells": [
+          "SAF-1",
+          "",
+          "C0048213",
+          "08/14/2026",
+          "$23,450.17",
+          "$18,234.55",
+          "7.9"
+        ]
+      },
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "MISSING_REQUIRED_FIELD"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "an empty VIN reports only MISSING_REQUIRED_FIELD"
+    },
+    {
+      "id": "row-019",
+      "field": "row",
+      "kind": "RELEASE",
+      "as_of_date": "2026-11-05",
+      "input": {
+        "header": [
+          "Loan #",
+          "VIN",
+          "Cust ID",
+          "Orig Date",
+          "Orig Amt",
+          "Curr Bal",
+          "APR"
+        ],
+        "cells": [
+          "",
+          "1hgcm82633a004352",
+          "",
+          "",
+          "",
+          "",
+          ""
+        ]
+      },
+      "expected": {
+        "action": "FIXED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "VIN_CASE_NORMALISED"
+          }
+        ],
+        "canonical": {
+          "vin": "1HGCM82633A004352"
+        }
+      },
+      "note": "release tape: only the row rules and the VIN rules apply"
+    },
+    {
+      "id": "row-020",
+      "field": "row",
+      "kind": "RELEASE",
+      "as_of_date": "2026-11-05",
+      "input": {
+        "header": [
+          "Loan #",
+          "VIN",
+          "Cust ID",
+          "Orig Date",
+          "Orig Amt",
+          "Curr Bal",
+          "APR"
+        ],
+        "cells": [
+          "SAF-1",
+          "",
+          "C0048213",
+          "",
+          "",
+          "",
+          ""
+        ]
+      },
+      "expected": {
+        "action": "REJECTED",
+        "problems": [
+          {
+            "field": "vin",
+            "problem": "MISSING_REQUIRED_FIELD"
+          }
+        ],
+        "canonical": null
+      },
+      "note": "release tape without a VIN"
+    }
+  ]
+}

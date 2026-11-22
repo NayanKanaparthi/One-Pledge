@@ -5,7 +5,9 @@ from __future__ import annotations
 import io
 import json
 import shutil
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -174,3 +176,54 @@ def test_an_unexpected_failure_is_one_sentence_and_the_traceback_needs_debug(
         main(["check", "--debug", "--contracts-dir", str(contracts_dir)], CliOutput(io.StringIO(), err)) == 1
     )
     assert "Traceback (most recent call last)" in err.getvalue() and "RuntimeError: boom" in err.getvalue()
+
+
+def edit_cleaning_cases(broken: Path, change: Callable[[dict[str, Any]], None]) -> None:
+    path = broken / "examples" / "cleaning_cases.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    change(document)
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+
+def test_the_cleaning_table_is_checked(contracts_dir: Path) -> None:
+    code, text = run(contracts_dir)
+    assert code == 0
+    line = next(line for line in text.splitlines() if "cleaning cases" in line)
+    assert line.startswith("contracts-check: OK   cleaning cases: ") and line.endswith(
+        "have the documented shape"
+    )
+
+
+@pytest.mark.parametrize(
+    ("change", "fragment"),
+    [
+        (lambda d: d.update(cases=d["cases"][:119]), "holds 119 cases; at least 120 are required"),
+        (lambda d: d["cases"][2]["expected"].update(action="ACCEPT"), "does not follow from its problems"),
+        (lambda d: d["cases"][0]["expected"].update(canonical=None), "canonical must be null exactly"),
+        (
+            lambda d: d["cases"][3]["expected"]["problems"].append({"field": "vin", "problem": "LOOKS_ODD"}),
+            "SPEC 10.4 problem",
+        ),
+        (lambda d: d["cases"][1].update(kind="LEASE"), "unknown tape kind"),
+        (lambda d: d["cases"][1].update(as_of_date="2026-W01-1"), "as_of_date that is not YYYY-MM-DD"),
+        (lambda d: d["cases"][2].pop("note"), "has keys"),
+        (lambda d: d["cases"].append(d["cases"][0]), "is listed twice"),
+        (lambda d: d.update(cases=[c for c in d["cases"] if c["field"] != "row"]), "no case for row"),
+    ],
+)
+def test_a_malformed_cleaning_table_is_named(
+    contracts_dir: Path, tmp_path: Path, change: Callable[[dict[str, Any]], None], fragment: str
+) -> None:
+    broken = copy_contracts(contracts_dir, tmp_path)
+    edit_cleaning_cases(broken, change)
+    code, text = run(broken)
+    assert code == 1
+    assert fragment in text
+
+
+def test_a_missing_cleaning_table_is_one_problem(contracts_dir: Path, tmp_path: Path) -> None:
+    broken = copy_contracts(contracts_dir, tmp_path)
+    (broken / "examples" / "cleaning_cases.json").unlink()
+    code, text = run(broken)
+    assert code == 1 and "cleaning_cases.json cannot be read" in text
+    assert text.splitlines()[-1] == "contracts-check: FAILED (1 problem)"
