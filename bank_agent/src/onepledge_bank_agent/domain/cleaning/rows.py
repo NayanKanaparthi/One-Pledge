@@ -13,7 +13,6 @@ number of header cells.
 
 from __future__ import annotations
 
-import unicodedata
 from collections.abc import Callable, Iterable, Sequence
 from datetime import date
 
@@ -44,7 +43,9 @@ from onepledge_bank_agent.domain.text_rules import ascii_upper, split_ascii_whit
 from onepledge_bank_agent.domain.values import CleaningIssue, LoanTerms
 
 NON_DATA_MARKERS = frozenset({"TOTAL", "TOTALS", "GRAND TOTAL", "SUBTOTAL"})
-UNSAFE_LEADING = frozenset("=+@\t\r")
+UNSAFE_LEADING = frozenset("=+@")
+CONTROL_LIMIT = 0x20
+DELETE = 0x7F
 FIELD_ORDER: tuple[str, ...] = (
     ROW,
     LOAN_NUMBER,
@@ -60,11 +61,9 @@ def _issue_order(issue: CleaningIssue) -> tuple[int, str]:
     return FIELD_ORDER.index(issue.field), issue.problem.value
 
 
-def is_unsafe(raw: str, trimmed: str) -> bool:
-    """A formula leading character (before or after trimming) or any control character."""
-    if (raw and raw[0] in UNSAFE_LEADING) or (trimmed and trimmed[0] in UNSAFE_LEADING):
-        return True
-    return any(unicodedata.category(char) == "Cc" for char in raw)
+def has_control_character(raw: str) -> bool:
+    """Any character U+0000 to U+001F or U+007F, anywhere in the cell as sent (SPEC_DECISIONS 82)."""
+    return any(ord(char) < CONTROL_LIMIT or ord(char) == DELETE for char in raw)
 
 
 def row_rule(cells: Sequence[str], header_map: HeaderMap) -> CleaningIssue | None:
@@ -79,12 +78,16 @@ def row_rule(cells: Sequence[str], header_map: HeaderMap) -> CleaningIssue | Non
 
 
 def clean_field[T](field: str, raw: str, rule: Callable[[str], FieldResult[T]]) -> FieldResult[T]:
-    """Trim, empty, unsafe characters, then the field's own rule."""
+    """SPEC_DECISIONS 82, in order: a control character anywhere in the cell as sent is UNSAFE_CHARACTERS
+    (trimming is still recorded); trimming; empty; a formula lead `=`, `+`, `@` on the trimmed cell;
+    then the field's own rule."""
     trimmed = trim(raw)
     trimming = (fixed(field, CleaningProblem.WHITESPACE_TRIMMED),) if trimmed != raw else ()
+    if has_control_character(raw):
+        return FieldResult.refused(field, CleaningProblem.UNSAFE_CHARACTERS, *trimming)
     if not trimmed:
         return FieldResult.refused(field, CleaningProblem.MISSING_REQUIRED_FIELD, *trimming)
-    if is_unsafe(raw, trimmed):
+    if trimmed[0] in UNSAFE_LEADING:
         return FieldResult.refused(field, CleaningProblem.UNSAFE_CHARACTERS, *trimming)
     result = rule(trimmed)
     return FieldResult(result.value, (*trimming, *result.issues))

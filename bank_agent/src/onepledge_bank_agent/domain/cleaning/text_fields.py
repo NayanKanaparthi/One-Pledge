@@ -6,17 +6,16 @@ from onepledge_bank_agent.domain.cleaning.header import BORROWER_REF, LOAN_NUMBE
 from onepledge_bank_agent.domain.cleaning.model import FieldResult, fixed
 from onepledge_bank_agent.domain.enums import CleaningProblem
 from onepledge_bank_agent.domain.errors import InvalidValueError
-from onepledge_bank_agent.domain.text_rules import ascii_upper, is_ascii_alnum
+from onepledge_bank_agent.domain.text_rules import ascii_upper
 from onepledge_bank_agent.domain.values import BorrowerRef, LenderLoanNumber
 
 BORROWER_SEPARATORS = frozenset(" -_./")
 
 
 def clean_borrower_ref(text: str) -> FieldResult[BorrowerRef]:
-    """ASCII upper case and the separators space, `-`, `_`, `.`, `/` removed; any other character outside
-    `A-Za-z0-9` is refused, never dropped (SPEC_DECISIONS 45). Then the pattern must hold."""
-    if any(char not in BORROWER_SEPARATORS and not is_ascii_alnum(char) for char in text):
-        return FieldResult.refused(BORROWER_REF, CleaningProblem.BORROWER_REF_INVALID)
+    """SPEC_DECISIONS 83: normalise (ASCII upper case, the separators space, `-`, `_`, `.`, `/` removed),
+    record the normalisation when it changed the cell, then validate the pattern; a character outside
+    `A-Za-z0-9` is never dropped, so it fails the pattern with the normalisation still recorded."""
     canonical = ascii_upper("".join(char for char in text if char not in BORROWER_SEPARATORS))
     issues = () if canonical == text else (fixed(BORROWER_REF, CleaningProblem.BORROWER_REF_NORMALISED),)
     try:
