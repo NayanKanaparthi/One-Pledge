@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import io
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -129,15 +130,16 @@ def _day(cell: str) -> date | None:
     return None
 
 
-def _borrower_ok(cell: str) -> bool:
+def _borrower(cell: str) -> str | None:
+    """The reference with the five separators removed and letters in upper case, or None."""
     kept = ""
     for char in cell:
         if char in _BORROWER_SEPARATORS:
             continue
         if char not in _DIGIT and _upper(char) not in _UPPER:
-            return False
-        kept += char
-    return 4 <= len(kept) <= 32
+            return None
+        kept += _upper(char)
+    return kept if 4 <= len(kept) <= 32 else None
 
 
 def _loan_ok(cell: str) -> bool:
@@ -157,6 +159,89 @@ def _unsafe(raw: str) -> bool:
     )
 
 
+type CellValue = str | int
+
+
+def _date_value(text: str, as_of: date) -> CellValue | None:
+    day = _day(text)
+    return day.isoformat() if day is not None and date(2000, 1, 1) <= day <= as_of else None
+
+
+def _original_value(text: str, as_of: date) -> CellValue | None:
+    amount = _cents(text)
+    return amount if amount is not None and 10_000 <= amount <= 25_000_000 else None
+
+
+def _balance_value(text: str, as_of: date) -> CellValue | None:
+    amount = _cents(text)
+    return amount if amount is not None and amount > 0 else None
+
+
+def _vin_value(text: str, as_of: date) -> CellValue | None:
+    return _vin(text)
+
+
+def _loan_value(text: str, as_of: date) -> CellValue | None:
+    return text if _loan_ok(text) else None
+
+
+def _borrower_value(text: str, as_of: date) -> CellValue | None:
+    return _borrower(text)
+
+
+_FIELD_VALUES: dict[str, Callable[[str, date], CellValue | None]] = {
+    "vin": _vin_value,
+    "lender_loan_number": _loan_value,
+    "borrower_ref": _borrower_value,
+    "origination_date": _date_value,
+    "original_amount": _original_value,
+    "current_balance": _balance_value,
+}
+
+
+def cell_value(field: str, cell: str, as_of: date) -> CellValue | None:
+    """The canonical value of one required cell, or None when the cell is refused.
+
+    Amounts are cents, a date is ISO text. The rule across the two amounts (the balance
+    is not above the original) is a row rule, applied by `row_values`.
+    """
+    if not _trim(cell) or _unsafe(cell):
+        return None
+    return _FIELD_VALUES[field](_trim(cell), as_of)
+
+
+FIELDS = (
+    "lender_loan_number",
+    "vin",
+    "borrower_ref",
+    "origination_date",
+    "original_amount",
+    "current_balance",
+)
+
+
+def row_values(
+    header: list[str], cells: list[str], release: bool, as_of: date
+) -> dict[str, CellValue] | None:
+    """The canonical values of a row whose first six columns are the six fields in SPEC order, or None.
+
+    A RELEASE row needs only its VIN.
+    """
+    if not any(_trim(c) for c in cells) or " ".join(_words(_upper(cells[0]))) in _TOTALS:
+        return None
+    if len(cells) != len(header):
+        return None
+    wanted = ("vin",) if release else FIELDS
+    values = {field: cell_value(field, cells[FIELDS.index(field)], as_of) for field in wanted}
+    if any(value is None for value in values.values()):
+        return None
+    found = {field: value for field, value in values.items() if value is not None}
+    balance, original = found.get("current_balance"), found.get("original_amount")
+    if isinstance(balance, int) and isinstance(original, int) and balance > original:
+        return None
+    return found
+
+
 @dataclass(frozen=True)
 class Accepted:
     """An accepted row's canonical terms."""
@@ -169,32 +254,17 @@ class Accepted:
 
 def accepted_rows(tape: Path, as_of: date) -> list[Accepted]:
     """The rows a BACK_BOOK or PLEDGE tape keeps on a bank with no loans yet, first copy of a VIN only."""
-    text = tape.read_bytes().decode("utf-8").removeprefix("﻿")
+    text = tape.read_bytes().decode("utf-8").removeprefix("\ufeff")
     records = [r for r in csv.reader(io.StringIO(text, newline="")) if r]
     header, found, seen = records[0], [], set()
     for number, record in enumerate(records[1:], start=1):
-        if (
-            len(record) != len(header)
-            or not any(_trim(c) for c in record)
-            or " ".join(_words(_upper(record[0]))) in _TOTALS
-        ):
+        values = row_values(header, record, False, as_of)
+        if values is None or values["vin"] in seen:
             continue
-        cells = record[:6]
-        if any(not _trim(c) or _unsafe(c) for c in cells):
-            continue
-        loan, vin_cell, borrower, start, original, balance = (_trim(c) for c in cells)
-        vin, day = _vin(vin_cell), _day(start)
-        amount, left = _cents(original), _cents(balance)
-        if vin is None or day is None or amount is None or left is None:
-            continue
-        if not (_borrower_ok(borrower) and _loan_ok(loan)):
-            continue
-        if not (date(2000, 1, 1) <= day <= as_of and 10_000 <= amount <= 25_000_000 and 0 < left <= amount):
-            continue
-        if vin in seen:
-            continue
+        vin, origination, amount = values["vin"], values["origination_date"], values["original_amount"]
+        assert isinstance(vin, str) and isinstance(origination, str) and isinstance(amount, int)
         seen.add(vin)
-        found.append(Accepted(number, vin, day, amount))
+        found.append(Accepted(number, vin, _iso(origination), amount))
     return found
 
 
