@@ -1,8 +1,10 @@
 """`SqlDatabaseControlInspector`: which database controls are in force right now (SPEC 12.4 point 6, 15.5).
 
-Reads `pg_trigger` and `alembic_version` as the role this process connects with, which for
-every runtime process is the app role. A trigger is enabled when it exists and `tgenabled`
-is `O` (origin) or `A` (always). The five role controls come from the one inspection of
+Reads `pg_trigger`, `pg_proc` and `alembic_version` as the role this process connects with,
+which for every runtime process is the app role. A trigger control is true only when each
+trigger it covers is installed exactly as the guard manifest says (`guard_manifest.py`:
+table, `tgtype`, function and the hash of its source) and enabled (SPEC_DECISIONS 90). The
+five role controls come from the one inspection of
 SPEC_DECISIONS 72 (`role_check.inspect_role`), table and column level, so the report sees
 exactly what the startup guard sees.
 """
@@ -14,13 +16,13 @@ from collections.abc import Mapping
 from sqlalchemy import Engine, text
 
 from onepledge_bank_agent.domain.integrity import DatabaseControl
+from onepledge_bank_agent.infrastructure.db.guard_manifest import guards_named, in_force, installed_triggers
 from onepledge_bank_agent.infrastructure.db.role_check import SCHEMA, Violation, inspect_role
 
 INSERT_ONLY_EVIDENCE = (
     "cleaning_issues", "submission_items", "local_checks", "loan_tokens", "certificates", "checkpoints_seen",
     "integrity_runs", "registry_messages_quarantined",
 )  # fmt: skip
-ENABLED = ("O", "A")
 IDENTITY = frozenset(
     {
         Violation.ROLE_IS_SUPERUSER,
@@ -30,10 +32,6 @@ IDENTITY = frozenset(
     }
 )
 """Points 1 to 3 of SPEC_DECISIONS 72: what `APP_ROLE_IS_NOT_OWNER_OR_SUPERUSER` requires."""
-TRIGGERS = text(
-    "SELECT t.tgname, t.tgenabled FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
-    "WHERE NOT t.tgisinternal AND c.relnamespace = 'public'::regnamespace"
-)
 REVISION = text(
     "SELECT CASE WHEN to_regclass('public.alembic_version') IS NULL THEN NULL "
     "ELSE (SELECT version_num FROM alembic_version LIMIT 1) END"
@@ -50,12 +48,12 @@ class SqlDatabaseControlInspector:
     def controls(self) -> Mapping[DatabaseControl, bool]:
         """Every control and whether it holds; the role controls come from `inspect_role`."""
         with self._engine.connect() as connection:
-            triggers = {str(name): str(state) for name, state in connection.execute(TRIGGERS)}
+            triggers = installed_triggers(connection)
             violations = inspect_role(connection)
             revision = connection.execute(REVISION).scalar_one_or_none()
 
         def enabled(*names: str) -> bool:
-            return all(triggers.get(name) in ENABLED for name in names)
+            return in_force(triggers, guards_named(*names))
 
         def holds(table: str, privilege: str) -> bool:
             extra = f"{SCHEMA}.{table} {privilege}"
