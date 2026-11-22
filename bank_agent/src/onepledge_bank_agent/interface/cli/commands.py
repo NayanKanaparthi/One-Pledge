@@ -26,7 +26,6 @@ from onepledge_bank_agent.infrastructure.settings import (
     load_admin_settings,
     load_runtime_settings,
 )
-from onepledge_bank_agent.infrastructure.stop_signal import EventStopSignal
 from onepledge_bank_agent.interface.cli.output import Output, short_hash
 from onepledge_bank_agent.interface.cli.registry_commands import (
     integrity_report,
@@ -198,18 +197,17 @@ def _worker(arguments: argparse.Namespace, output: Output, collaborators: Collab
         composition.schema().require_head()
         composition.role_guard().require_least_privilege()
         composition.startup_record().run(WORKER_PROCESS)
-        worker = composition.worker()
-        if arguments.once:
-            _report(worker.run_once(), output)
-            return
-        stop = EventStopSignal()
+        worker, stop = composition.worker(), composition.stop_signal()
 
         def request_stop(number: int, frame: FrameType | None) -> None:
             stop.request_stop()
 
         signal.signal(signal.SIGTERM, request_stop)
         signal.signal(signal.SIGINT, request_stop)
-        worker.run_until_stopped(stop)
+        if arguments.once:
+            _report(worker.run_once(), output)
+            return
+        worker.run_until_stopped()
 
 
 def _runtime_command(

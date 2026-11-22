@@ -70,6 +70,7 @@ class TokenizeLoans:
         self._blinder = blinder
         self._clock = runtime.clock
         self._faults = runtime.faults
+        self._after_unit = runtime.after_unit
         self._log = runtime.log
         self._chunk_size = chunk_size
 
@@ -125,6 +126,7 @@ class TokenizeLoans:
             count=len(tokens),
         )
         self._faults.reached(FaultPoint.AFTER_CODES_STORED)
+        self._after_unit()
         return pair
 
     def _tokens(

@@ -31,6 +31,7 @@ from onepledge_bank_agent.domain.integrity import IntegrityReport
 from onepledge_bank_agent.domain.loan import Loan
 from onepledge_bank_agent.domain.tape import TapeSubmission
 from onepledge_bank_agent.infrastructure.clock import SystemClock
+from onepledge_bank_agent.infrastructure.stop_signal import EventStopSignal
 from onepledge_bank_agent.interface.composition import Collaborators, RuntimeComposition
 
 
@@ -81,7 +82,9 @@ class BankAgentHarness:
             faults=faults or NoFaults(),
             http_client_factory=combined_factory(services.outside.client_factory(), services.doubles),
             sleep=_no_sleep,
+            stop=EventStopSignal(),
         )
+        self.stop = self.collaborators.stop
         self.composition = RuntimeComposition(self.settings, self.collaborators)
         self.analyst = insert_user(database, Role.ANALYST)
         self.officer = insert_user(database, Role.CREDIT_OFFICER)

@@ -20,7 +20,9 @@ from bank_testkit.database import BankDatabase, pairs
 from bank_testkit.doubles import HolderScalars, InProcessDoubles
 from bank_testkit.outside import InProcessOutsideRecords
 from bank_testkit.pipeline import BankAgentHarness, Services
+from onepledge_bank_agent.application.faults import FaultPoint, NoFaults
 from onepledge_bank_agent.domain.enums import TapeKind, TapeStatus
+from onepledge_bank_agent.infrastructure.stop_signal import EventStopSignal
 
 pytestmark = pytest.mark.integration
 
@@ -143,3 +145,35 @@ def test_stored_tokens_equal_an_independent_direct_evaluation_with_the_holders_s
             ).fetchall()
             stored = {str(kind): str(token) for kind, token in rows}
             assert stored == direct_tokens(doubles.scalars, terms_of_loan)
+
+
+class StopOnFirstAck(NoFaults):
+    """Requests a stop on `signal`, as SIGTERM would, while the first outbox message is acknowledged."""
+
+    def __init__(self) -> None:
+        self.signal = EventStopSignal()
+
+    def reached(self, point: FaultPoint) -> None:
+        if point is FaultPoint.BETWEEN_OUTBOX_COMMIT_AND_ACK:
+            self.signal.request_stop()
+
+
+def test_a_stop_ends_the_outbox_sync_after_the_acknowledged_message(
+    bank_db: BankDatabase, small_data: Path, small_outside: InProcessOutsideRecords, doubles: InProcessDoubles
+) -> None:
+    """SPEC_DECISIONS 51: the outbox message is the unit; the rest waits for the next start."""
+    seed_reference(bank_db, small_data)
+    ignored = "SELECT 'ignored', count(*)::text FROM audit_log WHERE action = 'REGISTRY_MESSAGE_IGNORED'"
+    stop, services = StopOnFirstAck(), Services(small_outside, doubles)
+    with BankAgentHarness(bank_db, services, faults=stop) as stopping:
+        stop.signal = stopping.stop
+        for number in range(3):
+            doubles.inject_message("HARBOR", "MARKET_NEWS", {"headline": f"note {number}"})
+        first = stopping.composition.outbox_sync().sync()
+    assert first.messages_processed == 1
+    assert int(pairs(bank_db, ignored)["ignored"]) <= 1
+    with BankAgentHarness(bank_db, services) as resumed:
+        rest = resumed.composition.outbox_sync().sync()
+        assert resumed.composition.outbox_sync().sync().messages_processed == 0
+    assert rest.messages_processed >= 2
+    assert pairs(bank_db, ignored) == {"ignored": "3"}

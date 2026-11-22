@@ -15,6 +15,7 @@ class LogEvent(StrEnum):
     TAPE_UPLOAD_REJECTED = "tape_upload_rejected"
     TAPE_STAGE_ADVANCED = "tape_stage_advanced"
     TAPE_STAGE_ATTEMPT_FAILED = "tape_stage_attempt_failed"
+    TAPE_STAGE_STOPPED = "tape_stage_stopped"
     TAPE_FAILED = "tape_failed"
     CHECK_CHUNK_COMMITTED = "check_chunk_committed"
     STAGE_UNEXPECTED_ERROR = "stage_unexpected_error"

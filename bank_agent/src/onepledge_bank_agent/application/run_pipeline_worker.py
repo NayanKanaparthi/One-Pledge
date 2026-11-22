@@ -4,7 +4,8 @@ Each step: run the periodic tasks that are due, pick the next runnable submissio
 (upload order, one facility's tapes strictly in order, backoff respected), take its
 advisory lock, and run exactly one stage. A submission whose lock another worker holds
 is skipped. With nothing to do the worker waits `PIPELINE_POLL_SECONDS`, waking early
-on a stop request; it stops between stages, so no stage is left half committed.
+on a stop request. A stop is honoured after the unit in progress (SPEC_DECISIONS 51):
+the stage commits nothing further and resumes on the next start; no new stage starts.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from typing import Protocol
 
 from onepledge_bank_agent.application.advance_submission import AdvanceSubmission, StageRun
 from onepledge_bank_agent.application.events import LogEvent
-from onepledge_bank_agent.application.ports import StopSignal, SubmissionLocks, UnitOfWorkFactory
+from onepledge_bank_agent.application.ports import SubmissionLocks, UnitOfWorkFactory
 from onepledge_bank_agent.application.runtime import Runtime
 
 CANDIDATES_PER_PICK = 20
@@ -66,22 +67,23 @@ class RunPipelineWorker:
         self._locks = locks
         self._clock = runtime.clock
         self._log = runtime.log
+        self._stop = runtime.stop
         self._settings = settings
         self._periodic = tuple(settings.periodic)
         self._last_run: dict[int, datetime] = {}
 
     def run_once(self) -> WorkerReport:
-        """Process until no submission is runnable (`worker --once`)."""
+        """Process until no submission is runnable or a stop is requested (`worker --once`)."""
         report = WorkerReport()
-        while (run := self._step()) is not None:
+        while not self._stop.is_set() and (run := self._step()) is not None:
             report.runs.append(run)
         return report
 
-    def run_until_stopped(self, stop: StopSignal) -> WorkerReport:
+    def run_until_stopped(self) -> WorkerReport:
         """Process until a stop is requested, waiting the poll interval whenever idle."""
         report = WorkerReport()
         self._log.info(LogEvent.WORKER_STARTED)
-        while not stop.is_set():
+        while not self._stop.is_set():
             try:
                 run = self._step()
             except Exception as error:  # a failed step (database down) must not end the worker
@@ -89,13 +91,15 @@ class RunPipelineWorker:
                 run = None
             if run is not None:
                 report.runs.append(run)
-            elif stop.wait(self._settings.poll_seconds):
+            elif self._stop.wait(self._settings.poll_seconds):
                 break
         self._log.info(LogEvent.WORKER_STOPPED, count=len(report.runs))
         return report
 
     def _step(self) -> StageRun | None:
         self._run_due_tasks()
+        if self._stop.is_set():
+            return None
         now = self._clock.now()
         with self._units() as unit:
             candidates = unit.tapes.runnable(self._advance.runnable_statuses, now, CANDIDATES_PER_PICK)

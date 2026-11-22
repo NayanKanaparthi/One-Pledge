@@ -74,6 +74,7 @@ from onepledge_bank_agent.infrastructure.ids import RandomIds
 from onepledge_bank_agent.infrastructure.logging import StructlogOperationalLog
 from onepledge_bank_agent.infrastructure.seed_reference_file import ReferenceFileSource
 from onepledge_bank_agent.infrastructure.settings import AdminSettings, RuntimeSettings
+from onepledge_bank_agent.infrastructure.stop_signal import EventStopSignal
 
 VIA_CLI = "cli"
 
@@ -87,6 +88,7 @@ class Collaborators:
     faults: FaultInjector = field(default_factory=NoFaults)
     http_client_factory: HttpClientFactory = make_http_client
     sleep: Callable[[float], None] = time.sleep
+    stop: EventStopSignal = field(default_factory=EventStopSignal)
 
 
 class _Resources:
@@ -96,7 +98,7 @@ class _Resources:
         self._parts = collaborators if collaborators is not None else Collaborators()
         self._engines = EngineSet()
         log = StructlogOperationalLog("onepledge_bank_agent")
-        self._runtime = Runtime(self._parts.clock, self._parts.ids, self._parts.faults, log)
+        self._runtime = Runtime(self._parts.clock, self._parts.ids, self._parts.faults, log, self._parts.stop)
         self._writer = HashChainedAuditWriter(self._parts.clock, self._parts.ids)
 
     def __enter__(self) -> Self:
@@ -211,6 +213,10 @@ class RuntimeComposition(_Resources):
         return AdvanceSubmission(
             self._app_units(), self.stages(), self._runtime, self._settings.tunables.pipeline_max_attempts
         )
+
+    def stop_signal(self) -> EventStopSignal:
+        """The process stop signal every stage of this composition checks after each unit."""
+        return self._parts.stop
 
     def worker(self) -> RunPipelineWorker:
         """The pipeline worker on the app role, with the registry outbox sync as its periodic task."""

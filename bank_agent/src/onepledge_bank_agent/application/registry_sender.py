@@ -41,6 +41,7 @@ class RegistrySender:
         self._applier = applier
         self._clock = runtime.clock
         self._faults = runtime.faults
+        self._after_unit = runtime.after_unit
         self._log = runtime.log
 
     def send(self, request_id: uuid.UUID) -> RegistryRequest:
@@ -56,6 +57,7 @@ class RegistrySender:
             raise RegistryProtocolError(answer.status)
         self._store(request, answer)
         self._faults.reached(FaultPoint.AFTER_RESPONSE_STORED)
+        self._after_unit()
         return self._stored(request_id)
 
     def _prepare(self, request_id: uuid.UUID) -> tuple[RegistryRequest, RegistrySubmission] | None:

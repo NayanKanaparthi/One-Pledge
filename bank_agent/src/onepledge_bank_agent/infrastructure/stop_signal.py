@@ -12,7 +12,7 @@ class EventStopSignal:
         self._event = threading.Event()
 
     def request_stop(self) -> None:
-        """Ask the worker to stop after the current stage."""
+        """Ask the worker to stop after the unit in progress (SPEC_DECISIONS 51)."""
         self._event.set()
 
     def is_set(self) -> bool:

@@ -90,6 +90,7 @@ class SyncRegistryOutbox:
         self._lock = source.lock
         self._handlers = handlers
         self._faults = runtime.faults
+        self._stop = runtime.stop
         self._log = runtime.log
         self._interval = interval_seconds
 
@@ -104,7 +105,9 @@ class SyncRegistryOutbox:
             self.sync()
         except PipelineStageError as error:
             self._log.warning(
-                LogEvent.OUTBOX_SYNC_INTERRUPTED, error_code=error.code, dependency=error.dependency
+                LogEvent.OUTBOX_SYNC_INTERRUPTED,
+                failure_code=error.failure_code.value,
+                **error.failure_facts(),
             )
 
     def requested(self, requester: Requester) -> SyncResult:
@@ -140,7 +143,9 @@ class SyncRegistryOutbox:
                     self._faults.reached(FaultPoint.BETWEEN_OUTBOX_COMMIT_AND_ACK)
                     self._registry.acknowledge(message.message_id)
                     result.messages_processed += 1
-                more = page.has_more and bool(page.messages)
+                    if self._stop.is_set():  # SPEC_DECISIONS 51: stop after the acknowledged message
+                        break
+                more = page.has_more and bool(page.messages) and not self._stop.is_set()
         if result.messages_processed:
             self._log.info(LogEvent.OUTBOX_SYNCED, count=result.messages_processed)
         return result

@@ -4,6 +4,9 @@ Stages are registered, not chosen by a conditional: each stage names the status 
 reaches, and the stage that runs is the one registered for the submission's current
 status. Later stages are added by registering them in the composition root.
 
+A stop requested while the stage runs (SPEC_DECISIONS 51) ends it after the unit it was
+in: the submission keeps its status and resumes on the next start.
+
 Failure handling: a transient dependency failure counts an attempt and backs off
 (`min(2 ** attempts, 60)` seconds), and fails the submission at the configured maximum;
 a permanent failure fails it at once with its code; any other error is logged with
@@ -27,7 +30,7 @@ from onepledge_bank_agent.application.audit_entries import (
 )
 from onepledge_bank_agent.application.events import LogEvent
 from onepledge_bank_agent.application.ports import UnitOfWorkFactory
-from onepledge_bank_agent.application.runtime import Runtime
+from onepledge_bank_agent.application.runtime import Runtime, StopRequestedError
 from onepledge_bank_agent.domain.enums import TapeStatus
 from onepledge_bank_agent.domain.errors import PipelineStageError
 from onepledge_bank_agent.domain.tape import NEXT_STAGE
@@ -56,6 +59,7 @@ class StageOutcome(StrEnum):
     ADVANCED = "ADVANCED"
     RETRY_SCHEDULED = "RETRY_SCHEDULED"
     FAILED = "FAILED"
+    STOPPED = "STOPPED"
     NOTHING_TO_DO = "NOTHING_TO_DO"
 
 
@@ -100,6 +104,11 @@ class AdvanceSubmission:
         before = tape.status
         try:
             stage.run(submission_id)
+        except StopRequestedError:
+            self._log.info(
+                LogEvent.TAPE_STAGE_STOPPED, submission_id=str(submission_id), stage=stage.reached.value
+            )
+            return StageRun(submission_id, before, StageOutcome.STOPPED, before)
         except PipelineStageError as error:
             return self._stage_failed(submission_id, before, error)
         except Exception as error:  # every other error fails the tape with INTERNAL_ERROR (SPEC 13.7)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import uuid
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import date, timedelta
 
 import pytest
@@ -13,6 +14,7 @@ from bank_testkit.stages import FakeStage, raising
 from bank_testkit.tapes import SUMMIT_LAYOUT
 from bank_testkit.world import World
 from onepledge_bank_agent.application.advance_submission import AdvanceSubmission
+from onepledge_bank_agent.application.ports import StopSignal
 from onepledge_bank_agent.application.run_pipeline_worker import RunPipelineWorker, WorkerSettings
 from onepledge_bank_agent.domain.enums import TapeKind, TapeSource, TapeStatus
 from onepledge_bank_agent.domain.errors import OutsideRecordsUnavailableError
@@ -75,10 +77,15 @@ def upload(world: World, facility: uuid.UUID, minutes: int) -> uuid.UUID:
 
 
 def worker(
-    world: World, locks: Locks, *stages: FakeStage, periodic: tuple[Tick, ...] = ()
+    world: World,
+    locks: Locks,
+    *stages: FakeStage,
+    periodic: tuple[Tick, ...] = (),
+    stop: StopSignal | None = None,
 ) -> RunPipelineWorker:
-    advance = AdvanceSubmission(world.units, stages, world.runtime, 3)
-    return RunPipelineWorker(world.units, advance, locks, world.runtime, WorkerSettings(0.01, periodic))
+    runtime = world.runtime if stop is None else replace(world.runtime, stop=stop)
+    advance = AdvanceSubmission(world.units, stages, runtime, 3)
+    return RunPipelineWorker(world.units, advance, locks, runtime, WorkerSettings(0.01, periodic))
 
 
 def test_once_processes_until_nothing_is_runnable_keeping_each_facility_in_upload_order() -> None:
@@ -123,13 +130,17 @@ def test_periodic_tasks_run_on_their_interval_and_the_worker_stops_on_request() 
     world = World()
     upload(world, world.facility.facility_id, 0)
     tick = Tick(interval=10)
-    runner = worker(world, Locks(), FakeStage(world, TapeStatus.CLEANED), periodic=(tick,))
     stop = Stop(idle_waits=2)
-    report = runner.run_until_stopped(stop)
+    runner = worker(world, Locks(), FakeStage(world, TapeStatus.CLEANED), periodic=(tick,), stop=stop)
+    report = runner.run_until_stopped()
     assert [run.status for run in report.runs] == [TapeStatus.CLEANED] and tick.runs == 1 and stop.waits == 2
+    again = worker(world, Locks(), periodic=(tick,))
+    again.run_once()
+    again.run_once()
+    assert tick.runs == 2, "a new worker runs its tasks at once, then on their interval"
     world.clock.advance(10)
-    runner.run_once()
-    assert tick.runs == 2
+    again.run_once()
+    assert tick.runs == 3
     events = [event for _, event, _ in world.log.events]
     assert events[0] == "worker_started" and events[-1] == "worker_stopped"
 
@@ -142,8 +153,9 @@ def test_a_failing_step_is_logged_and_the_worker_keeps_going() -> None:
         def run(self) -> None:
             raise ConnectionError("database down")
 
-    runner = worker(world, Locks(), FakeStage(world, TapeStatus.CLEANED), periodic=(Broken(0),))
-    runner.run_until_stopped(Stop(idle_waits=2))
+    stop = Stop(idle_waits=2)
+    runner = worker(world, Locks(), FakeStage(world, TapeStatus.CLEANED), periodic=(Broken(0),), stop=stop)
+    runner.run_until_stopped()
     failures = [fields for level, event, fields in world.log.events if event == "worker_step_failed"]
     assert (
         failures

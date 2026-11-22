@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -11,6 +12,7 @@ from bank_testkit.stages import FakeStage, raising
 from bank_testkit.tapes import SUMMIT_LAYOUT
 from bank_testkit.world import World
 from onepledge_bank_agent.application.advance_submission import AdvanceSubmission, StageOutcome
+from onepledge_bank_agent.application.runtime import StopRequestedError
 from onepledge_bank_agent.domain.enums import (
     AuditAction,
     FailureCode,
@@ -26,6 +28,7 @@ from onepledge_bank_agent.domain.errors import (
     PipelineStageError,
 )
 from onepledge_bank_agent.domain.tape import TapeFacts, TapeSubmission
+from onepledge_bank_agent.infrastructure.stop_signal import EventStopSignal
 
 pytestmark = pytest.mark.unit
 
@@ -183,3 +186,33 @@ def test_a_failure_after_the_tape_moved_on_changes_nothing(world: World) -> None
     assert (
         run.outcome is StageOutcome.NOTHING_TO_DO and status(world, submission).status is TapeStatus.CLEANED
     )
+
+
+def test_a_stop_at_a_unit_boundary_leaves_the_submission_where_it_is(world: World) -> None:
+    """SPEC_DECISIONS 51: no failure, no attempt and no audit entry; the stage resumes on the next start."""
+    submission = received(world)
+    stage = FakeStage(world, TapeStatus.CLEANED, raising(StopRequestedError()))
+    stopped = advance(world, stage).advance(submission)
+    assert (stopped.outcome, stopped.started_at_status, stopped.status, stopped.failure) == (
+        StageOutcome.STOPPED,
+        TapeStatus.RECEIVED,
+        TapeStatus.RECEIVED,
+        None,
+    )
+    tape = status(world, submission)
+    assert (tape.status, tape.progress.attempts) == (TapeStatus.RECEIVED, 0)
+    assert world.audit() == []
+    assert world.log.events == [
+        ("info", "tape_stage_stopped", {"submission_id": str(submission), "stage": "CLEANED"})
+    ]
+    stage.behaviour = None
+    assert advance(world, stage).advance(submission).status is TapeStatus.CLEANED
+
+
+def test_the_runtime_raises_at_a_unit_boundary_only_once_a_stop_was_requested(world: World) -> None:
+    signal = EventStopSignal()
+    runtime = replace(world.runtime, stop=signal)
+    runtime.after_unit()
+    signal.request_stop()
+    with pytest.raises(StopRequestedError):
+        runtime.after_unit()

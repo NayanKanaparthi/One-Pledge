@@ -62,6 +62,7 @@ class RunLocalChecks:
         self._rules = rules
         self._clock = runtime.clock
         self._faults = runtime.faults
+        self._after_unit = runtime.after_unit
         self._log = runtime.log
         self._chunk_size = chunk_size
 
@@ -113,6 +114,7 @@ class RunLocalChecks:
             count=len(current),
         )
         self._faults.reached(FaultPoint.AFTER_CHECK_CHUNK)
+        self._after_unit()
 
     def _evaluate(self, loan: Loan, lender: str, facts: TapeFacts) -> tuple[CheckResult, ...]:
         vin = loan.terms.vin

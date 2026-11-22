@@ -139,6 +139,13 @@ Every command takes `--json`, `--quiet` and `--debug`.
 - `worker` without `--once` runs until stopped and prints no result, so `--json`
   without `--once` is a usage error. The worker refuses a schema that is not at the
   latest revision.
+- SIGTERM or SIGINT stops the worker after the unit it is in, not at the end of the
+  stage (SPEC_DECISIONS 51): after the current check chunk, tokenise chunk, registry
+  request with its stored response, certificate or outbox message, nothing further is
+  committed, the advisory lock is released and the process exits 0. The submission keeps
+  its status and the stage resumes from that point on the next start. The clean stage is
+  one transaction and runs to its commit; an HTTP call in flight finishes or times out,
+  so shutdown takes at most one unit plus `HTTP_READ_TIMEOUT_SECONDS`.
 - `db migrate` audits an upgrade that changed the revision (`from_revision`, null on a
   new database, and `to_revision`). A downgrade is a development operation and writes no
   entry; after `downgrade base` the audit table no longer exists.

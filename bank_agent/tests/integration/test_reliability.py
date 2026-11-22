@@ -28,11 +28,13 @@ from bank_testkit.independent import accepted_rows, held_vins
 from bank_testkit.outside import InProcessOutsideRecords, OutsideService
 from bank_testkit.pipeline import BankAgentHarness, Services
 from bank_testkit.world import CrashError, Faults
+from onepledge_bank_agent.application.advance_submission import StageOutcome
 from onepledge_bank_agent.application.faults import FaultPoint
 from onepledge_bank_agent.domain.enums import TapeKind, TapeStatus
 from onepledge_bank_agent.domain.errors import TapeDuplicateError
 from onepledge_bank_agent.domain.tape import TapeSubmission
 from onepledge_bank_agent.infrastructure.http.base import RETRY_DELAYS_SECONDS
+from onepledge_bank_agent.infrastructure.stop_signal import EventStopSignal
 
 pytestmark = pytest.mark.integration
 
@@ -223,6 +225,73 @@ def test_a_crash_at_each_point_resumes_to_the_state_of_a_clean_run(
     assert final == clean_run
     assert one_submission_per_key(final)
     assert chain_holds(bank.database)
+
+
+class StopAt(Faults):
+    """Requests a stop on `signal`, as SIGTERM would, the first time the pipeline passes `point`."""
+
+    def __init__(self, point: FaultPoint) -> None:
+        super().__init__()
+        self._point = point
+        self.signal = EventStopSignal()
+
+    def reached(self, point: FaultPoint) -> None:
+        super().reached(point)
+        if point is self._point:
+            self.signal.request_stop()
+
+
+def four_check_chunks(data: Path) -> str:
+    """A `CHECK_CHUNK_LOANS` that splits the tape's accepted loans into exactly four chunks."""
+    accepted = len(accepted_rows(data / TAPE, AS_OF))
+    size = math.ceil(accepted / 4)
+    assert math.ceil(accepted / size) == 4, accepted
+    return str(size)
+
+
+ONE_UNIT = (
+    "SELECT 'units', (SELECT count(DISTINCT loan_id) FROM local_checks)::text || ' ' || "
+    "(SELECT count(DISTINCT loan_id) FROM loan_tokens)::text || ' ' || "
+    "(SELECT count(*) FROM registry_requests WHERE response_status IS NOT NULL)::text || ' ' || "
+    "(SELECT count(*) FROM certificates)::text"
+)
+STOPS = [
+    (FaultPoint.AFTER_CHECK_CHUNK, TapeStatus.CLEANED),
+    (FaultPoint.AFTER_CODES_STORED, TapeStatus.CHECKED),
+    (FaultPoint.AFTER_RESPONSE_STORED, TapeStatus.TOKENIZED),
+    (FaultPoint.AFTER_CERTIFICATE_STORED, TapeStatus.SUBMITTED),
+]
+
+
+@pytest.mark.parametrize(("point", "left_at"), STOPS, ids=[point.value for point, _ in STOPS])
+def test_a_stop_ends_the_stage_after_the_current_unit_and_a_second_run_completes_it(
+    point: FaultPoint, left_at: TapeStatus, lab: Lab, clean_run: State
+) -> None:
+    """SPEC_DECISIONS 51: the stop flag is honoured after one unit; nothing further is committed."""
+    bank, stop = lab.bank(), StopAt(point)
+    chunks = {"CHECK_CHUNK_LOANS": four_check_chunks(lab.data)}
+    with lab.harness(bank, faults=stop, environment=chunks) as stopping:
+        stop.signal = stopping.stop
+        submission = lab.upload(stopping)
+        runs = stopping.run_worker().runs
+    assert [run.outcome for run in runs][-1] is StageOutcome.STOPPED
+    assert runs[-1].status is left_at and runs[-1].started_at_status is left_at
+    status = pairs(bank.database, "SELECT 'status', status FROM tape_submissions")
+    assert status == {"status": left_at.value}
+    checked, tokenised, answered, certificates = pairs(bank.database, ONE_UNIT)["units"].split()
+    unit_counts = {
+        TapeStatus.CLEANED: (checked == chunks["CHECK_CHUNK_LOANS"], tokenised == "0"),
+        TapeStatus.CHECKED: (tokenised == "25", answered == "0"),
+        TapeStatus.TOKENIZED: (answered == "1", certificates == "0"),
+        TapeStatus.SUBMITTED: (answered == "3", certificates == "1"),
+    }
+    assert unit_counts[left_at] == (True, True), (checked, tokenised, answered, certificates)
+    with lab.harness(bank, environment=chunks) as resumed:
+        assert resumed.run_worker().runs[-1].status is TapeStatus.COMPLETED
+    assert lab.state(bank) == clean_run
+    assert one_submission_per_key(lab.state(bank))
+    assert chain_holds(bank.database)
+    assert submission.submission_id == runs[-1].submission_id
 
 
 @pytest.mark.parametrize("failures", [1, CALL_ATTEMPTS], ids=["replayed-in-call", "replayed-on-resume"])

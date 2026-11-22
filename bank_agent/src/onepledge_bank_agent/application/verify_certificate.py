@@ -58,6 +58,7 @@ class VerifyCertificate:
         self._member_id = member_id
         self._clock = runtime.clock
         self._faults = runtime.faults
+        self._after_unit = runtime.after_unit
         self._log = runtime.log
 
     def collect(self, request: RegistryRequest) -> Certificate:
@@ -84,6 +85,7 @@ class VerifyCertificate:
             result="VERIFIED" if certificate.verified else failure,
         )
         self._faults.reached(FaultPoint.AFTER_CERTIFICATE_STORED)
+        self._after_unit()
         return certificate
 
     def _verified(
