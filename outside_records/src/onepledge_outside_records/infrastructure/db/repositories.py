@@ -68,14 +68,19 @@ def _owner_transaction(engine: Engine) -> Iterator[Connection]:
         ) from None
 
 
-# What the connected role is: superuser, owner of a table of the schema, holder of a write privilege.
+# What the connected role is: superuser, owner of a table, holder of a write privilege. Every
+# schema of the database is checked, not only current_schema(): a search path is a session
+# setting and must not hide a table the role could write (SPEC_DECISIONS 68.11).
 _ROLE_PRIVILEGES = """
 SELECT
     (SELECT rolsuper FROM pg_roles WHERE rolname = current_user),
-    EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = current_schema() AND tableowner = current_user),
+    EXISTS (
+        SELECT 1 FROM pg_tables
+        WHERE schemaname NOT IN ('pg_catalog', 'information_schema') AND tableowner = current_user
+    ),
     EXISTS (
         SELECT 1 FROM pg_tables AS t, unnest(ARRAY['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE']) AS p(privilege)
-        WHERE t.schemaname = current_schema()
+        WHERE t.schemaname NOT IN ('pg_catalog', 'information_schema')
           AND has_table_privilege(current_user, quote_ident(t.schemaname) || '.' || quote_ident(t.tablename),
                                   p.privilege)
     )

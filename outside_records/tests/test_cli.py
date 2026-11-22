@@ -20,7 +20,9 @@ from psycopg import sql
 from sqlalchemy.engine import make_url
 
 from onepledge_outside_records.domain.errors import OperatorError
+from onepledge_outside_records.infrastructure.db.engines import make_engine
 from onepledge_outside_records.infrastructure.db.migrations import MigrationRunner
+from onepledge_outside_records.infrastructure.db.repositories import SqlRecordsReader
 from onepledge_outside_records.infrastructure.logging_setup import configure_logging
 from onepledge_outside_records.interface.cli import main
 from onepledge_outside_records.interface.output import Console
@@ -467,3 +469,47 @@ def test_an_unknown_target_revision_is_logged_with_that_revision(
     assert [(r["event"], r["revision"]) for r in lines if r["level"] == "error"] == [
         ("schema_migration_failed", "9999_unknown")
     ]
+
+
+# SPEC_DECISIONS 68.11: the startup check rests on the connected role's attributes and
+# privileges, so a role that can write through a membership, a predefined role or a search path
+# that hides the tables is refused like the owner.
+WRITE_ROUTES = ("owner_membership", "write_all_data", "search_path")
+
+
+def grant_route(admin: psycopg.Connection[Any], database: Database, route: str, undo: bool) -> None:
+    app = sql.Identifier(database.app_role)
+    owner = sql.Identifier(f"{database.target.database}_owner")
+    if route == "owner_membership":
+        statement = "REVOKE {} FROM {}" if undo else "GRANT {} TO {}"
+        admin.execute(sql.SQL(statement).format(owner, app))
+    elif route == "write_all_data":
+        statement = "REVOKE pg_write_all_data FROM {}" if undo else "GRANT pg_write_all_data TO {}"
+        admin.execute(sql.SQL(statement).format(app))
+    elif undo:
+        admin.execute(sql.SQL("REVOKE INSERT ON public.payments FROM {}").format(app))
+        admin.execute(sql.SQL("ALTER ROLE {} RESET search_path").format(app))
+        admin.execute("DROP SCHEMA optest_decoy")
+    else:
+        # An empty schema first on the search path hides the tables of public from current_schema().
+        admin.execute("CREATE SCHEMA optest_decoy")
+        admin.execute(sql.SQL("GRANT USAGE ON SCHEMA optest_decoy TO {}").format(app))
+        admin.execute(sql.SQL("ALTER ROLE {} SET search_path = optest_decoy, public").format(app))
+        admin.execute(sql.SQL("GRANT INSERT ON public.payments TO {}").format(app))
+
+
+@pytest.mark.parametrize("route", WRITE_ROUTES)
+def test_a_role_that_can_write_another_way_is_refused(database: Database, route: str) -> None:
+    with psycopg.connect(database.admin_url, autocommit=True, dbname=database.target.database) as admin:
+        grant_route(admin, database, route, undo=False)
+        engine = make_engine(database.app_url)
+        try:
+            with pytest.raises(OperatorError) as raised:
+                SqlRecordsReader(engine).ensure_read_only()
+        finally:
+            engine.dispose()
+            grant_route(admin, database, route, undo=True)
+    assert raised.value.sentence == (
+        "The role of DATABASE_URL may insert, update, delete or truncate rows; "
+        "serve must connect as the read-only app role."
+    )

@@ -10,7 +10,10 @@ synthetic and comes from `onepledge-datagen`.
 - The API process connects as `{db}_app`, which has `SELECT` on the four tables and
   nothing else, so it cannot write even if the code tried. `serve` checks this at startup
   and refuses to start, with one line naming `DATABASE_URL`, when the role is a superuser,
-  owns a table of the schema, or holds INSERT, UPDATE, DELETE or TRUNCATE on any table.
+  owns a table, or holds INSERT, UPDATE, DELETE or TRUNCATE on any table of any schema of
+  the database, whether granted directly, through a role membership or a predefined role;
+  the check reads the role's attributes and privileges, never the URL, and does not depend
+  on the search path.
 - Client keys are stored only as SHA-256 hashes of 256 bit random keys. A request's key is
   hashed and looked up by indexed equality on that hash; nothing is compared in memory.
 - A VIN that does not match `^[A-HJ-NPR-Z0-9]{17}$` gets 422 `VALIDATION_ERROR` with
