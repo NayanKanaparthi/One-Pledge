@@ -206,11 +206,11 @@ def test_the_tape_guard_allows_only_the_spec_transitions_and_keeps_upload_facts(
         assert sqlstate(filled, "owner", update.format(change), (tape,)) == "OP004", change
     fail = (
         "status = 'FAILED', resume_status = 'CHECKED', failed_stage = 'TOKENIZED', "
-        "failure_code = 'INTERNAL_ERROR'"
+        "failure_code = 'INTERNAL_ERROR', attempts = 3"
     )
     with filled.connect("app") as connection:
         connection.execute(update.format(fail), (tape,))
-        connection.execute(update.format("attempts = 3"), (tape,))
+    assert sqlstate(filled, "app", update.format("attempts = 4"), (tape,)) == "OP004", "kept while FAILED"
     wrong_resume = "status = 'CLEANED', resume_status = NULL, failed_stage = NULL, failure_code = NULL"
     assert sqlstate(filled, "owner", update.format(wrong_resume), (tape,)) == "OP004"
     resume = (

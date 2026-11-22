@@ -24,17 +24,14 @@ from psycopg.types.json import Jsonb
 from bank_testkit.data import EXAMPLE_TAPES, seed_reference
 from bank_testkit.database import BankDatabase, drop, new_bank_database, provision_and_migrate
 from bank_testkit.doubles import InProcessDoubles
-from bank_testkit.memory.bank import vins
 from bank_testkit.outside import InProcessOutsideRecords
 from bank_testkit.pipeline import BankAgentHarness, Services
+from bank_testkit.sql_rows import Action, Row, attempt, new_alert, new_loan, new_tape, values_insert
 from onepledge_bank_agent.domain.enums import TapeKind, TapeStatus
 
 pytestmark = pytest.mark.integration
 
 ROLES = ("app", "owner")
-JSONB_OID = 3802
-type Row = dict[str, object]
-type Action = Callable[[psycopg.Connection[tuple[object, ...]]], object]
 
 
 @pytest.fixture(scope="module")
@@ -51,73 +48,6 @@ def bank(example_data: Path, example_outside: InProcessOutsideRecords) -> Iterat
     doubles.close()
     yield database
     drop(database)
-
-
-def attempt(database: BankDatabase, role: str, actions: Sequence[Action]) -> str | None:
-    """Run the actions in one rolled back transaction; the SQLSTATE of the first that fails, or None."""
-    with database.connect(role) as connection:
-        connection.autocommit = False
-        try:
-            for action in actions:
-                action(connection)
-        except psycopg.Error as error:
-            return error.sqlstate
-        finally:
-            connection.rollback()
-    return None
-
-
-def stored_row(database: BankDatabase, table: str, order: str) -> Row:
-    """One stored row of a table, its jsonb values wrapped so that they can be written back."""
-    with database.connect("owner") as connection:
-        cursor = connection.execute(sql.SQL("SELECT * FROM {} ORDER BY {} LIMIT 1").format(
-            sql.Identifier(table), sql.Identifier(order)))  # fmt: skip
-        values = cursor.fetchone()
-        assert values is not None and cursor.description is not None
-        return {
-            column.name: Jsonb(value) if column.type_code == JSONB_OID else value
-            for column, value in zip(cursor.description, values, strict=True)
-        }
-
-
-def new_tape(database: BankDatabase, **changes: object) -> Row:
-    """A fresh RECEIVED tape row copied from the stored one, with changes."""
-    fresh = {
-        "submission_id": uuid.uuid4(), "file_sha256": uuid.uuid4().hex * 2, "status": "RECEIVED",
-        "attempts": 0, "resume_status": None, "failed_stage": None, "failure_code": None,
-        "completed_at": None, "next_attempt_at": None,
-    }  # fmt: skip
-    return {**stored_row(database, "tape_submissions", "uploaded_at"), **fresh, **changes}
-
-
-def new_loan(database: BankDatabase, serial: int, **changes: object) -> Row:
-    """A fresh PENDING loan row copied from a stored one, with a VIN of its own and changes."""
-    fresh = {"loan_id": uuid.uuid4(), "vin": vins(1, 900 + serial)[0], "state": "PENDING"}
-    return {**stored_row(database, "loans", "loan_id"), **fresh, **changes}
-
-
-def new_alert(database: BankDatabase, **changes: object) -> Row:
-    """A NEW alert on an OPEN case for a stored loan, with changes."""
-    loan = stored_row(database, "loans", "loan_id")
-    row: Row = {
-        "alert_id": uuid.uuid4(), "registry_case_id": uuid.uuid4(), "loan_id": loan["loan_id"],
-        "role": "CLAIMANT", "match_kind": "EXACT", "match_basis": "ASSET", "kinds_matched": ["ASSET"],
-        "kinds_not_matched": ["VIN"], "explanation_text": "An explanation.", "explanation_source": "TEMPLATE",
-        "status": "NEW", "case_status": "OPEN", "received_at": loan["created_at"],
-    }  # fmt: skip
-    return {**row, **changes}
-
-
-def values_insert(table: str, rows: Sequence[Mapping[str, object]], conflict: str = "") -> Action:
-    """One `INSERT ... VALUES (...), (...)` of every row, optionally followed by an ON CONFLICT clause."""
-    columns = list(rows[0])
-    row_sql = sql.SQL("({})").format(sql.SQL(", ").join(sql.Placeholder() * len(columns)))
-    statement = sql.SQL("INSERT INTO {} ({}) VALUES {} {}").format(
-        sql.Identifier(table), sql.SQL(", ").join(map(sql.Identifier, columns)),
-        sql.SQL(", ").join([row_sql] * len(rows)), sql.SQL(conflict),
-    )  # fmt: skip
-    parameters = [row[column] for row in rows for column in columns]
-    return lambda connection: connection.execute(statement, parameters)
 
 
 def select_insert(table: str, rows: Sequence[Mapping[str, object]]) -> Action:

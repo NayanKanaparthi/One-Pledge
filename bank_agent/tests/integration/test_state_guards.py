@@ -150,7 +150,9 @@ def test_the_forged_resumes_of_the_review_are_refused(bank: BankDatabase, role: 
         "resume_status = NULL",
     ):
         assert attempt(bank, role, [*honest, update(tape, rewrite)]) == "OP004", rewrite
-    assert attempt(bank, role, [*honest, update(tape, "attempts = attempts + 1")]) is None
+    assert attempt(bank, role, [*honest, update(tape, "attempts = attempts + 1")]) == "OP004", (
+        "decision 87: the attempts of a FAILED tape are kept"
+    )
     for wrong in (
         ("CHECKED", "CHECKED"),
         ("CLEANED", "TOKENIZED"),
