@@ -3,20 +3,43 @@
 Every body is parsed twice from the same bytes: once by a pydantic model in strict JSON
 mode (wrong types, missing fields and out of range values are refused; unknown fields
 are ignored, for additive evolution), and once as plain JSON with floats refused, which
-is the form a signature is checked over. A body that does not parse is MALFORMED_RESPONSE
+is the form a signature is checked over. Identifiers and base64 values must be spelled
+canonically (`CanonicalUuid`, `CanonicalBase64`, SPEC_DECISIONS 75); any other spelling
+fails the model like a wrong type. A body that does not parse is MALFORMED_RESPONSE
 (SPEC_DECISIONS 49); a status that is not a success is classified in `classification.py`.
 """
 
 from __future__ import annotations
 
-import json
+import uuid
 from collections.abc import Mapping
+from typing import Annotated
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, BeforeValidator, ConfigDict, ValidationError
 
 from onepledge_bank_agent.domain.canonical_json import JsonValue
+from onepledge_bank_agent.infrastructure import bounded_json
+from onepledge_bank_agent.infrastructure.encodings import canonical_base64, canonical_uuid
 from onepledge_bank_agent.infrastructure.http.classification import DependencyErrors
+
+
+def _uuid(value: object) -> uuid.UUID:
+    parsed = canonical_uuid(value) if isinstance(value, str) else None
+    if parsed is None:
+        raise ValueError("uuid")
+    return parsed
+
+
+def base64_text(value: str) -> str:
+    """The value when it is canonical standard base64; a validation error otherwise."""
+    if canonical_base64(value) is None:
+        raise ValueError("base64")
+    return value
+
+
+type CanonicalUuid = Annotated[uuid.UUID, BeforeValidator(_uuid)]
+"""A UUID in its one canonical spelling (36 lower case characters with hyphens)."""
 
 
 class Strict(BaseModel):
@@ -42,8 +65,9 @@ def _refuse_float(text: str) -> float:
 
 
 def plain_json(response: httpx.Response) -> object:
-    """The body as plain JSON, refusing floats; raises `ValueError` when it is not JSON or holds a float."""
-    return json.loads(response.content, parse_float=_refuse_float)
+    """The body as plain JSON within the bounds of `bounded_json` (no key twice, at most 32 levels deep),
+    refusing floats; raises `ValueError` when it is not such a document (SPEC_DECISIONS 74)."""
+    return bounded_json.loads(response.content, parse_float=_refuse_float)
 
 
 def error_code(response: httpx.Response) -> str | None:
@@ -59,8 +83,8 @@ def parse[M: BaseModel](
 ) -> tuple[M, Mapping[str, JsonValue]]:
     """The validated model and the plain JSON object of a body; a protocol error when either fails."""
     try:
-        parsed = model.model_validate_json(response.content)
         document = plain_json(response)
+        parsed = model.model_validate_json(response.content)
     except (ValidationError, ValueError):
         raise errors.malformed(response.status_code) from None
     if not isinstance(document, dict):

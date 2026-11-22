@@ -34,7 +34,12 @@ from onepledge_bank_agent.domain.registry_records import (
     SignedCertificate,
     SignedCheckpoint,
 )
-from onepledge_bank_agent.infrastructure.http.answers import Strict, json_object
+from onepledge_bank_agent.infrastructure.http.answers import (
+    CanonicalUuid,
+    Strict,
+    base64_text,
+    json_object,
+)
 
 HASH = r"^[0-9a-f]{64}$"
 SIGNATURE = r"^[A-Za-z0-9+/]{86}==$"
@@ -44,6 +49,8 @@ CODE = r"^[A-Z][A-Z0-9_]{0,63}$"
 BIGINT_MAX = 9_223_372_036_854_775_807
 """The largest sequence number or position the bank can store (SPEC_DECISIONS 85, rule 1)."""
 type Hash = Annotated[str, Field(pattern=HASH)]
+type Signature = Annotated[str, Field(pattern=SIGNATURE), AfterValidator(base64_text)]
+"""An Ed25519 signature: 88 characters of canonical standard base64 (SPEC_DECISIONS 75)."""
 type Seq = Annotated[int, Field(ge=0, le=BIGINT_MAX)]
 type PositiveSeq = Annotated[int, Field(ge=1, le=BIGINT_MAX)]
 
@@ -61,15 +68,15 @@ type Kinds = Annotated[list[TokenKind], AfterValidator(_distinct)]
 class ItemResultBody(Strict):
     """`ItemResult`."""
 
-    item_ref: uuid.UUID
+    item_ref: CanonicalUuid
     asset_token: Hash
     result: Annotated[str, Field(pattern=CODE)]
-    lock_id: uuid.UUID | None
+    lock_id: CanonicalUuid | None
     already_held: bool
     match_kind: MatchKind | None
     match_basis: MatchBasis | None
     kinds_matched: Kinds
-    case_id: uuid.UUID | None
+    case_id: CanonicalUuid | None
     reason: Annotated[str, Field(pattern=CODE)] | None
 
     def outcome(self) -> ItemOutcome:
@@ -83,14 +90,14 @@ class ItemResultBody(Strict):
 class SubmissionResultBody(Strict):
     """`SubmissionResult`."""
 
-    submission_id: uuid.UUID
-    member_id: uuid.UUID
+    submission_id: CanonicalUuid
+    member_id: CanonicalUuid
     kind: TapeKind
     key_version: Annotated[str, Field(pattern=KEY_VERSION)]
     status: Literal["COMPLETED"]
     received_at: datetime
     as_of_seq: Seq
-    certificate_id: uuid.UUID
+    certificate_id: CanonicalUuid
     results: Annotated[list[ItemResultBody], Field(min_length=1, max_length=500)]
 
 
@@ -115,9 +122,9 @@ class CertificateBodyModel(Strict):
     """`CertificateBody`."""
 
     schema_version: Literal[1]
-    certificate_id: uuid.UUID
-    member_id: uuid.UUID
-    submission_id: uuid.UUID
+    certificate_id: CanonicalUuid
+    member_id: CanonicalUuid
+    submission_id: CanonicalUuid
     kind: TapeKind
     key_version: Annotated[str, Field(pattern=KEY_VERSION)]
     as_of_seq: Seq
@@ -131,7 +138,7 @@ class SignedCertificateBody(Strict):
 
     body: CertificateBodyModel
     body_hash: Hash
-    signature: Annotated[str, Field(pattern=SIGNATURE)]
+    signature: Signature
     signing_key_id: Annotated[str, Field(pattern=KEY_ID)]
 
     def record(self, document: Mapping[str, JsonValue]) -> SignedCertificate:
@@ -156,7 +163,7 @@ class SignedCheckpointBody(Strict):
     """`SignedCheckpoint`."""
 
     body: CheckpointBodyModel
-    signature: Annotated[str, Field(pattern=SIGNATURE)]
+    signature: Signature
     signing_key_id: Annotated[str, Field(pattern=KEY_ID)]
 
     def record(self, document: Mapping[str, JsonValue]) -> SignedCheckpoint:
@@ -171,7 +178,7 @@ class SignedCheckpointBody(Strict):
 class AlertPayloadBody(Strict):
     """`AlertMessage.payload`."""
 
-    case_id: uuid.UUID
+    case_id: CanonicalUuid
     role: AlertRole
     asset_token: Hash
     match_kind: MatchKind
@@ -190,7 +197,7 @@ class AlertPayloadBody(Strict):
 class CasePayloadBody(Strict):
     """`CaseUpdateMessage.payload`."""
 
-    case_id: uuid.UUID
+    case_id: CanonicalUuid
     asset_token: Hash
     status: CaseStatus
     resolved_seq: PositiveSeq | None
@@ -201,7 +208,9 @@ class CasePayloadBody(Strict):
 
 
 class MessageEnvelope(Strict):
-    """What the bank needs to acknowledge any outbox message, whatever its type and the rest of it."""
+    """What the bank needs to acknowledge any outbox message, whatever its type and the rest of it. The id
+    is read in any spelling the uuid module parses, so a message whose id is not canonical can still be
+    quarantined and acknowledged; `MessageBody` and `message_id_is_canonical` refuse that spelling."""
 
     message_id: uuid.UUID
     type: Annotated[str, Field(min_length=1, max_length=64)]
@@ -210,7 +219,7 @@ class MessageEnvelope(Strict):
 class MessageBody(Strict):
     """The fields every outbox message of a known type has (`registry.yaml`)."""
 
-    message_id: uuid.UUID
+    message_id: CanonicalUuid
     position: PositiveSeq
     created_at: datetime
 
@@ -269,7 +278,7 @@ class EventPageBody(Strict):
 class CaseViewBody(Strict):
     """`CaseView` (the fields the bank reads)."""
 
-    case_id: uuid.UUID
+    case_id: CanonicalUuid
     status: CaseStatus
     your_position: BankPosition | None
 

@@ -11,12 +11,12 @@ vector, which fixes the blind, can be reproduced exactly.
 from __future__ import annotations
 
 import base64
-import binascii
 from collections.abc import Callable
 
 import oprf
 
 from onepledge_bank_agent.application.registry_ports import Blinded
+from onepledge_bank_agent.infrastructure.encodings import canonical_base64
 
 POINT_BYTES = 32
 ENCODED_POINT_LENGTH = 44
@@ -52,14 +52,12 @@ class OprfBlinded:
 
 
 def decode_point(element: str) -> bytes | None:
-    """The 32 bytes of a standard base64 point that is not the identity, or None."""
+    """The 32 bytes of a canonical standard base64 point that is not the identity, or None
+    (SPEC_DECISIONS 75: an encoding with non-zero padding bits is refused)."""
     if len(element) != ENCODED_POINT_LENGTH:
         return None
-    try:
-        raw = base64.b64decode(element, validate=True)
-    except (binascii.Error, ValueError):
-        return None
-    if len(raw) != POINT_BYTES or raw == _IDENTITY:
+    raw = canonical_base64(element)
+    if raw is None or len(raw) != POINT_BYTES or raw == _IDENTITY:
         return None
     return raw
 

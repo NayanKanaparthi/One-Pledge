@@ -1,8 +1,9 @@
 """The client of one key holder: `POST /v1/evaluate` (`contracts/key_holder.yaml`, SPEC 9.3, 13.3).
 
 The request carries a fresh request id and the blinded elements, and pins no key
-version. The answer must hold exactly as many elements as were sent, each 44 base64
-characters decoding to 32 bytes that are not all zero, and one key version. A wrong
+version. The answer must hold exactly as many elements as were sent, each 44 characters
+of canonical base64 decoding to 32 bytes that are not all zero, the request id in its
+canonical spelling, and one key version (SPEC_DECISIONS 75). A wrong
 count or an invalid element is PROTOCOL_VIOLATION and a body outside the schema is
 MALFORMED_RESPONSE (both KEY_HOLDER_REJECTED); every other failure is classified by
 `classification.py` (SPEC_DECISIONS 49).
@@ -10,7 +11,6 @@ MALFORMED_RESPONSE (both KEY_HOLDER_REJECTED); every other failure is classified
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Sequence
 from typing import Annotated
 
@@ -21,7 +21,7 @@ from onepledge_bank_agent.application.ports import IdGenerator
 from onepledge_bank_agent.domain.dependency_errors import KeyHolderProtocolError
 from onepledge_bank_agent.domain.registry_records import Evaluation
 from onepledge_bank_agent.infrastructure.crypto.blinder import decode_point
-from onepledge_bank_agent.infrastructure.http.answers import Strict, parse
+from onepledge_bank_agent.infrastructure.http.answers import CanonicalUuid, Strict, parse
 from onepledge_bank_agent.infrastructure.http.base import RetryingHttpCaller
 from onepledge_bank_agent.infrastructure.http.classification import failure
 
@@ -32,7 +32,7 @@ ELEMENT = r"^[A-Za-z0-9+/]{43}=$"
 class EvaluateAnswer(Strict):
     """`EvaluateResponse`."""
 
-    request_id: uuid.UUID
+    request_id: CanonicalUuid
     holder_id: str
     key_version: Annotated[int, Field(ge=1)]
     elements: list[Annotated[str, Field(pattern=ELEMENT)]]

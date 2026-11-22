@@ -7,14 +7,13 @@ key. The bank never fetches a key from the registry.
 
 from __future__ import annotations
 
-import base64
-import binascii
 from collections.abc import Mapping
 from types import MappingProxyType
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from onepledge_bank_agent.infrastructure.encodings import canonical_base64
 from onepledge_bank_agent.infrastructure.operator_errors import CONFIGURATION_ERROR, OperatorError
 
 PUBLIC_KEY_BYTES = 32
@@ -22,10 +21,8 @@ SIGNATURE_BYTES = 64
 
 
 def _decode(text: str) -> bytes | None:
-    try:
-        return base64.b64decode(text, validate=True)
-    except (binascii.Error, ValueError):
-        return None
+    """Canonical standard base64 only (SPEC_DECISIONS 75)."""
+    return canonical_base64(text)
 
 
 def public_key(text: str) -> Ed25519PublicKey:

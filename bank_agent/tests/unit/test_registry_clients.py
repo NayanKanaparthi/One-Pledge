@@ -11,12 +11,12 @@ import base64
 import hashlib
 import json
 import uuid
-from collections.abc import Callable
 
 import httpx
 import pytest
 
 from bank_testkit.memory.clocks import CountingIds
+from bank_testkit.scripted_http import Handler, caller, registry
 from onepledge_bank_agent.domain.canonical_json import canonical_json
 from onepledge_bank_agent.domain.dependency_errors import (
     CaseAlreadyResolvedError,
@@ -31,35 +31,12 @@ from onepledge_bank_agent.domain.dependency_errors import (
 from onepledge_bank_agent.domain.enums import BankPosition, CaseStatus, FailureReason, TapeKind, TokenKind
 from onepledge_bank_agent.domain.errors import PipelineStageError, PositionAlreadyRecordedError
 from onepledge_bank_agent.domain.registry_records import QuarantinedPayload, RegistryItem, RegistrySubmission
-from onepledge_bank_agent.infrastructure.http.base import RetryingHttpCaller
 from onepledge_bank_agent.infrastructure.http.key_holder_client import KeyHolderHttpClient
-from onepledge_bank_agent.infrastructure.http.registry_client import RegistryHttpClient
 
 pytestmark = pytest.mark.unit
 
-type Handler = Callable[[httpx.Request], httpx.Response]
 POINT = base64.b64encode(bytes(range(1, 33))).decode()
 ITEM_REF, TOKEN = uuid.UUID(int=7, version=4), "a" * 64
-
-
-class Quiet:
-    def info(self, event: str, **fields: object) -> None:
-        """Nothing."""
-
-    def warning(self, event: str, **fields: object) -> None:
-        """Nothing."""
-
-    def failure(self, event: str, error: BaseException, **fields: object) -> None:
-        """Nothing."""
-
-
-def caller(handler: Handler, dependency: str, seen: list[httpx.Request]) -> RetryingHttpCaller:
-    def record(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        return handler(request)
-
-    client = httpx.Client(base_url="http://service.test", transport=httpx.MockTransport(record))
-    return RetryingHttpCaller(client, "k" * 40, dependency, Quiet(), lambda _: None)
 
 
 def holder(handler: Handler, seen: list[httpx.Request] | None = None) -> KeyHolderHttpClient:
@@ -161,10 +138,6 @@ def decided(
     }
     headers = {"Idempotent-Replay": "true"} if replay else {}
     return httpx.Response(status, json={**body, **changes}, headers=headers)
-
-
-def registry(handler: Handler, seen: list[httpx.Request] | None = None) -> RegistryHttpClient:
-    return RegistryHttpClient(caller(handler, "registry", seen if seen is not None else []))
 
 
 def test_a_decision_and_a_replay_are_read_and_every_attempt_is_counted() -> None:

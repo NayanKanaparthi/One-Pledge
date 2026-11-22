@@ -8,7 +8,6 @@ answer outside the contract or about another vehicle is MALFORMED_RESPONSE.
 
 from __future__ import annotations
 
-import uuid
 from datetime import date
 from typing import Literal
 
@@ -23,6 +22,7 @@ from onepledge_bank_agent.domain.outside_records import (
     TitleRecord,
 )
 from onepledge_bank_agent.domain.vin import Vin
+from onepledge_bank_agent.infrastructure.http.answers import CanonicalUuid
 from onepledge_bank_agent.infrastructure.http.base import RetryingHttpCaller
 from onepledge_bank_agent.infrastructure.http.classification import failure
 
@@ -47,7 +47,7 @@ class _TitleBody(_Lenient):
 
 
 class _PaymentBody(_Lenient):
-    payment_id: uuid.UUID
+    payment_id: CanonicalUuid
     vin: str = Field(pattern=VIN_PATTERN)
     paid_on: date
     amount_cents: int = Field(ge=1)
@@ -60,7 +60,7 @@ class _PaymentPageBody(_Lenient):
 
 
 class _ContractBody(_Lenient):
-    contract_id: uuid.UUID
+    contract_id: CanonicalUuid
     vin: str = Field(pattern=VIN_PATTERN)
     lender_name: str = Field(max_length=200)
     amount_cents: int = Field(ge=1)

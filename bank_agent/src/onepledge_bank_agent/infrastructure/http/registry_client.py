@@ -15,8 +15,10 @@ column it is stored in (SPEC_DECISIONS 85, rule 1); a message that fails is retu
 `QuarantinedPayload` with reason OVERSIZED (over 64 KiB), VALUE_OUT_OF_RANGE (only a
 number too large) or SCHEMA_MISMATCH, so the sync keeps it as evidence and the outbox is
 never blocked. A number with a fraction or an exponent, or an integer literal of more
-than 4000 digits, is kept as its text. Only a message without a valid id or type is a
-protocol error of the page.
+than 4000 digits, is kept as its text. An id or a base64 value that is not spelled
+canonically, or an object that holds a key twice, fails the schema (SPEC_DECISIONS 74, 75),
+for a message of an unknown type too. Only a message without a parseable id or a type, or
+a page that is not one bounded JSON document (`bounded_json`), is a protocol error of the page.
 """
 
 from __future__ import annotations
@@ -51,6 +53,8 @@ from onepledge_bank_agent.domain.registry_records import (
     SignedCertificate,
 )
 from onepledge_bank_agent.domain.values import KeyVersion
+from onepledge_bank_agent.infrastructure import bounded_json
+from onepledge_bank_agent.infrastructure.encodings import canonical_uuid
 from onepledge_bank_agent.infrastructure.http import classification
 from onepledge_bank_agent.infrastructure.http.answers import error_code, json_object, parse, plain_json
 from onepledge_bank_agent.infrastructure.http.base import JsonBody, OutboundRequest, RetryingHttpCaller
@@ -122,6 +126,7 @@ KNOWN_MESSAGES: Mapping[str, type[BaseModel]] = MappingProxyType(
 )
 MAX_QUARANTINED_PAYLOAD_BYTES = 64 * 1024
 OUT_OF_RANGE = frozenset({"less_than_equal"})
+SCHEMA_MISMATCH = QuarantineReason.SCHEMA_MISMATCH
 
 
 def _validation_copy(value: object) -> object:
@@ -164,6 +169,13 @@ def _position(value: object) -> int | None:
     return None
 
 
+def message_id_is_canonical(document: Mapping[str, JsonValue]) -> bool:
+    """True when the message id is spelled canonically (SPEC_DECISIONS 75); a message of an unknown type
+    whose id is not is quarantined as SCHEMA_MISMATCH, as a known one is by its model."""
+    text = document.get("message_id")
+    return isinstance(text, str) and canonical_uuid(text) is not None
+
+
 def outbox_message(value: object, status: int) -> OutboxMessage:
     """One outbox message: its notice, or a `QuarantinedPayload` with the reason it fails rule 1 of
     SPEC_DECISIONS 85. Only a message without a usable id or type is a protocol error of the page."""
@@ -172,9 +184,10 @@ def outbox_message(value: object, status: int) -> OutboxMessage:
     evidence = _evidence(document.get("payload"))
     position = _position(value)
     model = KNOWN_MESSAGES.get(envelope.type)
-    if model is None:
+    well_formed = message_id_is_canonical(document) and not bounded_json.holds_duplicate_key(value)
+    if model is None and well_formed:
         return OutboxMessage(envelope.message_id, position, envelope.type, None, evidence)
-    reason = _rejection(model, value, evidence)
+    reason = _rejection(model, value, evidence) if model is not None and well_formed else SCHEMA_MISMATCH
     if reason is not None:
         quarantined = QuarantinedPayload(reason, evidence.payload, evidence.payload_sha256)
         return OutboxMessage(envelope.message_id, position, envelope.type, quarantined, evidence)
@@ -237,13 +250,14 @@ class RegistryHttpClient:
         """`GET /v1/outbox?limit=`."""
         response = self._ok(self._caller.get(OUTBOX, OUTBOX, {"limit": limit}))
         try:
-            page = json.loads(response.content, parse_float=_FloatText, parse_int=_integer)
+            page = bounded_json.loads(
+                response.content, mark_duplicates=True, parse_float=_FloatText, parse_int=_integer
+            )
         except ValueError:
             raise RegistryProtocolError(response.status_code) from None
-        if not isinstance(page, dict):
+        if not isinstance(page, dict) or isinstance(page, bounded_json.DuplicateKeyObject):
             raise RegistryProtocolError(response.status_code)
-        document = json_object(page)
-        messages, more = document.get("messages"), document.get("has_more")
+        messages, more = page.get("messages"), page.get("has_more")  # as read: duplicate keys stay marked
         if not isinstance(messages, list) or not isinstance(more, bool):
             raise RegistryProtocolError(response.status_code)
         return OutboxPage(tuple(outbox_message(value, response.status_code) for value in messages), more)

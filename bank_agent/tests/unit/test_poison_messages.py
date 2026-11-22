@@ -219,3 +219,36 @@ def test_a_sync_that_raises_never_starves_a_waiting_tape() -> None:
     report = bank.worker().run_once()
     assert bank.tape(tape).status is TapeStatus.COMPLETED, "every stage ran after the failed sync"
     assert report.task_failures == ["INTERNAL_ERROR"]
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [str.upper, lambda text: "{" + text + "}", lambda text: text.replace("-", "")],
+    ids=["upper case", "braces", "no hyphens"],
+)
+def test_a_message_whose_ids_are_not_canonical_is_quarantined_and_acknowledged_by_its_id(
+    spelling: object,
+) -> None:
+    """SPEC_DECISIONS 75 with 85 rule 1 (K18): a message id or case id in another spelling is poison,
+    SCHEMA_MISMATCH; it is acknowledged by the id it carries, and the sync goes on."""
+    assert callable(spelling)
+    bank = MemoryBank()
+    token, case_id = pledged(bank)
+    bank.outbox_sync().sync()
+    message_id = uuid.uuid4()
+    bad_id = bank.registry.deliver_wire(
+        {**alert(token, uuid.uuid4()), "message_id": spelling(str(message_id))}
+    )
+    wire = alert(token, uuid.uuid4())
+    payload = wire["payload"]
+    assert isinstance(payload, dict)
+    bad_case = bank.registry.deliver_wire(
+        {**wire, "payload": {**payload, "case_id": spelling(str(uuid.uuid4()))}}
+    )
+    following = bank.registry.alert(token)
+    assert bank.outbox_sync().sync().messages_processed == 3
+    assert bad_id.message_id == message_id
+    contained(bank, bad_id, QuarantineReason.SCHEMA_MISMATCH)
+    contained(bank, bad_case, QuarantineReason.SCHEMA_MISMATCH)
+    assert {a.record.registry_case_id for a in bank.alerts()} == {case_id, following}
+    advances(bank)
