@@ -5,6 +5,7 @@ from __future__ import annotations
 from onepledge_bank_agent.domain.cleaning.header import VIN
 from onepledge_bank_agent.domain.cleaning.model import FieldResult, fixed
 from onepledge_bank_agent.domain.enums import CleaningProblem
+from onepledge_bank_agent.domain.text_rules import LOWER, ascii_upper
 from onepledge_bank_agent.domain.values import CleaningIssue
 from onepledge_bank_agent.domain.vin import VIN_ALPHABET, VIN_LENGTH, Vin, vin_defect
 
@@ -16,8 +17,8 @@ def clean_vin(text: str) -> FieldResult[Vin]:
     """Upper case, separators removed, look-alike letters substituted when that makes it valid."""
     issues: list[CleaningIssue] = []
     value = text
-    if any(char.islower() for char in value):
-        value = value.upper()
+    if any(char in LOWER for char in value):
+        value = ascii_upper(value)
         issues.append(fixed(VIN, CleaningProblem.VIN_CASE_NORMALISED))
     if any(separator in value for separator in _SEPARATORS):
         for separator in _SEPARATORS:

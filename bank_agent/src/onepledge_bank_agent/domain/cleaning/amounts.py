@@ -12,9 +12,9 @@ from onepledge_bank_agent.domain.values import CleaningIssue, Money
 
 MIN_ORIGINAL = Money(10_000)
 MAX_ORIGINAL = Money(25_000_000)
-_INTEGER_PART = r"(\d{1,3}(?:,\d{3})+|\d+)"
-_EXACT = re.compile(r"^\$?" + _INTEGER_PART + r"\.(\d{2})$")
-_FIXABLE = re.compile(r"^\$?" + _INTEGER_PART + r"(?:\.(\d))?$")
+_INTEGER_PART = r"([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)"
+_EXACT = re.compile(r"^\$?" + _INTEGER_PART + r"\.([0-9]{2})$")
+_FIXABLE = re.compile(r"^\$?" + _INTEGER_PART + r"(?:\.([0-9]))?$")
 
 
 def _to_money(integer_part: str, fraction: str) -> Money:

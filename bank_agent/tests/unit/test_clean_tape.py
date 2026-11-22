@@ -225,3 +225,26 @@ def test_a_release_instruction_is_resolved_by_loan_id_within_the_facility(world:
         RowDisposition.REJECTED,
     ]
     assert world.store.state.items[submission][0].loan_id == locked.loan_id
+
+
+FULL_WIDTH_DIGITS = str.maketrans("0123456789", "".join(chr(0xFF10 + n) for n in range(10)))
+ARABIC_INDIC_DIGITS = str.maketrans("0123456789", "".join(chr(0x0660 + n) for n in range(10)))
+NON_ASCII_CELLS = [
+    ("original", "23450.17".translate(FULL_WIDTH_DIGITS), CleaningProblem.AMOUNT_UNPARSEABLE),
+    ("original", "23450.17".translate(ARABIC_INDIC_DIGITS), CleaningProblem.AMOUNT_UNPARSEABLE),
+    ("balance", "18000.00".translate(FULL_WIDTH_DIGITS), CleaningProblem.AMOUNT_UNPARSEABLE),
+    ("origination", "2025-03-15".translate(FULL_WIDTH_DIGITS), CleaningProblem.DATE_UNPARSEABLE),
+    ("origination", "03/15/2025".translate(ARABIC_INDIC_DIGITS), CleaningProblem.DATE_UNPARSEABLE),
+]
+
+
+@pytest.mark.parametrize(("cell", "text", "problem"), NON_ASCII_CELLS)
+def test_a_cell_in_non_ascii_digits_rejects_its_row(
+    world: World, cell: str, text: str, problem: CleaningProblem
+) -> None:
+    """WP2 review 1, F2: these cells were ACCEPTED_NEW with no issue; SPEC_DECISIONS 45 rejects them."""
+    submission = upload(world, [summit_row(**{cell: text})])
+    clean(world, submission)
+    assert dispositions(world, submission) == [RowDisposition.REJECTED]
+    (item,) = world.store.state.items[submission]
+    assert [issue.problem for issue in item.issues] == [problem]

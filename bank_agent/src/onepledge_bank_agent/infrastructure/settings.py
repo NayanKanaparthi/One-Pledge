@@ -23,6 +23,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, SecretStr
 
+from onepledge_bank_agent.domain.errors import InvalidValueError
+from onepledge_bank_agent.domain.text_rules import ascii_lower, ascii_upper, parse_integer, trim
 from onepledge_bank_agent.infrastructure.operator_errors import CONFIGURATION_ERROR, OperatorError
 
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
@@ -35,6 +37,7 @@ MAX_CHUNK = 1000
 MAX_TOKENIZE_CHUNK = 125  # 8 elements per loan, at most 1,000 elements per key holder request
 MAX_SUBMIT_BATCH = 500
 _KEY_ID = re.compile(r"^[a-z0-9-]{1,64}$")
+_SECONDS = re.compile(r"^([0-9]{1,6})(?:\.([0-9]{1,3}))?$")
 PUBLIC_KEY_BYTES = 32
 # The published test vector key (contracts/examples/vectors/signatures.json) is never a trust anchor.
 TEST_VECTOR_PUBLIC_KEYS = frozenset({"BlflaowBg3VkeFNDcT9cKZFMgLkwYA7l+SNUMxWPOVQ="})
@@ -85,7 +88,7 @@ class _Reader:
         self._environ = environ
 
     def text(self, name: str) -> str | None:
-        value = self._environ.get(name, "").strip()
+        value = trim(self._environ.get(name, ""))
         return value or None
 
     def secret(self, name: str) -> SecretStr | None:
@@ -102,18 +105,21 @@ class _Reader:
         value = self.text(name)
         if value is None:
             return default
-        if not value.isdigit() or not low <= int(value) <= high:
-            raise _invalid(name, f"a whole number from {low} to {high}")
-        return int(value)
+        try:
+            return parse_integer(value, name, low, high)
+        except InvalidValueError:
+            raise _invalid(name, f"a whole number from {low} to {high}") from None
 
     def seconds(self, name: str, default: float) -> float:
         value = self.text(name)
         if value is None:
             return default
-        try:
-            seconds = float(value)
-        except ValueError:
-            raise _invalid(name, "a positive number of seconds") from None
+        match = _SECONDS.fullmatch(value)
+        if match is None:
+            raise _invalid(name, "a positive number of seconds")
+        fraction = (match[2] or "").ljust(3, "0")
+        milliseconds = parse_integer(match[1], name, 0) * 1000 + parse_integer(fraction, name, 0)
+        seconds = milliseconds / 1000
         if not 0 < seconds <= MAX_SECONDS:
             raise _invalid(name, "a positive number of seconds")
         return seconds
@@ -122,9 +128,9 @@ class _Reader:
         value = self.text(name)
         if value is None:
             return default
-        if value.lower() not in _BOOLEANS:
+        if ascii_lower(value) not in _BOOLEANS:
             raise _invalid(name, "true or false")
-        return _BOOLEANS[value.lower()]
+        return _BOOLEANS[ascii_lower(value)]
 
     def member_id(self, name: str) -> uuid.UUID | None:
         value = self.text(name)
@@ -134,7 +140,7 @@ class _Reader:
             parsed = uuid.UUID(value)
         except ValueError:
             raise _invalid(name, "a UUID") from None
-        if str(parsed) != value.lower():
+        if str(parsed) != ascii_lower(value):
             raise _invalid(name, "a UUID")
         return parsed
 
@@ -194,7 +200,7 @@ def _tunables(read: _Reader) -> Tunables:
 
 
 def _log_level(read: _Reader) -> str:
-    level = (read.text("LOG_LEVEL") or "INFO").upper()
+    level = ascii_upper(read.text("LOG_LEVEL") or "INFO")
     if level not in _LOG_LEVELS:
         raise _invalid("LOG_LEVEL", "DEBUG, INFO, WARNING, ERROR or CRITICAL")
     return level

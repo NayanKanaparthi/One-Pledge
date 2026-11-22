@@ -26,6 +26,7 @@ from structlog.typing import EventDict, Processor, WrappedLogger
 
 from onepledge_bank_agent.application.events import LogEvent
 from onepledge_bank_agent.application.ports import LogValue
+from onepledge_bank_agent.domain.text_rules import DIGITS
 from onepledge_bank_agent.infrastructure.request_context import current_request_id
 
 ALLOWED_KEYS: frozenset[str] = frozenset(
@@ -51,7 +52,7 @@ def scrub_vin_shapes(text: str) -> str:
 
     def replace(match: re.Match[str]) -> str:
         run = match.group(0)
-        return REDACTED if sum(char.isdigit() for char in run) >= _MIN_VIN_DIGITS else run
+        return REDACTED if sum(char in DIGITS for char in run) >= _MIN_VIN_DIGITS else run
 
     return _VIN_SHAPE.sub(replace, text)
 

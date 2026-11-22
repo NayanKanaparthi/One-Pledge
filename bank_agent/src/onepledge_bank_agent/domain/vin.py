@@ -17,6 +17,7 @@ from onepledge_bank_agent.domain.errors import InvalidVinError
 VIN_LENGTH = 17
 CHECK_DIGIT_POSITION = 8  # zero based index of position 9
 VIN_ALPHABET = frozenset(string.digits + string.ascii_uppercase) - frozenset("IOQ")
+_DIGIT_VALUES = MappingProxyType({digit: value for value, digit in enumerate("0123456789")})
 _LETTER_VALUES = MappingProxyType(
     {
         **dict(zip("ABCDEFGH", range(1, 9), strict=True)),
@@ -41,8 +42,8 @@ class VinDefect(StrEnum):
 
 def transliterate(character: str) -> int:
     """The numeric value of one VIN character (digits are their own value)."""
-    if character.isdigit():
-        return int(character)
+    if character in _DIGIT_VALUES:
+        return _DIGIT_VALUES[character]
     return _LETTER_VALUES[character]
 
 

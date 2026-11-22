@@ -40,6 +40,7 @@ from onepledge_bank_agent.domain.cleaning.model import (
 from onepledge_bank_agent.domain.cleaning.text_fields import clean_borrower_ref, clean_loan_number
 from onepledge_bank_agent.domain.cleaning.vin_field import clean_vin
 from onepledge_bank_agent.domain.enums import CleaningAction, CleaningProblem, TapeKind
+from onepledge_bank_agent.domain.text_rules import ascii_upper, split_ascii_whitespace, trim
 from onepledge_bank_agent.domain.values import CleaningIssue, LoanTerms
 
 NON_DATA_MARKERS = frozenset({"TOTAL", "TOTALS", "GRAND TOTAL", "SUBTOTAL"})
@@ -68,9 +69,9 @@ def is_unsafe(raw: str, trimmed: str) -> bool:
 
 def row_rule(cells: Sequence[str], header_map: HeaderMap) -> CleaningIssue | None:
     """The one row issue that rejects the whole row, if any."""
-    if not any(cell.strip() for cell in cells):
+    if not any(trim(cell) for cell in cells):
         return rejected(ROW, CleaningProblem.NON_DATA_ROW)
-    if " ".join(cells[0].split()).upper() in NON_DATA_MARKERS:
+    if ascii_upper(" ".join(split_ascii_whitespace(cells[0]))) in NON_DATA_MARKERS:
         return rejected(ROW, CleaningProblem.NON_DATA_ROW)
     if len(cells) != header_map.width:
         return rejected(ROW, CleaningProblem.COLUMN_COUNT_MISMATCH)
@@ -79,14 +80,14 @@ def row_rule(cells: Sequence[str], header_map: HeaderMap) -> CleaningIssue | Non
 
 def clean_field[T](field: str, raw: str, rule: Callable[[str], FieldResult[T]]) -> FieldResult[T]:
     """Trim, empty, unsafe characters, then the field's own rule."""
-    trimmed = raw.strip()
-    trim = (fixed(field, CleaningProblem.WHITESPACE_TRIMMED),) if trimmed != raw else ()
+    trimmed = trim(raw)
+    trimming = (fixed(field, CleaningProblem.WHITESPACE_TRIMMED),) if trimmed != raw else ()
     if not trimmed:
-        return FieldResult.refused(field, CleaningProblem.MISSING_REQUIRED_FIELD, *trim)
+        return FieldResult.refused(field, CleaningProblem.MISSING_REQUIRED_FIELD, *trimming)
     if is_unsafe(raw, trimmed):
-        return FieldResult.refused(field, CleaningProblem.UNSAFE_CHARACTERS, *trim)
+        return FieldResult.refused(field, CleaningProblem.UNSAFE_CHARACTERS, *trimming)
     result = rule(trimmed)
-    return FieldResult(result.value, (*trim, *result.issues))
+    return FieldResult(result.value, (*trimming, *result.issues))
 
 
 def _sorted(issues: Iterable[CleaningIssue]) -> tuple[CleaningIssue, ...]:

@@ -13,6 +13,7 @@ from types import MappingProxyType
 
 from onepledge_bank_agent.domain.enums import TapeKind
 from onepledge_bank_agent.domain.errors import TapeHeaderInvalidError
+from onepledge_bank_agent.domain.text_rules import ascii_lower, split_ascii_whitespace
 
 LOAN_NUMBER = "lender_loan_number"
 VIN = "vin"
@@ -42,7 +43,7 @@ _ALIAS_TO_FIELD: Mapping[str, str] = MappingProxyType(
 
 def normalise_header_name(name: str) -> str:
     """Trim, lower case, collapse inner whitespace."""
-    return " ".join(name.strip().lower().split())
+    return " ".join(split_ascii_whitespace(ascii_lower(name)))
 
 
 def required_fields(kind: TapeKind) -> tuple[str, ...]:

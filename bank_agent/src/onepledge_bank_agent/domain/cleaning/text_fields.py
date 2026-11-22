@@ -2,20 +2,22 @@
 
 from __future__ import annotations
 
-import re
-
 from onepledge_bank_agent.domain.cleaning.header import BORROWER_REF, LOAN_NUMBER
 from onepledge_bank_agent.domain.cleaning.model import FieldResult, fixed
 from onepledge_bank_agent.domain.enums import CleaningProblem
 from onepledge_bank_agent.domain.errors import InvalidValueError
+from onepledge_bank_agent.domain.text_rules import ascii_upper, is_ascii_alnum
 from onepledge_bank_agent.domain.values import BorrowerRef, LenderLoanNumber
 
-_NOT_BORROWER_CHARACTER = re.compile(r"[^A-Z0-9]")
+BORROWER_SEPARATORS = frozenset(" -_./")
 
 
 def clean_borrower_ref(text: str) -> FieldResult[BorrowerRef]:
-    """Upper case and every character outside A-Z0-9 removed; then the pattern must hold."""
-    canonical = _NOT_BORROWER_CHARACTER.sub("", text.upper())
+    """ASCII upper case and the separators space, `-`, `_`, `.`, `/` removed; any other character outside
+    `A-Za-z0-9` is refused, never dropped (SPEC_DECISIONS 45). Then the pattern must hold."""
+    if any(char not in BORROWER_SEPARATORS and not is_ascii_alnum(char) for char in text):
+        return FieldResult.refused(BORROWER_REF, CleaningProblem.BORROWER_REF_INVALID)
+    canonical = ascii_upper("".join(char for char in text if char not in BORROWER_SEPARATORS))
     issues = () if canonical == text else (fixed(BORROWER_REF, CleaningProblem.BORROWER_REF_NORMALISED),)
     try:
         return FieldResult(BorrowerRef(canonical), issues)

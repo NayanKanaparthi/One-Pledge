@@ -10,7 +10,6 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
-from decimal import Decimal
 from types import MappingProxyType
 from typing import Self
 
@@ -24,10 +23,11 @@ from onepledge_bank_agent.domain.enums import (
     TokenKind,
 )
 from onepledge_bank_agent.domain.errors import InvalidValueError
+from onepledge_bank_agent.domain.text_rules import DIGITS, parse_integer
 from onepledge_bank_agent.domain.vin import Vin
 
 MAX_CENTS = 10**13
-_DECIMAL_AMOUNT = re.compile(r"^(\d+)(?:\.(\d{1,2}))?$")
+_DECIMAL_AMOUNT = re.compile(r"^([0-9]{1,13})(?:\.([0-9]{1,2}))?$")
 _BORROWER_REF = re.compile(r"^[A-Z0-9]{4,32}$")
 _LOAN_NUMBER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-_/]{0,39}$")
 _LEI = re.compile(r"^[A-Z0-9]{18}[0-9]{2}$")
@@ -52,12 +52,13 @@ class Money:
 
     @classmethod
     def parse_decimal(cls, text: str) -> Self:
-        """Parse `123` or `123.4` or `123.45` with `Decimal`; at most two fraction digits."""
+        """Parse `123` or `123.4` or `123.45` in ASCII digits; at most two fraction digits; exact cents."""
         match = _DECIMAL_AMOUNT.fullmatch(text)
         if match is None:
             raise InvalidValueError("money", "PATTERN_MISMATCH")
-        cents = Decimal(text) * 100
-        return cls(int(cents))
+        dollars = parse_integer(match[1], "money", 0)
+        fraction = (match[2] or "").ljust(2, "0")
+        return cls(dollars * 100 + parse_integer(fraction, "money", 0))
 
     def __add__(self, other: Money) -> Money:
         """Sum of two amounts."""
@@ -106,8 +107,12 @@ class LenderLoanNumber:
 
 def lei_checksum(text: str) -> int:
     """ISO 17442 / ISO 7064 MOD 97-10 remainder; letters count A=10 to Z=35."""
-    digits = "".join(str(int(char, 36)) for char in text)
-    return int(digits) % _LEI_MODULUS
+    remainder = 0
+    for char in text:
+        value = ord(char) - ord("0") if char in DIGITS else ord(char) - ord("A") + 10
+        for digit in str(value):
+            remainder = (remainder * 10 + ord(digit) - ord("0")) % _LEI_MODULUS
+    return remainder
 
 
 @dataclass(frozen=True)
@@ -155,7 +160,7 @@ class KeyVersion:
         match = _KEY_VERSION.fullmatch(text)
         if match is None:
             raise InvalidValueError("key_version", "PATTERN_MISMATCH")
-        return cls(int(match[1]), int(match[2]))
+        return cls(parse_integer(match[1], "key_version", 1), parse_integer(match[2], "key_version", 1))
 
     def __str__(self) -> str:
         """`"<h1>.<h2>"`."""
