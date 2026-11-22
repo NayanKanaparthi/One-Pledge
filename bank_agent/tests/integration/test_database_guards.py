@@ -28,6 +28,7 @@ INSERT_ONLY = {
     "loans_raw": "row_number", "audit_log": "action", "cleaning_issues": "field",
     "submission_items": "row_number", "local_checks": "result", "loan_tokens": "token",
     "certificates": "kind", "checkpoints_seen": "signature", "integrity_runs": "status",
+    "registry_messages_quarantined": "reason",
 }  # fmt: skip
 REFERENCED_BY_FOREIGN_KEYS = {"loans_raw"}
 
@@ -53,6 +54,11 @@ def filled(
         assert loan_id is not None
         connection.execute(
             "INSERT INTO loan_tokens VALUES (%s, 'ASSET', '1.1', %s, now())", (loan_id[0], "c" * 64)
+        )
+        connection.execute(
+            "INSERT INTO registry_messages_quarantined VALUES "
+            "(gen_random_uuid(), gen_random_uuid(), 1, 'ALERT', '{}'::jsonb, %s, 'SCHEMA_MISMATCH', now())",
+            ("d" * 64,),
         )
     yield database
     drop(database)
