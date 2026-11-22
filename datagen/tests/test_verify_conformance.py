@@ -12,6 +12,7 @@ import hashlib
 import io
 import json
 import shutil
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -418,3 +419,22 @@ def test_every_json_failure_names_its_stage(small_dir: Path, tmp_path: Path) -> 
     by_stage = {failure["problem"]: failure["stage"] for failure in document["violations"]}
     assert by_stage["outside_records/titles.csv does not match its checksum"] == "CHECKSUM"
     assert by_stage[f"outside_records/titles.csv differs from what {ORIGIN} generates"] == "REGENERATION"
+
+
+def snapshot(directory: Path) -> dict[str, tuple[bytes, int]]:
+    files = (p for p in directory.rglob("*") if p.is_file())
+    return {p.relative_to(directory).as_posix(): (p.read_bytes(), p.stat().st_mtime_ns) for p in files}
+
+
+def test_verify_regenerates_in_memory_and_leaves_no_file_behind(small_dir: Path, tmp_path: Path) -> None:
+    """SPEC_DECISIONS 68.10: verify writes nothing, in the data set, beside it or in the temp folder."""
+    target = tmp_path / "copy"
+    shutil.copytree(small_dir, target)
+    before, beside = snapshot(target), sorted(p.name for p in tmp_path.iterdir())
+    temp = Path(tempfile.gettempdir())
+    temp_before = {p.name for p in temp.iterdir()}
+    code, _, err = run("verify", "--data-dir", str(target))
+    assert (code, err) == (0, "")
+    assert snapshot(target) == before
+    assert sorted(p.name for p in tmp_path.iterdir()) == beside
+    assert {p.name for p in temp.iterdir()} - temp_before == set()
