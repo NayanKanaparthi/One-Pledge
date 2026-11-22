@@ -15,8 +15,9 @@ from datetime import date, timedelta
 import httpx
 import pytest
 
+from bank_testkit.memory.bank import MemoryBank, vins
 from onepledge_bank_agent.domain import Vin
-from onepledge_bank_agent.domain.enums import FailureCode, FailureReason
+from onepledge_bank_agent.domain.enums import FailureCode, FailureReason, LoanState, TapeStatus
 from onepledge_bank_agent.domain.errors import OutsideRecordsRejectedError
 from onepledge_bank_agent.domain.outside_records import PaymentWindow
 from onepledge_bank_agent.infrastructure.http.base import RetryingHttpCaller
@@ -179,3 +180,45 @@ def test_an_incomplete_or_inconsistent_window_is_malformed(breakage: Breakage) -
         200,
         False,
     )
+
+
+def test_a_moving_total_is_read_once_per_page_and_never_held_as_evidence() -> None:
+    """SPEC_DECISIONS 68.9: the client stops at the page whose total moved; it does not loop."""
+    service = StandIn(newest_first(450), total_changes)
+    with pytest.raises(OutsideRecordsRejectedError):
+        read(service)
+    assert [p["offset"] for p in service.seen] == ["0", "200"]
+
+
+def client_over(service: StandIn) -> OutsideRecordsClient:
+    """The real payments client, over a stand-in service."""
+    http = httpx.Client(base_url="http://outside.test", transport=httpx.MockTransport(service))
+    return OutsideRecordsClient(
+        RetryingHttpCaller(http, "opk_" + "a" * 43, "outside_records", Quiet(), lambda _: None)
+    )
+
+
+def test_a_moving_total_fails_the_tape_rejected_and_malformed_and_holds_no_loan() -> None:
+    bank = MemoryBank()
+    (vin,) = vins(1)
+    payments = [payment(WINDOW_TO - timedelta(days=(day * 90) // 450), vin) for day in range(450)]
+    service = StandIn(payments, total_changes)
+    bank.payments = client_over(service)
+    tape = bank.upload([vin])
+    run = bank.run(tape)[-1]
+    assert run.status is TapeStatus.FAILED and run.failure is not None
+    assert (run.failure["failure_code"], run.failure["reason"]) == (
+        "OUTSIDE_RECORDS_REJECTED",
+        "MALFORMED_RESPONSE",
+    )
+    progress = bank.tape(tape).progress
+    assert (progress.failed_stage, progress.resume_status) == (TapeStatus.CHECKED, TapeStatus.CLEANED)
+    state = bank.world.store.state
+    assert [loan.state for loan in state.loans.values()] == [LoanState.PENDING], "no loan is held"
+    assert state.checks == {}, "no check result rests on a partial window"
+    assert len(service.seen) == 2
+    service.breakage = None
+    bank.retry(tape)
+    assert bank.run(tape)[-1].status is TapeStatus.COMPLETED
+    (stored,) = bank.world.store.state.checks.values()
+    assert "PAYMENT_IN_WINDOW" in {result.reason.value for result in stored}
