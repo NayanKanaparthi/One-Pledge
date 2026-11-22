@@ -15,6 +15,7 @@ from datetime import date
 from pathlib import Path
 
 import httpx
+import psycopg
 import pytest
 from psycopg import sql
 
@@ -392,15 +393,38 @@ def test_the_worker_refuses_to_start_as_the_owner_role(
         "GRANT DELETE ON alerts TO {role}",
         "GRANT TRUNCATE ON loans TO {role}",
         "GRANT CREATE ON SCHEMA public TO {role}",
+        "GRANT UPDATE ON registry_messages_quarantined TO {role}",
+        "GRANT UPDATE ON certificates TO {role}",
+        "GRANT {owner} TO {role}",
     ],
 )
 def test_the_worker_refuses_an_app_role_with_a_forbidden_privilege(
     bank_db: BankDatabase, doubles: InProcessDoubles, monkeypatch: pytest.MonkeyPatch, grant: str
 ) -> None:
-    with bank_db.connect("owner") as connection:
-        connection.execute(sql.SQL(grant).format(role=sql.Identifier(bank_db.app_role)))
+    with bank_db.connect("admin") as connection:
+        connection.execute(
+            sql.SQL(grant).format(
+                role=sql.Identifier(bank_db.app_role), owner=sql.Identifier(bank_db.target.owner_role)
+            )
+        )
     cli = cli_for(monkeypatch, {**bank_db.environment(), **unreachable_services(doubles)})
     assert cli("worker", "--once") == Run(1, "", ROLE_SENTENCE + "\n")
+
+
+def test_the_worker_refuses_to_start_as_a_superuser_whatever_the_server_checks_of_passwords(
+    bank_db: BankDatabase, doubles: InProcessDoubles, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC_DECISIONS 68.11: the build server trusts every local connection, so the check reads the
+    connected role's attributes and privileges, not which URL was supplied."""
+    superuser_url = bank_db.admin_url.rsplit("/", 1)[0] + "/" + bank_db.name
+    with psycopg.connect(superuser_url) as connection:
+        assert connection.execute(
+            "SELECT rolsuper FROM pg_roles WHERE rolname = current_user"
+        ).fetchone() == (True,)
+    environment = {**bank_db.environment(), "DATABASE_URL": superuser_url, **unreachable_services(doubles)}
+    cli = cli_for(monkeypatch, environment)
+    assert cli("worker", "--once") == Run(1, "", ROLE_SENTENCE + "\n")
+    assert pairs(bank_db, "SELECT 'audit', count(*)::text FROM audit_log") == {"audit": "0"}
 
 
 def test_an_unreachable_database_is_one_sentence_without_the_url(bank_db: BankDatabase) -> None:
