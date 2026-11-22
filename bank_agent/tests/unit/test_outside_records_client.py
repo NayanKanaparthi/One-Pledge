@@ -11,10 +11,12 @@ import httpx
 import pytest
 
 from onepledge_bank_agent.domain import Vin
+from onepledge_bank_agent.domain.enums import DependencyRefusal, FailureCode
 from onepledge_bank_agent.domain.errors import (
     OutsideRecordsProtocolError,
     OutsideRecordsRejectedError,
     OutsideRecordsUnavailableError,
+    PipelineStageError,
 )
 from onepledge_bank_agent.infrastructure.http.base import RetryingHttpCaller
 from onepledge_bank_agent.infrastructure.http.outside_records import OutsideRecordsClient
@@ -112,33 +114,69 @@ def test_the_bound_request_id_is_forwarded() -> None:
 def test_not_found_means_no_record_only_with_the_agreed_code() -> None:
     assert client(answer(404, error("TITLE_NOT_FOUND"))).title(VIN) is None
     assert client(answer(404, error("CONTRACT_NOT_FOUND"))).contracts(VIN) == ()
-    with pytest.raises(OutsideRecordsProtocolError):
+    with pytest.raises(OutsideRecordsProtocolError) as raised:
         client(answer(404, error("NOT_FOUND"))).title(VIN)
+    assert raised.value.http_status == 404
     with pytest.raises(OutsideRecordsProtocolError):
         client(lambda request: httpx.Response(404, text="<html>")).contracts(VIN)
 
 
-@pytest.mark.parametrize(
-    ("status", "error_type"),
-    [
-        (401, OutsideRecordsRejectedError),
-        (422, OutsideRecordsRejectedError),
-        (403, OutsideRecordsProtocolError),
-        (405, OutsideRecordsProtocolError),
-        (429, OutsideRecordsUnavailableError),
-        (500, OutsideRecordsUnavailableError),
-    ],
-)
-def test_status_codes_map_to_permanent_or_transient_errors(status: int, error_type: type[Exception]) -> None:
+R = DependencyRefusal
+STATUS_MAPPING: list[tuple[int, type[PipelineStageError], FailureCode, DependencyRefusal | None]] = [
+    (401, OutsideRecordsRejectedError, FailureCode.OUTSIDE_RECORDS_REJECTED, R.UNAUTHENTICATED),
+    (403, OutsideRecordsRejectedError, FailureCode.OUTSIDE_RECORDS_REJECTED, R.FORBIDDEN),
+    (422, OutsideRecordsRejectedError, FailureCode.OUTSIDE_RECORDS_REJECTED, R.REQUEST_REFUSED),
+    (400, OutsideRecordsRejectedError, FailureCode.OUTSIDE_RECORDS_REJECTED, R.REQUEST_REFUSED),
+    (405, OutsideRecordsRejectedError, FailureCode.OUTSIDE_RECORDS_REJECTED, R.REQUEST_REFUSED),
+    (409, OutsideRecordsRejectedError, FailureCode.OUTSIDE_RECORDS_REJECTED, R.REQUEST_REFUSED),
+    (302, OutsideRecordsProtocolError, FailureCode.OUTSIDE_RECORDS_REJECTED, R.MALFORMED_RESPONSE),
+    (429, OutsideRecordsUnavailableError, FailureCode.OUTSIDE_RECORDS_UNAVAILABLE, None),
+    (500, OutsideRecordsUnavailableError, FailureCode.OUTSIDE_RECORDS_UNAVAILABLE, None),
+]
+
+
+@pytest.mark.parametrize(("status", "error_type", "failure", "reason"), STATUS_MAPPING)
+def test_status_codes_map_to_refusals_or_transient_errors(
+    status: int, error_type: type[PipelineStageError], failure: FailureCode, reason: DependencyRefusal | None
+) -> None:
     calls: list[int] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(1)
         return httpx.Response(status, json=error("X"))
 
-    with pytest.raises(error_type):
+    with pytest.raises(error_type) as raised:
         client(handler).title(VIN)
     assert len(calls) == 1
+    assert (raised.value.failure_code, raised.value.reason, raised.value.http_status) == (
+        failure,
+        reason,
+        status,
+    )
+    assert raised.value.transient is (failure is FailureCode.OUTSIDE_RECORDS_UNAVAILABLE)
+    expected = {"dependency": "outside_records", "http_status": status}
+    assert raised.value.audit_detail() == (
+        expected if reason is None else {**expected, "reason": reason.value}
+    )
+
+
+def test_a_success_that_breaks_the_contract_is_a_malformed_response() -> None:
+    with pytest.raises(OutsideRecordsProtocolError) as raised:
+        client(answer(200, {"vin": VIN.value})).title(VIN)
+    assert raised.value.audit_detail() == {
+        "dependency": "outside_records", "http_status": 200, "reason": "MALFORMED_RESPONSE",
+    }  # fmt: skip
+    with pytest.raises(OutsideRecordsProtocolError):
+        client(answer(200, {**TITLE, "vin": "5YJ3E1EA2KF317000"})).title(VIN)
+
+
+def test_an_unreachable_service_has_no_status() -> None:
+    def down(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down", request=request)
+
+    with pytest.raises(OutsideRecordsUnavailableError) as raised:
+        client(down).title(VIN)
+    assert raised.value.audit_detail() == {"dependency": "outside_records", "http_status": None}
 
 
 @pytest.mark.parametrize("status", [502, 503, 504])

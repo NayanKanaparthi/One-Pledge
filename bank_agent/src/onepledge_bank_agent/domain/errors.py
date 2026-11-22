@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from onepledge_bank_agent.domain.enums import FailureCode
+from onepledge_bank_agent.domain.enums import DependencyRefusal, FailureCode
 
 MESSAGES: Mapping[str, str] = MappingProxyType(
     {
@@ -194,10 +194,33 @@ class ConcurrentUploadError(DomainError):
 
 
 class PipelineStageError(DomainError):
-    """A stage attempt failed because of a dependency. `transient` decides whether it is retried."""
+    """A stage attempt failed because of a dependency. `transient` decides whether it is retried.
+
+    `dependency`, `http_status` and `reason` are what the `TAPE_FAILED` audit entry records
+    (SPEC_DECISIONS 26): which service, the status it answered (None when it was not
+    reached) and, for a refusal, why.
+    """
 
     transient = False
     failure_code = FailureCode.INTERNAL_ERROR
+    dependency: str | None = None
+
+    def __init__(self, http_status: int | None = None, reason: DependencyRefusal | None = None) -> None:
+        super().__init__()
+        self.http_status = http_status
+        self.reason = reason
+
+    def audit_detail(self) -> dict[str, str | int | None]:
+        """The dependency facts of the failure, for the audit entry; empty when no dependency is named."""
+        if self.dependency is None:
+            return {}
+        detail: dict[str, str | int | None] = {"dependency": self.dependency, "http_status": self.http_status}
+        if self.reason is not None:
+            detail["reason"] = self.reason.value
+        return detail
+
+
+OUTSIDE_RECORDS = "outside_records"
 
 
 class OutsideRecordsUnavailableError(PipelineStageError):
@@ -206,20 +229,32 @@ class OutsideRecordsUnavailableError(PipelineStageError):
     code = "OUTSIDE_RECORDS_UNAVAILABLE"
     transient = True
     failure_code = FailureCode.OUTSIDE_RECORDS_UNAVAILABLE
+    dependency = OUTSIDE_RECORDS
+
+    def __init__(self, http_status: int | None = None) -> None:
+        super().__init__(http_status)
 
 
 class OutsideRecordsRejectedError(PipelineStageError):
-    """Outside records refused the bank's request (401 or 422): a configuration problem."""
+    """Outside records refused the request (401, 403, 422 or another 4xx): usually a configuration fault."""
 
     code = "OUTSIDE_RECORDS_REJECTED"
-    failure_code = FailureCode.OUTSIDE_RECORDS_UNAVAILABLE
+    failure_code = FailureCode.OUTSIDE_RECORDS_REJECTED
+    dependency = OUTSIDE_RECORDS
+
+    def __init__(self, http_status: int, reason: DependencyRefusal) -> None:
+        super().__init__(http_status, reason)
 
 
 class OutsideRecordsProtocolError(PipelineStageError):
     """Outside records answered with a status or a body the contract does not allow."""
 
     code = "OUTSIDE_RECORDS_PROTOCOL"
-    failure_code = FailureCode.OUTSIDE_RECORDS_UNAVAILABLE
+    failure_code = FailureCode.OUTSIDE_RECORDS_REJECTED
+    dependency = OUTSIDE_RECORDS
+
+    def __init__(self, http_status: int | None) -> None:
+        super().__init__(http_status, DependencyRefusal.MALFORMED_RESPONSE)
 
 
 class MissingTapeLayoutError(DomainError):

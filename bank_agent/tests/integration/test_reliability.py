@@ -213,3 +213,29 @@ def test_two_workers_on_one_database_never_run_a_stage_twice(lab: Lab, clean_run
     advanced = [row for row in final["audits"] if row[0] == "TAPE_STAGE_ADVANCED"]
     assert advanced == [("TAPE_STAGE_ADVANCED", "CHECKED", 1), ("TAPE_STAGE_ADVANCED", "CLEANED", 1)]
     assert chain_holds(database)
+
+
+class WrongKey:
+    """The real outside records service, called with a key it does not know (a configuration fault)."""
+
+    api_key = "opk_" + "w" * 43
+
+    def __init__(self, outside: InProcessOutsideRecords) -> None:
+        self.client_factory = outside.client_factory
+
+
+def test_a_refused_key_fails_the_tape_at_once_and_the_audit_names_the_reason(lab: Lab) -> None:
+    database = lab.bank()
+    with BankAgentHarness(database, WrongKey(lab.outside)) as harness:
+        lab.upload(harness)
+        outcomes = [run.outcome.value for run in harness.run_worker().runs]
+    assert outcomes == ["ADVANCED", "FAILED"]
+    failed = "SELECT status, failure_code || ' ' || attempts FROM tape_submissions"
+    assert pairs(database, failed) == {"FAILED": "OUTSIDE_RECORDS_REJECTED 0"}
+    detail = (
+        "SELECT detail->>'failure_code', concat_ws(' ', detail->>'dependency', detail->>'http_status', "
+        "detail->>'reason') FROM audit_log WHERE action = 'TAPE_FAILED'"
+    )
+    assert pairs(database, detail) == {"OUTSIDE_RECORDS_REJECTED": "outside_records 401 UNAUTHENTICATED"}
+    assert pairs(database, "SELECT 'checks', count(*)::text FROM local_checks") == {"checks": "0"}
+    assert chain_holds(database)

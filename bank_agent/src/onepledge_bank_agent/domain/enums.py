@@ -51,6 +51,15 @@ class FailureCode(StrEnum):
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
+class DependencyRefusal(StrEnum):
+    """Why a dependency refused a request or broke its contract (SPEC_DECISIONS 26)."""
+
+    UNAUTHENTICATED = "UNAUTHENTICATED"
+    FORBIDDEN = "FORBIDDEN"
+    REQUEST_REFUSED = "REQUEST_REFUSED"
+    MALFORMED_RESPONSE = "MALFORMED_RESPONSE"
+
+
 class LoanState(StrEnum):
     """Bank side state of one loan row (SPEC 8.4)."""
 

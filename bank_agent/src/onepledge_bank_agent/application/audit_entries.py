@@ -61,14 +61,24 @@ def stage_attempt_failed(submission_id: uuid.UUID, stage: TapeStatus, code: str,
 
 
 def tape_failed(
-    submission_id: uuid.UUID, stage: TapeStatus, resume_status: TapeStatus, code: FailureCode
+    submission_id: uuid.UUID,
+    stage: TapeStatus,
+    resume_status: TapeStatus,
+    code: FailureCode,
+    dependency: Mapping[str, str | int | None],
 ) -> AuditDraft:
-    """`TAPE_FAILED` with the stage attempted, the status to resume from and the failure code."""
+    """`TAPE_FAILED` with the stage attempted, the status to resume from, the failure code and, when a
+    dependency failed, `dependency`, `http_status` and (for a refusal) `reason` (SPEC_DECISIONS 26)."""
     return AuditDraft(
         AuditAction.TAPE_FAILED,
         Actor.system(),
         AuditObjectType.TAPE_SUBMISSION,
         submission_id,
         AuditOutcome.FAILURE,
-        {"stage": stage.value, "resume_status": resume_status.value, "failure_code": code.value},
+        {
+            "stage": stage.value,
+            "resume_status": resume_status.value,
+            "failure_code": code.value,
+            **dependency,
+        },
     )

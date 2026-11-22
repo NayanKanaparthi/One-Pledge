@@ -27,15 +27,11 @@ NEXT_STAGE: Mapping[TapeStatus, TapeStatus] = MappingProxyType(
 )
 RESUMABLE: frozenset[TapeStatus] = frozenset(NEXT_STAGE)
 UNFINISHED: frozenset[TapeStatus] = RESUMABLE
-RETRYABLE_FAILURES: frozenset[FailureCode] = frozenset(
-    {
-        FailureCode.OUTSIDE_RECORDS_UNAVAILABLE,
-        FailureCode.KEY_HOLDER_UNAVAILABLE,
-        FailureCode.REGISTRY_UNAVAILABLE,
-        FailureCode.REGISTRY_INTEGRITY_BROKEN,
-        FailureCode.INTERNAL_ERROR,
-    }
+# Every failure may be retried by a credit officer except these two (SPEC_DECISIONS 26, amending SPEC 13.8).
+NOT_RETRYABLE: frozenset[FailureCode] = frozenset(
+    {FailureCode.KEY_VERSION_MISMATCH, FailureCode.CERTIFICATE_INVALID}
 )
+RETRYABLE_FAILURES: frozenset[FailureCode] = frozenset(FailureCode) - NOT_RETRYABLE
 MAX_BACKOFF_SECONDS = 60
 
 

@@ -23,7 +23,7 @@ from onepledge_bank_agent.application.audit_entries import stage_attempt_failed,
 from onepledge_bank_agent.application.events import LogEvent
 from onepledge_bank_agent.application.ports import UnitOfWorkFactory
 from onepledge_bank_agent.application.runtime import Runtime
-from onepledge_bank_agent.domain.enums import FailureCode, TapeStatus
+from onepledge_bank_agent.domain.enums import TapeStatus
 from onepledge_bank_agent.domain.errors import PipelineStageError
 from onepledge_bank_agent.domain.tape import NEXT_STAGE
 
@@ -96,7 +96,7 @@ class AdvanceSubmission:
         try:
             stage.run(submission_id)
         except PipelineStageError as error:
-            return self._stage_failed(submission_id, before, error.failure_code, error.transient, error.code)
+            return self._stage_failed(submission_id, before, error)
         except Exception as error:  # every other error fails the tape with INTERNAL_ERROR (SPEC 13.7)
             self._log.failure(
                 LogEvent.STAGE_UNEXPECTED_ERROR,
@@ -104,35 +104,30 @@ class AdvanceSubmission:
                 submission_id=str(submission_id),
                 stage=stage.reached.value,
             )
-            code = FailureCode.INTERNAL_ERROR
-            return self._stage_failed(submission_id, before, code, transient=False, error_code=code.value)
+            return self._stage_failed(submission_id, before, PipelineStageError())
         self._log.info(
             LogEvent.TAPE_STAGE_ADVANCED, submission_id=str(submission_id), stage=stage.reached.value
         )
         return StageRun(submission_id, before, StageOutcome.ADVANCED, stage.reached)
 
     def _stage_failed(
-        self,
-        submission_id: uuid.UUID,
-        before: TapeStatus,
-        code: FailureCode,
-        transient: bool,
-        error_code: str,
+        self, submission_id: uuid.UUID, before: TapeStatus, error: PipelineStageError
     ) -> StageRun:
-        now = self._clock.now()
+        """Back off or fail; an error that is not a dependency's fails the tape with INTERNAL_ERROR."""
+        code, error_code, now = error.failure_code, error.code, self._clock.now()
         with self._units() as unit:
             tape = unit.tapes.get(submission_id, for_update=True)
             if tape is None or tape.status is not before or tape.next_stage is None:
                 return StageRun(submission_id, before, StageOutcome.NOTHING_TO_DO, before, error_code)
             stage = tape.next_stage
-            if transient:
+            if error.transient:
                 failed = tape.record_failed_attempt(code, now, self._max_attempts)
                 unit.record(stage_attempt_failed(submission_id, stage, error_code, tape.progress.attempts))
             else:
                 tape.fail(code, now)
                 failed = True
             if failed:
-                unit.record(tape_failed(submission_id, stage, before, code))
+                unit.record(tape_failed(submission_id, stage, before, code, error.audit_detail()))
             unit.tapes.save(tape)
             unit.commit()
         fields = {"submission_id": str(submission_id), "stage": stage.value, "error_code": error_code}

@@ -2,19 +2,22 @@
 
 Responses are parsed into models that ignore unknown fields (additive evolution) and
 enforce the required ones. A 404 means "no record" only when the error code says so;
-any other answer outside the contract is a permanent protocol error. 401 and 422 are
-permanent; 429, 5xx and an unreachable service are transient (SPEC 11.4).
+any other answer outside the contract is a permanent protocol error. 401, 403, 422 and
+every other 4xx are permanent refusals; 429, 5xx and an unreachable service are
+transient (SPEC 11.4, SPEC_DECISIONS 26).
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import date
+from types import MappingProxyType
 from typing import Literal
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from onepledge_bank_agent.domain.enums import DependencyRefusal
 from onepledge_bank_agent.domain.errors import (
     OutsideRecordsProtocolError,
     OutsideRecordsRejectedError,
@@ -34,7 +37,8 @@ PAYMENTS_ROUTE = "/v1/payments"
 CONTRACTS_ROUTE = "/v1/contracts/{vin}"
 PAYMENTS_PAGE_LIMIT = 200
 VIN_PATTERN = r"^[A-HJ-NPR-Z0-9]{17}$"
-_PERMANENT = frozenset({401, 422})
+_REFUSALS = MappingProxyType({401: DependencyRefusal.UNAUTHENTICATED, 403: DependencyRefusal.FORBIDDEN})
+_CLIENT_ERRORS_FROM = 400
 _TRANSIENT_FLOOR = 500
 _RATE_LIMITED = 429
 
@@ -86,12 +90,17 @@ class _ErrorBody(_Lenient):
 
 
 def _fail(response: httpx.Response | None) -> Exception:
-    """The error for an answer that is not a success and not an agreed "no record"."""
-    if response is None or response.status_code == _RATE_LIMITED or response.status_code >= _TRANSIENT_FLOOR:
+    """The error for an answer that is not a success and not an agreed "no record" (SPEC_DECISIONS 26)."""
+    if response is None:
         return OutsideRecordsUnavailableError()
-    if response.status_code in _PERMANENT:
-        return OutsideRecordsRejectedError()
-    return OutsideRecordsProtocolError()
+    status = response.status_code
+    if status == _RATE_LIMITED or status >= _TRANSIENT_FLOOR:
+        return OutsideRecordsUnavailableError(status)
+    if status in _REFUSALS:
+        return OutsideRecordsRejectedError(status, _REFUSALS[status])
+    if _CLIENT_ERRORS_FROM <= status < _TRANSIENT_FLOOR and status != httpx.codes.NOT_FOUND:
+        return OutsideRecordsRejectedError(status, DependencyRefusal.REQUEST_REFUSED)
+    return OutsideRecordsProtocolError(status)
 
 
 def _not_found(response: httpx.Response, code: str) -> bool:
@@ -107,7 +116,7 @@ def _parse[M: BaseModel](model: type[M], response: httpx.Response) -> M:
     try:
         return model.model_validate_json(response.content)
     except ValidationError:
-        raise OutsideRecordsProtocolError from None
+        raise OutsideRecordsProtocolError(response.status_code) from None
 
 
 class OutsideRecordsClient:
@@ -125,7 +134,7 @@ class OutsideRecordsClient:
             raise _fail(response)
         body = _parse(_TitleBody, response)
         if body.vin != vin.value:
-            raise OutsideRecordsProtocolError
+            raise OutsideRecordsProtocolError(response.status_code)
         return TitleRecord(body.state, body.title_status, body.lienholder_name, body.lien_recorded_on)
 
     def payments(self, vin: Vin, window_from: date, window_to: date) -> PaymentWindow:
@@ -141,7 +150,7 @@ class OutsideRecordsClient:
             raise _fail(response)
         body = _parse(_PaymentPageBody, response)
         if any(item.vin != vin.value for item in body.items):
-            raise OutsideRecordsProtocolError
+            raise OutsideRecordsProtocolError(response.status_code)
         payments = tuple(
             PaymentRecord(item.payment_id, item.paid_on, item.amount_cents, item.deposit_bank_code)
             for item in body.items
@@ -157,7 +166,7 @@ class OutsideRecordsClient:
             raise _fail(response)
         body = _parse(_ContractListBody, response)
         if body.vin != vin.value or any(item.vin != vin.value for item in body.contracts):
-            raise OutsideRecordsProtocolError
+            raise OutsideRecordsProtocolError(response.status_code)
         return tuple(
             ContractRecord(item.contract_id, item.lender_name, item.amount_cents, item.signed_on)
             for item in body.contracts

@@ -11,7 +11,14 @@ from bank_testkit.stages import FakeStage, raising
 from bank_testkit.tapes import SUMMIT_LAYOUT
 from bank_testkit.world import World
 from onepledge_bank_agent.application.advance_submission import AdvanceSubmission, StageOutcome
-from onepledge_bank_agent.domain.enums import AuditAction, FailureCode, TapeKind, TapeSource, TapeStatus
+from onepledge_bank_agent.domain.enums import (
+    AuditAction,
+    DependencyRefusal,
+    FailureCode,
+    TapeKind,
+    TapeSource,
+    TapeStatus,
+)
 from onepledge_bank_agent.domain.errors import (
     OutsideRecordsProtocolError,
     OutsideRecordsRejectedError,
@@ -88,6 +95,8 @@ def test_a_transient_failure_backs_off_and_fails_at_the_maximum(world: World) ->
         "stage": "CLEANED",
         "resume_status": "RECEIVED",
         "failure_code": "OUTSIDE_RECORDS_UNAVAILABLE",
+        "dependency": "outside_records",
+        "http_status": None,
     }
 
 
@@ -102,13 +111,41 @@ def test_a_scheduled_retry_sets_the_next_attempt_time(world: World) -> None:
     assert (progress.next_attempt_at - world.clock.now()).total_seconds() == 2
 
 
-@pytest.mark.parametrize("error", [OutsideRecordsRejectedError(), OutsideRecordsProtocolError()])
-def test_a_permanent_failure_fails_at_once(world: World, error: PipelineStageError) -> None:
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (OutsideRecordsRejectedError(401, DependencyRefusal.UNAUTHENTICATED), "UNAUTHENTICATED"),
+        (OutsideRecordsRejectedError(403, DependencyRefusal.FORBIDDEN), "FORBIDDEN"),
+        (OutsideRecordsRejectedError(422, DependencyRefusal.REQUEST_REFUSED), "REQUEST_REFUSED"),
+        (OutsideRecordsProtocolError(200), "MALFORMED_RESPONSE"),
+    ],
+)
+def test_a_refusal_fails_at_once_with_the_rejected_code_and_its_reason(
+    world: World, error: PipelineStageError, reason: str
+) -> None:
     submission = received(world)
     run = advance(world, FakeStage(world, TapeStatus.CLEANED, raising(error))).advance(submission)
     assert (run.outcome, run.error_code) == (StageOutcome.FAILED, error.code)
-    assert status(world, submission).progress.failure_code is FailureCode.OUTSIDE_RECORDS_UNAVAILABLE
+    assert status(world, submission).progress.failure_code is FailureCode.OUTSIDE_RECORDS_REJECTED
     assert not world.audit(AuditAction.TAPE_STAGE_ATTEMPT_FAILED)
+    (failed,) = world.audit(AuditAction.TAPE_FAILED)
+    assert dict(failed.detail) == {
+        "stage": "CLEANED", "resume_status": "RECEIVED", "failure_code": "OUTSIDE_RECORDS_REJECTED",
+        "dependency": "outside_records", "http_status": error.http_status, "reason": reason,
+    }  # fmt: skip
+
+
+def test_an_outage_that_reaches_the_attempt_limit_names_the_dependency(world: World) -> None:
+    submission = received(world)
+    stage = FakeStage(world, TapeStatus.CLEANED, raising(OutsideRecordsUnavailableError(503)))
+    for _ in range(3):
+        advance(world, stage).advance(submission)
+        world.clock.advance(60)
+    (failed,) = world.audit(AuditAction.TAPE_FAILED)
+    assert dict(failed.detail) == {
+        "stage": "CLEANED", "resume_status": "RECEIVED", "failure_code": "OUTSIDE_RECORDS_UNAVAILABLE",
+        "dependency": "outside_records", "http_status": 503,
+    }  # fmt: skip
 
 
 def test_an_unexpected_error_is_logged_without_its_message_and_fails_with_internal_error(
