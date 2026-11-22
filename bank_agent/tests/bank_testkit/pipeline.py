@@ -4,7 +4,7 @@ and the in-process registry and key holder doubles."""
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -15,6 +15,7 @@ from bank_testkit.database import BankDatabase, insert_user
 from bank_testkit.doubles import InProcessDoubles, combined_factory
 from bank_testkit.outside import OUTSIDE_BASE_URL, OutsideService
 from onepledge_bank_agent.application.advance_submission import StageOutcome
+from onepledge_bank_agent.application.create_release_instruction import ReleaseCommand
 from onepledge_bank_agent.application.faults import FaultInjector, NoFaults
 from onepledge_bank_agent.application.ingest_tape import IngestCommand
 from onepledge_bank_agent.application.ports import Clock
@@ -136,6 +137,11 @@ class BankAgentHarness:
     def retry(self, submission: TapeSubmission) -> TapeSubmission:
         """`POST /v1/tapes/{id}/retry` as the credit officer."""
         return self.composition.retry_tape().execute(RetryCommand(submission.submission_id, self.requester()))
+
+    def release(self, facility_id: uuid.UUID, loan_ids: Sequence[uuid.UUID], as_of: date) -> TapeSubmission:
+        """`POST /v1/releases` as the credit officer."""
+        command = ReleaseCommand(facility_id, as_of, tuple(loan_ids), self.requester())
+        return self.composition.create_release().execute(command)
 
     def verify(self) -> IntegrityReport:
         """`onepledge-bank integrity verify`."""
