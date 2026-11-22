@@ -155,7 +155,7 @@ def _unsafe(raw: str) -> bool:
     return (
         (raw[:1] in leading and raw != "")
         or (trimmed[:1] in leading and trimmed != "")
-        or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in raw)
+        or any(ord(c) < 32 or ord(c) == 127 for c in raw)  # U+0000 to U+001F and U+007F (decision 82)
     )
 
 
