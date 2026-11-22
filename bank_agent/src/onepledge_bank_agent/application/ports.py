@@ -8,7 +8,7 @@ statements before commit (SPEC 17.1).
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable, Collection, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -17,6 +17,14 @@ from pathlib import Path
 from types import TracebackType
 from typing import Protocol, Self
 
+from onepledge_bank_agent.application.evidence_ports import (
+    AlertRepository,
+    CertificateRepository,
+    CheckpointRepository,
+    EvidenceReader,
+    IntegrityRunRepository,
+    RegistryRequestRepository,
+)
 from onepledge_bank_agent.domain.audit import AuditDraft
 from onepledge_bank_agent.domain.entities import Facility, FacilityWithLender, Lender
 from onepledge_bank_agent.domain.enums import RowDisposition, TapeStatus
@@ -24,7 +32,7 @@ from onepledge_bank_agent.domain.loan import Loan
 from onepledge_bank_agent.domain.outside_records import ContractRecord, PaymentWindow, TitleRecord
 from onepledge_bank_agent.domain.tape import TapeSubmission
 from onepledge_bank_agent.domain.tape_file import RawRow, TapeLayout
-from onepledge_bank_agent.domain.values import CheckResult, CleaningIssue
+from onepledge_bank_agent.domain.values import CheckResult, CleaningIssue, Token
 from onepledge_bank_agent.domain.vin import Vin
 
 
@@ -134,6 +142,14 @@ class SubmissionItemRepository(Protocol):
         """Items with disposition ACCEPTED_NEW or ACCEPTED_REPRESENTED, in row number order."""
         ...
 
+    def release_requested(self, submission_id: uuid.UUID) -> list[AcceptedItem]:
+        """Items with disposition RELEASE_REQUESTED, in row number order."""
+        ...
+
+    def latest_submission_of(self, loan_id: uuid.UUID) -> uuid.UUID | None:
+        """The most recently uploaded submission that has an item for this loan."""
+        ...
+
 
 class LoanRepository(Protocol):
     """`loans`."""
@@ -174,6 +190,18 @@ class TokenRepository(Protocol):
 
     def loans_with_tokens(self, loan_ids: Iterable[uuid.UUID]) -> set[uuid.UUID]:
         """The loans that have at least one stored token, of any key version."""
+        ...
+
+    def for_loans(self, loan_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, tuple[Token, ...]]:
+        """Every stored token of these loans, of every key version."""
+        ...
+
+    def add_many(self, tokens: Mapping[uuid.UUID, Sequence[Token]], at: datetime) -> None:
+        """Insert tokens; a row that already exists is left as it is (`ON CONFLICT DO NOTHING`)."""
+        ...
+
+    def loans_with_asset_token(self, asset_token: str) -> list[uuid.UUID]:
+        """The loans whose ASSET token is this code."""
         ...
 
 
@@ -229,6 +257,36 @@ class UnitOfWork(Protocol):
     @property
     def facilities(self) -> FacilityRepository:
         """Lenders and facilities."""
+        ...
+
+    @property
+    def requests(self) -> RegistryRequestRepository:
+        """Registry requests and their items."""
+        ...
+
+    @property
+    def certificates(self) -> CertificateRepository:
+        """Stored certificates."""
+        ...
+
+    @property
+    def alerts(self) -> AlertRepository:
+        """Alerts."""
+        ...
+
+    @property
+    def checkpoints(self) -> CheckpointRepository:
+        """Checkpoints received."""
+        ...
+
+    @property
+    def integrity_runs(self) -> IntegrityRunRepository:
+        """Deep verifications."""
+        ...
+
+    @property
+    def evidence(self) -> EvidenceReader:
+        """The stored forms of every tape and reads of the audit log."""
         ...
 
     def __enter__(self) -> Self:
