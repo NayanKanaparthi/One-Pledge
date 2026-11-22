@@ -66,7 +66,7 @@ from onepledge_bank_agent.infrastructure.db.engines import DatabaseTarget, Engin
 from onepledge_bank_agent.infrastructure.db.locks import SqlOutboxLock, SqlSubmissionLocks
 from onepledge_bank_agent.infrastructure.db.migrations import MigrationRunner, SchemaInspector, head_revision
 from onepledge_bank_agent.infrastructure.db.provisioning import DatabaseProvisioner
-from onepledge_bank_agent.infrastructure.db.role_guard import RuntimeRoleGuard
+from onepledge_bank_agent.infrastructure.db.role_guard import OwnerRoleGuard, RuntimeRoleGuard
 from onepledge_bank_agent.infrastructure.db.session import SqlUnitOfWorkFactory
 from onepledge_bank_agent.infrastructure.http.base import HttpClientFactory, make_http_client
 from onepledge_bank_agent.infrastructure.http.clients import ClientParts, ServiceClients
@@ -128,6 +128,10 @@ class AdminComposition(_Resources):
             self._settings.require_migration_url(), self._settings.require_database_url()
         )
         return DatabaseProvisioner(self._settings.require_admin_url()), target
+
+    def owner_guard(self) -> OwnerRoleGuard:
+        """The mirror check of `db migrate` and `seed-reference` (SPEC_DECISIONS 72)."""
+        return OwnerRoleGuard(self._engines.engine(self._settings.require_migration_url()))
 
     def migrations(self) -> MigrationRunner:
         """Alembic as the owner role."""

@@ -87,6 +87,7 @@ def _provision(
 def _migrate(
     arguments: argparse.Namespace, settings: AdminSettings, composition: AdminComposition, output: Output
 ) -> None:
+    composition.owner_guard().require_owner()
     runner = composition.migrations()
     before = runner.current_revision()
     applied = runner.upgrade()
@@ -136,6 +137,7 @@ def _seed_reference(
     arguments: argparse.Namespace, settings: AdminSettings, composition: AdminComposition, output: Output
 ) -> None:
     bank_code = settings.require_bank_code()
+    composition.owner_guard().require_owner()
     result = composition.seed_reference().run(arguments.data_dir, bank_code)
     if output.as_json:
         output.success(
@@ -224,6 +226,9 @@ def _worker(arguments: argparse.Namespace, output: Output, collaborators: Collab
         return 0
 
 
+UNGUARDED = frozenset({"report"})
+
+
 def _runtime_command(
     arguments: argparse.Namespace, output: Output, collaborators: Collaborators | None
 ) -> None:
@@ -233,4 +238,6 @@ def _runtime_command(
     action = arguments.registry_command if arguments.command == "registry" else arguments.integrity_command
     with database_errors_as_operator_errors(), RuntimeComposition(settings, collaborators) as composition:
         composition.schema().require_head()
+        if action not in UNGUARDED:  # SPEC_DECISIONS 72: integrity report must show a false control
+            composition.role_guard().require_least_privilege()
         RUNTIME_HANDLERS[action](arguments, composition, output)

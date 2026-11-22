@@ -81,6 +81,6 @@ class GetIntegrityReport:
             ),
             audit_log=audit,
             raw_data=raw,
-            database_controls=controls_section(self._controls.controls()),
+            database_controls=controls_section(self._controls.controls(), self._controls.violations()),
             registry_messages=registry_messages_section(quarantined),
         )

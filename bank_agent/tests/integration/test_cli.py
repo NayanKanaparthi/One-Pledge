@@ -365,10 +365,9 @@ def test_the_worker_never_needs_an_owner_credential(
     assert json.loads(finished.stdout) == {"ok": True, "stages": []}
 
 
-ROLE_SENTENCE = (
-    "DATABASE_URL connects as a role that could change or remove history (a superuser, an owner, or a role "
-    "with update, delete, truncate or create rights it must not have); use the app role."
-)
+def role_sentence(code: str) -> str:
+    """The refusal of SPEC_DECISIONS 72: the variable and the first violation code."""
+    return f"DATABASE_URL connects as a role that is not least-privilege ({code}); use the app role."
 
 
 def test_the_worker_refuses_to_start_as_the_owner_role(
@@ -380,27 +379,29 @@ def test_the_worker_refuses_to_start_as_the_owner_role(
     assert finished.returncode == 1
     assert json.loads(finished.stdout) == {
         "ok": False,
-        "error": {"code": "ROLE_NOT_LEAST_PRIVILEGE", "message": ROLE_SENTENCE},
+        "error": {"code": "ROLE_NOT_LEAST_PRIVILEGE", "message": role_sentence("ROLE_OWNS_OBJECT")},
     }
-    assert log_lines_and_sentences(finished.stderr)[1] == [ROLE_SENTENCE]
+    assert log_lines_and_sentences(finished.stderr)[1] == [role_sentence("ROLE_OWNS_OBJECT")]
     assert pairs(bank_db, "SELECT 'audit', count(*)::text FROM audit_log") == {"audit": "0"}
 
 
 @pytest.mark.parametrize(
-    "grant",
+    ("grant", "code"),
     [
-        "GRANT UPDATE ON audit_log TO {role}",
-        "GRANT DELETE ON alerts TO {role}",
-        "GRANT TRUNCATE ON loans TO {role}",
-        "GRANT CREATE ON SCHEMA public TO {role}",
-        "GRANT UPDATE ON registry_messages_quarantined TO {role}",
-        "GRANT UPDATE ON certificates TO {role}",
-        "GRANT {owner} TO {role}",
+        ("GRANT UPDATE ON audit_log TO {role}", "TABLE_PRIVILEGE_EXTRA"),
+        ("GRANT DELETE ON alerts TO {role}", "TABLE_PRIVILEGE_EXTRA"),
+        ("GRANT TRUNCATE ON loans TO {role}", "TABLE_PRIVILEGE_EXTRA"),
+        ("GRANT CREATE ON SCHEMA public TO {role}", "ROLE_HAS_SCHEMA_PRIVILEGE"),
+        ("GRANT UPDATE ON registry_messages_quarantined TO {role}", "TABLE_PRIVILEGE_EXTRA"),
+        ("GRANT UPDATE ON certificates TO {role}", "TABLE_PRIVILEGE_EXTRA"),
+        ("GRANT UPDATE (detail) ON audit_log TO {role}", "TABLE_PRIVILEGE_EXTRA"),
+        ("GRANT {owner} TO {role}", "ROLE_HAS_MEMBERSHIP"),
     ],
 )
-def test_the_worker_refuses_an_app_role_with_a_forbidden_privilege(
-    bank_db: BankDatabase, doubles: InProcessDoubles, monkeypatch: pytest.MonkeyPatch, grant: str
+def test_every_guarded_command_refuses_an_app_role_with_a_forbidden_privilege(
+    bank_db: BankDatabase, doubles: InProcessDoubles, monkeypatch: pytest.MonkeyPatch, grant: str, code: str
 ) -> None:
+    """SPEC_DECISIONS 72: worker, registry sync and integrity verify refuse; integrity report shows it."""
     with bank_db.connect("admin") as connection:
         connection.execute(
             sql.SQL(grant).format(
@@ -408,7 +409,11 @@ def test_the_worker_refuses_an_app_role_with_a_forbidden_privilege(
             )
         )
     cli = cli_for(monkeypatch, {**bank_db.environment(), **unreachable_services(doubles)})
-    assert cli("worker", "--once") == Run(1, "", ROLE_SENTENCE + "\n")
+    for command in (("worker", "--once"), ("registry", "sync"), ("integrity", "verify")):
+        assert cli(*command) == Run(1, "", role_sentence(code) + "\n"), command
+    report = cli("integrity", "report", "--json")
+    controls = {c["name"]: c["ok"] for c in json.loads(report.out)["database_controls"]["controls"]}
+    assert controls["APP_ROLE_GRANTS_EXACT"] is False
 
 
 def test_the_worker_refuses_to_start_as_a_superuser_whatever_the_server_checks_of_passwords(
@@ -423,7 +428,7 @@ def test_the_worker_refuses_to_start_as_a_superuser_whatever_the_server_checks_o
         ).fetchone() == (True,)
     environment = {**bank_db.environment(), "DATABASE_URL": superuser_url, **unreachable_services(doubles)}
     cli = cli_for(monkeypatch, environment)
-    assert cli("worker", "--once") == Run(1, "", ROLE_SENTENCE + "\n")
+    assert cli("worker", "--once") == Run(1, "", role_sentence("ROLE_IS_SUPERUSER") + "\n")
     assert pairs(bank_db, "SELECT 'audit', count(*)::text FROM audit_log") == {"audit": "0"}
 
 

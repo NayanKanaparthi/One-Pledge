@@ -104,7 +104,9 @@ class RunDeepVerification:
             certificates=certificates_section(expected, certificates, broken_proofs),
             audit_log=audit,
             raw_data=raw,
-            database_controls=controls_section(self._sources.controls.controls()),
+            database_controls=controls_section(
+                self._sources.controls.controls(), self._sources.controls.violations()
+            ),
             registry_messages=registry_messages_section(quarantined),
         )
         self._store(report, requester)

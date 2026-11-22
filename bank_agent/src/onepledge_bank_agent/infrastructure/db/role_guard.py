@@ -1,51 +1,61 @@
-"""`RuntimeRoleGuard`: a runtime process refuses to start with a role that could rewrite history
-(SPEC_DECISIONS 43.4).
+"""The startup guard of every command that connects with `DATABASE_URL` (SPEC_DECISIONS 72).
 
-`worker` (and `serve`, when WP4 adds it) connect with `DATABASE_URL` and must hold the app
-role's grants and nothing more. Refused, with one line naming `DATABASE_URL`: a superuser;
-a role that owns any table of the schema; UPDATE, DELETE or TRUNCATE on any insert-only
-table; DELETE or TRUNCATE on any table; CREATE on the schema.
+The role must be least-privilege by the six points of `role_check.inspect_role`: not a
+superuser and no role attribute, member of no role, owner of nothing, CONNECT on its
+database and USAGE on `public` only, exactly the privileges of `GRANT_MATRIX` on every
+table (table and column level, PUBLIC included), and nothing on any sequence. Otherwise
+the command refuses with one line naming `DATABASE_URL` and the first violation.
+`integrity report` is exempt, so it can show the control that is false.
 """
 
 from __future__ import annotations
 
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine
 
+from onepledge_bank_agent.infrastructure.db.role_check import RoleViolation, inspect_role, owns_schema
 from onepledge_bank_agent.infrastructure.operator_errors import OperatorError
 
-INSERT_ONLY_TABLES = (
-    "loans_raw", "audit_log", "cleaning_issues", "submission_items", "local_checks", "loan_tokens",
-    "certificates", "checkpoints_seen", "integrity_runs", "registry_messages_quarantined",
-)  # fmt: skip
 ROLE_NOT_LEAST_PRIVILEGE = "ROLE_NOT_LEAST_PRIVILEGE"
-SENTENCE = (
-    "DATABASE_URL connects as a role that could change or remove history (a superuser, an owner, or a role "
-    "with update, delete, truncate or create rights it must not have); use the app role."
+ROLE_NOT_OWNER = "ROLE_NOT_OWNER"
+OWNER_SENTENCE = (
+    "MIGRATION_DATABASE_URL connects as a role that does not own the bank tables; use the owner role."
 )
-FORBIDDEN = text(
-    "SELECT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) "
-    "OR EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tableowner = current_user) "
-    "OR has_schema_privilege(current_user, 'public', 'CREATE') "
-    "OR EXISTS (SELECT 1 FROM pg_tables t WHERE t.schemaname = 'public' AND ("
-    "has_table_privilege(current_user, format('%I.%I', t.schemaname, t.tablename), 'DELETE') "
-    "OR has_table_privilege(current_user, format('%I.%I', t.schemaname, t.tablename), 'TRUNCATE') "
-    "OR (t.tablename = ANY(:insert_only) "
-    "AND has_table_privilege(current_user, format('%I.%I', t.schemaname, t.tablename), 'UPDATE'))))"
-)
+
+
+def refusal_sentence(violation: RoleViolation) -> str:
+    """The one line: the variable and the first violation code, never the URL."""
+    return (
+        f"DATABASE_URL connects as a role that is not least-privilege ({violation.code}); use the app role."
+    )
 
 
 class RuntimeRoleGuard:
-    """Checks the role a runtime process connects as."""
+    """Checks the role a runtime command connects as."""
 
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
 
-    def holds_too_much(self) -> bool:
-        """True when the role is a superuser, an owner, or holds a privilege the app role must not have."""
+    def violations(self) -> tuple[RoleViolation, ...]:
+        """Every way the connected role differs from the app role of the grant matrix."""
         with self._engine.connect() as connection:
-            return bool(connection.execute(FORBIDDEN, {"insert_only": list(INSERT_ONLY_TABLES)}).scalar_one())
+            return inspect_role(connection)
 
     def require_least_privilege(self) -> None:
-        """Refuse to start with such a role."""
-        if self.holds_too_much():
-            raise OperatorError(SENTENCE, ROLE_NOT_LEAST_PRIVILEGE)
+        """Refuse to start with any other role."""
+        found = self.violations()
+        if found:
+            raise OperatorError(refusal_sentence(found[0]), ROLE_NOT_LEAST_PRIVILEGE)
+
+
+class OwnerRoleGuard:
+    """The mirror check of the administrative commands: `db migrate` and `seed-reference` need the owner."""
+
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
+    def require_owner(self) -> None:
+        """Refuse when the role of `MIGRATION_DATABASE_URL` does not own the schema's tables."""
+        with self._engine.connect() as connection:
+            owner = owns_schema(connection)
+        if not owner:
+            raise OperatorError(OWNER_SENTENCE, ROLE_NOT_OWNER)

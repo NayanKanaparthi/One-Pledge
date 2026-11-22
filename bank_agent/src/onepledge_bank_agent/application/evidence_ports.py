@@ -267,3 +267,7 @@ class DatabaseControlInspector(Protocol):
     def controls(self) -> Mapping[DatabaseControl, bool]:
         """Each control and whether it holds."""
         ...
+
+    def violations(self) -> tuple[str, ...]:
+        """How the app role differs from the grant matrix, as `CODE on object` (SPEC_DECISIONS 72)."""
+        ...

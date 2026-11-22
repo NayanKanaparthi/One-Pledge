@@ -506,9 +506,13 @@ class MemoryControls:
 
     def __init__(self) -> None:
         self.state = dict.fromkeys(DatabaseControl, True)
+        self.role_violations: tuple[str, ...] = ()
 
     def controls(self) -> Mapping[DatabaseControl, bool]:
         return dict(self.state)
+
+    def violations(self) -> tuple[str, ...]:
+        return self.role_violations
 
 
 CONFLICT = "The reference data conflicts with a lender or facility already stored under another id."

@@ -31,7 +31,7 @@ class SectionStatus(StrEnum):
 
 
 class DatabaseControl(StrEnum):
-    """The twelve database controls of SPEC 15.5 and SPEC_DECISIONS 47, in report order."""
+    """The thirteen database controls of SPEC 15.5 and SPEC_DECISIONS 47 and 72, in report order."""
 
     LOANS_RAW_IMMUTABILITY_TRIGGER_ENABLED = "LOANS_RAW_IMMUTABILITY_TRIGGER_ENABLED"
     AUDIT_LOG_IMMUTABILITY_TRIGGER_ENABLED = "AUDIT_LOG_IMMUTABILITY_TRIGGER_ENABLED"
@@ -44,6 +44,7 @@ class DatabaseControl(StrEnum):
     APP_ROLE_CANNOT_UPDATE_AUDIT_LOG = "APP_ROLE_CANNOT_UPDATE_AUDIT_LOG"
     APP_ROLE_CANNOT_DELETE_AUDIT_LOG = "APP_ROLE_CANNOT_DELETE_AUDIT_LOG"
     APP_ROLE_IS_NOT_OWNER_OR_SUPERUSER = "APP_ROLE_IS_NOT_OWNER_OR_SUPERUSER"
+    APP_ROLE_GRANTS_EXACT = "APP_ROLE_GRANTS_EXACT"
     SCHEMA_AT_MIGRATION_HEAD = "SCHEMA_AT_MIGRATION_HEAD"
 
 
@@ -134,10 +135,12 @@ class RawDataSection:
 
 @dataclass(frozen=True)
 class ControlsSection:
-    """Each database control and whether it is in force now."""
+    """Each database control and whether it is in force now, and how the app role differs from the
+    grant matrix (`CODE on object`, SPEC_DECISIONS 72) when `APP_ROLE_GRANTS_EXACT` is false."""
 
     status: SectionStatus
     controls: tuple[tuple[DatabaseControl, bool], ...]
+    violations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -231,10 +234,12 @@ def registry_messages_section(quarantined: int) -> RegistryMessagesSection:
     return RegistryMessagesSection(broken_if(quarantined > 0), quarantined)
 
 
-def controls_section(controls: Mapping[DatabaseControl, bool]) -> ControlsSection:
+def controls_section(
+    controls: Mapping[DatabaseControl, bool], violations: Sequence[str] = ()
+) -> ControlsSection:
     """Every control in report order; BROKEN when any is false (a missing one counts as false)."""
     ordered = tuple((control, bool(controls.get(control, False))) for control in DatabaseControl)
-    return ControlsSection(broken_if(not all(ok for _, ok in ordered)), ordered)
+    return ControlsSection(broken_if(not all(ok for _, ok in ordered)), ordered, tuple(violations))
 
 
 def _id_list(values: Sequence[uuid.UUID]) -> list[JsonValue]:
