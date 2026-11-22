@@ -7,7 +7,8 @@ kept as the registry answered, the failed row stays as evidence, the integrity r
 certificates section turns BROKEN and the halt rule holds (SPEC_DECISIONS 61). The code
 is retryable: a retry runs this stage again, which fetches again every request still
 without a verified certificate. Otherwise the registry outbox is synced once (so the
-alerts and the checkpoint of these decisions arrive now) and the submission is marked
+alerts and the checkpoint of these decisions arrive now; a sync that fails is logged and
+does not hold the submission back, SPEC_DECISIONS 85) and the submission is marked
 COMPLETED.
 """
 
@@ -17,8 +18,10 @@ import uuid
 from typing import Protocol
 
 from onepledge_bank_agent.application.audit_entries import stage_advanced
+from onepledge_bank_agent.application.error_records import error_code_of
+from onepledge_bank_agent.application.events import LogEvent
 from onepledge_bank_agent.application.ports import UnitOfWorkFactory
-from onepledge_bank_agent.application.runtime import Runtime
+from onepledge_bank_agent.application.runtime import Runtime, StopRequestedError
 from onepledge_bank_agent.application.verify_certificate import VerifyCertificate
 from onepledge_bank_agent.domain.dependency_errors import CertificateInvalidError
 from onepledge_bank_agent.domain.enums import RequestOrigin, TapeStatus
@@ -44,6 +47,7 @@ class CollectCertificates:
         self._verify = verify
         self._sync = sync
         self._clock = runtime.clock
+        self._log = runtime.log
 
     def run(self, submission_id: uuid.UUID) -> None:
         """Collect every certificate, then sync the outbox and mark the submission COMPLETED."""
@@ -59,7 +63,12 @@ class CollectCertificates:
         certificates = [self._verify.collect(request) for request in requests]
         if any(not certificate.verified for certificate in certificates):
             raise CertificateInvalidError
-        self._sync.run()
+        try:
+            self._sync.run()
+        except StopRequestedError:
+            raise
+        except Exception as error:  # SPEC_DECISIONS 85 rule 5: a failing sync never holds a tape back
+            self._log.failure(LogEvent.PERIODIC_TASK_FAILED, error, error_code=error_code_of(error))
         with self._units() as unit:
             tape = unit.tapes.get(submission_id, for_update=True)
             if tape is None or tape.status is not TapeStatus.SUBMITTED:

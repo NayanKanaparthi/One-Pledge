@@ -3,17 +3,21 @@
 Every handler is idempotent, because a crash between commit and acknowledgement makes
 the registry deliver the message again: an ALERT creates the alert of `(case, loan)`
 once; a CASE_UPDATE whose status equals the stored case status changes nothing; a
-CHECKPOINT already stored is a duplicate. No handler changes a loan's state.
+CHECKPOINT already stored is a duplicate. A repeat that differs from what is stored (an
+ALERT with other facts, a CASE_UPDATE with another status for a closed alert) raises
+`ContradictsStoredStateError` and changes nothing (SPEC_DECISIONS 85, rule 3). No
+handler changes a loan's state.
 """
 
 from __future__ import annotations
 
-from onepledge_bank_agent.application.alert_maker import AlertMaker, AlertSource, CaseOnLoan
+from onepledge_bank_agent.application.alert_maker import AlertMaker, AlertSource, CaseOnLoan, ordered_kinds
 from onepledge_bank_agent.application.events import LogEvent
 from onepledge_bank_agent.application.ports import OperationalLog, UnitOfWork
 from onepledge_bank_agent.application.registry_audit import entry
 from onepledge_bank_agent.domain.alert import MatchFacts
 from onepledge_bank_agent.domain.enums import (
+    AlertStatus,
     AuditAction,
     AuditObjectType,
     AuditOutcome,
@@ -22,6 +26,9 @@ from onepledge_bank_agent.domain.enums import (
 )
 from onepledge_bank_agent.domain.loan import Loan
 from onepledge_bank_agent.domain.registry_records import AlertNotice, CaseNotice
+from onepledge_bank_agent.domain.store_errors import ContradictsStoredStateError
+
+CLOSED = frozenset({AlertStatus.CLEARED, AlertStatus.ESCALATED})
 
 
 def own_loan(loans: list[Loan]) -> Loan | None:
@@ -52,7 +59,13 @@ class AlertMessages:
                 )
             )
             return False
-        match = MatchFacts(notice.role, notice.match_kind, notice.match_basis, notice.kinds_matched)
+        kinds = ordered_kinds(notice.kinds_matched)
+        match = MatchFacts(notice.role, notice.match_kind, notice.match_basis, kinds)
+        held = unit.alerts.find(notice.case_id, loan.loan_id)
+        if held is not None:  # a repeat; one with other facts contradicts the alert (decision 85, rule 3)
+            if held.record.match != match:
+                raise ContradictsStoredStateError
+            return False
         case = CaseOnLoan(notice.case_id, loan.loan_id, match)
         return self._alerts.raise_once(unit, case, AlertSource.OUTBOX_MESSAGE) is not None
 
@@ -65,13 +78,15 @@ class CaseUpdateMessages:
 
     def handle(self, unit: UnitOfWork, notice: CaseNotice) -> int:
         """The number of alerts that changed (0 when the status was already stored)."""
-        if notice.status is CaseStatus.OPEN:
-            return 0
         loan_ids = unit.tokens.loans_with_asset_token(notice.asset_token)
         changed = 0
         for alert in unit.alerts.for_case(notice.case_id, loan_ids):
             before = alert.status
-            if not alert.apply_case_status(notice.status):
+            if before in CLOSED:
+                if notice.status is not alert.record.case_status:
+                    raise ContradictsStoredStateError
+                continue
+            if notice.status is CaseStatus.OPEN or not alert.apply_case_status(notice.status):
                 continue
             unit.alerts.save(alert)
             changed += 1

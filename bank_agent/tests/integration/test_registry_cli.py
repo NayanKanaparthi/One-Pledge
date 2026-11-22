@@ -137,3 +137,25 @@ def test_a_registry_that_refuses_the_credentials_is_dependency_rejected(
     assert refused.json() == {"ok": False, "error": {"code": "DEPENDENCY_REJECTED", "message": sentence}}
     plain = cli("registry", "sync")
     assert (plain.code, plain.out, plain.err.splitlines()[-1]) == (1, "", sentence)
+
+
+def test_a_poison_checkpoint_neither_fails_registry_sync_nor_starves_worker_once(
+    cli: Cli, bank_db: BankDatabase, small_data: Path, doubles: InProcessDoubles
+) -> None:
+    """Review 2, F1, by the command line: before decision 85 every sync and `worker --once` exited 1."""
+    body = {
+        "schema_version": 1, "checkpoint_seq": 2**63, "last_event_seq": 9000, "head_hash": "a" * 64,
+        "signed_at": "2026-11-22T00:00:00Z",
+    }  # fmt: skip
+    payload = {"body": body, "signature": "A" * 86 + "==", "signing_key_id": "registry-local-1"}
+    doubles.inject_message("HARBOR", "CHECKPOINT", payload)
+    for _ in range(3):
+        synced = cli("registry", "sync", "--json")
+        assert synced.code == 0, synced.err
+    assert pairs(bank_db, "SELECT reason, count(*)::text FROM registry_messages_quarantined GROUP BY 1") == {
+        "VALUE_OUT_OF_RANGE": "1"
+    }
+    assert doubles.forged_pending("HARBOR") == 0
+    worker = cli("worker", "--once", "--json")
+    assert worker.code == 0, worker.err
+    assert worker.json()["ok"] is True

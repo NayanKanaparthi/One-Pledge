@@ -173,11 +173,12 @@ class Alert:
         self._record = replace(record, review=review)
 
     def apply_case_status(self, case_status: CaseStatus) -> bool:
-        """A registry case update. Closes an open alert; returns False when nothing changed."""
+        """A registry case update. Closes an open alert; returns False when nothing changed. A closed
+        alert never takes another case status (SPEC 8.5: CLEARED and ESCALATED are terminal)."""
         record = self._record
         if case_status is record.case_status:
             return False
-        if case_status is CaseStatus.OPEN:
+        if case_status is CaseStatus.OPEN or record.status not in _OPEN_STATUSES:
             raise IllegalTransitionError("alert_case", record.case_status.value, case_status.value)
         status = _CLOSING[case_status] if record.status in _OPEN_STATUSES else record.status
         self._record = replace(record, case_status=case_status, status=status)

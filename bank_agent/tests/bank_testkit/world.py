@@ -29,10 +29,12 @@ class Faults:
     def __init__(self) -> None:
         self.armed: FaultPoint | None = None
         self.skip = 0
+        self.error: Exception | None = None
         self.passed: list[FaultPoint] = []
 
-    def arm(self, point: FaultPoint, skip: int = 0) -> None:
-        self.armed, self.skip = point, skip
+    def arm(self, point: FaultPoint, skip: int = 0, error: Exception | None = None) -> None:
+        """Crash at `point`, or raise `error` there (an ordinary exception nobody anticipated)."""
+        self.armed, self.skip, self.error = point, skip, error
 
     def reached(self, point: FaultPoint) -> None:
         self.passed.append(point)
@@ -40,8 +42,8 @@ class Faults:
             if self.skip:
                 self.skip -= 1
                 return
-            self.armed = None
-            raise CrashError(point.value)
+            self.armed, error, self.error = None, self.error, None
+            raise error if error is not None else CrashError(point.value)
 
 
 @dataclass

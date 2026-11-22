@@ -232,11 +232,13 @@ def test_a_known_message_with_a_payload_outside_the_contract_is_quarantined_and_
         report = bank.report()
     assert faults.crashed, "the first quarantined message was delivered again"
     found = pairs(bank_db, QUARANTINED)
-    assert sorted(found) == [
-        "ALERT SCHEMA_MISMATCH",
-        "ALERT UNKNOWN_ASSET_TOKEN_FORMAT",
-        "CASE_UPDATE OVERSIZED",
-    ], "a redelivery after a crash stored nothing twice"
+    assert sorted(found) == ["ALERT SCHEMA_MISMATCH", "CASE_UPDATE OVERSIZED"]
+    counted = (
+        "SELECT message_type || ' ' || reason, count(*)::text FROM registry_messages_quarantined GROUP BY 1"
+    )
+    assert pairs(bank_db, counted) == {"ALERT SCHEMA_MISMATCH": "2", "CASE_UPDATE OVERSIZED": "1"}, (
+        "a redelivery after a crash stored nothing twice; capital letters are a schema mismatch (decision 85)"
+    )
     assert found["CASE_UPDATE OVERSIZED"].startswith("true "), "an oversized payload keeps only its hash"
     assert all(value.startswith("false ") for key, value in found.items() if "OVERSIZED" not in key)
     audited = (
@@ -244,11 +246,17 @@ def test_a_known_message_with_a_payload_outside_the_contract_is_quarantined_and_
         "FROM audit_log WHERE action = 'REGISTRY_MESSAGE_QUARANTINED'"
     )
     assert pairs(bank_db, audited) == dict.fromkeys(found, "FAILURE REGISTRY_MESSAGE")
+    anchored = (
+        "SELECT count(*)::text, 'n' FROM audit_log a JOIN registry_messages_quarantined q "
+        "ON q.quarantine_id = a.object_id WHERE a.action = 'REGISTRY_MESSAGE_QUARANTINED'"
+    )
+    assert pairs(bank_db, anchored) == {"3": "n"}, "each audit entry names its quarantine row"
     hashes = (
         "SELECT detail->>'payload_sha256', 'audited' FROM audit_log "
         "WHERE action = 'REGISTRY_MESSAGE_QUARANTINED'"
     )
-    assert sorted(pairs(bank_db, hashes)) == sorted(value.split()[1] for value in found.values())
+    stored = "SELECT payload_sha256, 'stored' FROM registry_messages_quarantined"
+    assert sorted(pairs(bank_db, hashes)) == sorted(pairs(bank_db, stored))
     others = (
         "SELECT action, count(*)::text FROM audit_log "
         "WHERE action IN ('REGISTRY_MESSAGE_IGNORED', 'ALERT_UNMATCHED') GROUP BY 1"

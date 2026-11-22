@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import uuid
 from collections import Counter
 from collections.abc import Callable, Mapping
@@ -26,7 +27,14 @@ from datetime import UTC, datetime
 from enum import StrEnum
 
 from bank_testkit.memory.signatures import REGISTRY_KEY_ID, sign
-from onepledge_bank_agent.domain.canonical_json import ZERO_HASH, JsonValue, canonical_json, canonical_sha256
+from bank_testkit.memory.wire import wire_payload
+from onepledge_bank_agent.domain.canonical_json import (
+    ZERO_HASH,
+    JsonValue,
+    canonical_json,
+    canonical_sha256,
+    sha256_hex,
+)
 from onepledge_bank_agent.domain.certificate_rules import CERTIFICATE_WORDS
 from onepledge_bank_agent.domain.checkpoint_rules import event_header_hash
 from onepledge_bank_agent.domain.dependency_errors import (
@@ -53,15 +61,18 @@ from onepledge_bank_agent.domain.registry_records import (
     EventHeader,
     EventPage,
     ItemOutcome,
+    MessageEvidence,
     MessagePayload,
     OutboxMessage,
     OutboxPage,
+    QuarantinedPayload,
     RegistryAnswer,
     RegistrySubmission,
     SignedCertificate,
     SignedCheckpoint,
 )
 from onepledge_bank_agent.domain.values import KeyVersion
+from onepledge_bank_agent.infrastructure.http.registry_client import outbox_message
 
 AT = datetime(2026, 11, 20, 12, tzinfo=UTC)
 AT_TEXT = "2026-11-20T12:00:00Z"
@@ -335,10 +346,26 @@ class ScriptedRegistry:
 
     def deliver(self, message_type: str, payload: MessagePayload) -> OutboxMessage:
         """Queue one outbox message."""
-        position = max((message.position for message in self._outbox), default=0) + 1
-        message = OutboxMessage(self.new_id(), position, message_type, payload)
+        wire = wire_payload(payload)
+        evidence = (
+            MessageEvidence(payload.payload, payload.payload_sha256, payload.payload is None)
+            if isinstance(payload, QuarantinedPayload)
+            else MessageEvidence(wire, sha256_hex(canonical_json(wire)))
+        )
+        message = OutboxMessage(self.new_id(), self._next_position(), message_type, payload, evidence)
         self._outbox.append(message)
         return message
+
+    def deliver_wire(self, message: Mapping[str, JsonValue]) -> OutboxMessage:
+        """Queue one message given as the registry would send it, read by the bank's own parser; a
+        missing `message_id` or `position` is filled in."""
+        document = {"message_id": str(self.new_id()), "position": self._next_position(), **message}
+        parsed = outbox_message(json.loads(json.dumps(document)), 200)
+        self._outbox.append(parsed)
+        return parsed
+
+    def _next_position(self) -> int:
+        return max((message.position or 0 for message in self._outbox), default=0) + 1
 
     def alert(self, asset_token: str, role: AlertRole = AlertRole.HOLDER) -> uuid.UUID:
         """Deliver an ALERT about one of this bank's asset codes; returns the case id."""

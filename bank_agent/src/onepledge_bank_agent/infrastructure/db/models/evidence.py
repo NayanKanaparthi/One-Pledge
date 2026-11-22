@@ -1,6 +1,7 @@
-"""`audit_log`, `integrity_runs` (SPEC 12.1) and `registry_messages_quarantined` (SPEC_DECISIONS 57).
+"""`audit_log`, `integrity_runs` (SPEC 12.1), `registry_messages_quarantined` (SPEC_DECISIONS 57, 85)
+and `registry_outbox_attempts` (SPEC_DECISIONS 85).
 
-All three are insert-only.
+The first three are insert-only; the attempts table is mutable by design.
 """
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Integer, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import CHAR
@@ -64,9 +65,20 @@ class QuarantinedMessageRow(Base):
 
     quarantine_id: Mapped[uuid.UUID] = uuid_pk()
     message_id: Mapped[uuid.UUID] = uuid_column()
-    position: Mapped[int] = mapped_column(BigInteger)
+    position: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     message_type: Mapped[str] = mapped_column(Text)
     payload: Mapped[Any] = mapped_column(JSONB, nullable=True)
     payload_sha256: Mapped[str] = hash_column()
     reason: Mapped[str] = mapped_column(Text)
     received_at: Mapped[datetime] = timestamp()
+
+
+class OutboxAttemptRow(Base):
+    """`registry_outbox_attempts`: how often an outbox message was deferred, and why last."""
+
+    __tablename__ = "registry_outbox_attempts"
+
+    message_id: Mapped[uuid.UUID] = uuid_pk()
+    attempts: Mapped[int] = mapped_column(Integer)
+    last_reason: Mapped[str] = mapped_column(Text)
+    last_at: Mapped[datetime] = timestamp()

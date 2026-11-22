@@ -64,6 +64,7 @@ class MemoryState:
     facilities: dict[uuid.UUID, Facility] = field(default_factory=dict)
     audit: list[AuditDraft] = field(default_factory=list)
     audit_log: list[AuditEntry] = field(default_factory=list)
+    outbox_attempts: dict[uuid.UUID, tuple[int, str, datetime]] = field(default_factory=dict)
 
 
 class MemoryStore:
@@ -347,6 +348,20 @@ class _Quarantine:
         return any(held.message_type == "CHECKPOINT" for held in self._state.quarantined)
 
 
+class _OutboxAttempts:
+    def __init__(self, state: MemoryState) -> None:
+        self._state = state
+
+    def count(self, message_id: uuid.UUID) -> int:
+        held = self._state.outbox_attempts.get(message_id)
+        return held[0] if held is not None else 0
+
+    def defer(self, message_id: uuid.UUID, reason: str, at: datetime) -> int:
+        attempts = self.count(message_id) + 1
+        self._state.outbox_attempts[message_id] = (attempts, reason, at)
+        return attempts
+
+
 class _Alerts:
     def __init__(self, state: MemoryState) -> None:
         self._state = state
@@ -538,7 +553,7 @@ def _outcome[T](existing: T | None, new: T) -> Upserted:
 
 REPOSITORIES = (
     "tapes", "raw_rows", "items", "loans", "checks", "tokens", "facilities", "requests", "alerts",
-    "evidence", "history",
+    "outbox_attempts", "evidence", "history",
 )  # fmt: skip
 
 
@@ -560,6 +575,7 @@ class MemoryUnitOfWork:
         self.facilities = _Facilities(self._state)
         self.requests = _Requests(self._state)
         self.alerts = _Alerts(self._state)
+        self.outbox_attempts = _OutboxAttempts(self._state)
         self.evidence = _EvidenceStores(self._state)
         self.history = _History(self._state)
         return self

@@ -154,6 +154,16 @@ class CaseNotice:
 
 
 @dataclass(frozen=True)
+class MessageEvidence:
+    """An outbox message's payload as received, kept for quarantine: the payload (None when its
+    serialised form exceeds 64 KiB) and the SHA-256 of its canonical form."""
+
+    payload: JsonValue
+    payload_sha256: str
+    oversized: bool = False
+
+
+@dataclass(frozen=True)
 class QuarantinedPayload:
     """The payload of a known message type that breaks the contract, kept as evidence (SPEC_DECISIONS 57).
 
@@ -172,12 +182,14 @@ type MessagePayload = AlertNotice | CaseNotice | SignedCheckpoint | QuarantinedP
 @dataclass(frozen=True)
 class OutboxMessage:
     """One outbox message. `payload` is None for a message type this bank does not know, and a
-    `QuarantinedPayload` for a known type whose payload does not match the contract."""
+    `QuarantinedPayload` for a known type that failed validation (SPEC_DECISIONS 85, rule 1).
+    `position` is None when the registry sent one that does not fit a `bigint`."""
 
     message_id: uuid.UUID
-    position: int
+    position: int | None
     message_type: str
     payload: MessagePayload
+    evidence: MessageEvidence
 
 
 @dataclass(frozen=True)
@@ -203,7 +215,7 @@ class QuarantinedMessage:
 
     quarantine_id: uuid.UUID
     message_id: uuid.UUID
-    position: int
+    position: int | None
     message_type: str
     quarantined: QuarantinedPayload
     received_at: datetime

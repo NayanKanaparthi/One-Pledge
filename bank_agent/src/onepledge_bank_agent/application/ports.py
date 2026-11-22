@@ -21,6 +21,7 @@ from onepledge_bank_agent.application.evidence_ports import (
     AlertRepository,
     EvidenceStores,
     HistoryReader,
+    OutboxAttemptRepository,
     RegistryRequestRepository,
 )
 from onepledge_bank_agent.domain.audit import AuditDraft
@@ -265,6 +266,11 @@ class UnitOfWork(Protocol):
     @property
     def alerts(self) -> AlertRepository:
         """Alerts."""
+        ...
+
+    @property
+    def outbox_attempts(self) -> OutboxAttemptRepository:
+        """Deferrals of registry outbox messages."""
         ...
 
     @property

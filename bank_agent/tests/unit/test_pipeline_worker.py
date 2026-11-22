@@ -146,7 +146,8 @@ def test_periodic_tasks_run_on_their_interval_and_the_worker_stops_on_request() 
     assert events[0] == "worker_started" and events[-1] == "worker_stopped"
 
 
-def test_a_failing_step_is_logged_and_the_worker_keeps_going() -> None:
+def test_a_failing_periodic_task_is_logged_and_the_stage_still_runs() -> None:
+    """SPEC_DECISIONS 85 rule 5: whatever the sync does, the worker goes on to pick and run a stage."""
     world = World()
     upload(world, world.facility.facility_id, 0)
 
@@ -156,18 +157,19 @@ def test_a_failing_step_is_logged_and_the_worker_keeps_going() -> None:
 
     stop = Stop(idle_waits=2)
     runner = worker(world, Locks(), FakeStage(world, TapeStatus.CLEANED), periodic=(Broken(0),), stop=stop)
-    runner.run_until_stopped()
-    failures = [fields for level, event, fields in world.log.events if event == "worker_step_failed"]
+    report = runner.run_until_stopped()
+    assert [run.status for run in report.runs] == [TapeStatus.CLEANED], "the stage ran despite the task"
+    failures = [fields for level, event, fields in world.log.events if event == "periodic_task_failed"]
     assert (
         failures
         and failures[0]["exception_type"] == "ConnectionError"
         and "database down" not in repr(failures)
     )
     assert failures[0]["error_code"] == "INTERNAL_ERROR"
+    assert report.task_failures and set(report.task_failures) == {"INTERNAL_ERROR"}
 
 
-def test_a_failing_step_with_a_dependency_error_names_its_code_and_status() -> None:
-    """SPEC_DECISIONS 66: the worker's error record carries the A2 keys that apply."""
+def test_once_runs_every_stage_after_a_failing_task_and_reports_the_failure() -> None:
     world = World()
     upload(world, world.facility.facility_id, 0)
 
@@ -175,10 +177,11 @@ def test_a_failing_step_with_a_dependency_error_names_its_code_and_status() -> N
         def run(self) -> None:
             raise RegistryRejectedError(403, FailureReason.FORBIDDEN)
 
-    stop = Stop(idle_waits=1)
-    runner = worker(world, Locks(), FakeStage(world, TapeStatus.CLEANED), periodic=(Refused(0),), stop=stop)
-    runner.run_until_stopped()
-    (failed,) = [fields for _, event, fields in world.log.events if event == "worker_step_failed"][:1]
+    runner = worker(world, Locks(), FakeStage(world, TapeStatus.CLEANED), periodic=(Refused(100),))
+    report = runner.run_once()
+    assert [run.status for run in report.runs] == [TapeStatus.CLEANED]
+    assert report.task_failures == ["REGISTRY_REJECTED_REQUEST"]
+    (failed,) = [fields for _, event, fields in world.log.events if event == "periodic_task_failed"][:1]
     assert (failed["error_code"], failed["http_status"], failed["exception_type"]) == (
         "REGISTRY_REJECTED_REQUEST",
         403,

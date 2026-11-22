@@ -51,8 +51,7 @@ def _route_logs(bank_code: str | None, level: str, quiet: bool) -> None:
 def run_command(arguments: argparse.Namespace, output: Output, collaborators: Collaborators | None) -> int:
     """Dispatch one parsed command; returns the exit code."""
     if arguments.command == "worker":
-        _worker(arguments, output, collaborators)
-        return 0
+        return _worker(arguments, output, collaborators)
     if arguments.command in ("registry", "integrity"):
         _runtime_command(arguments, output, collaborators)
         return 0
@@ -177,20 +176,35 @@ def _run_row(run: StageRun) -> tuple[str, ...]:
     return tuple("" if document[key] is None else str(document[key]) for key in document)
 
 
-def _report(report: WorkerReport, output: Output) -> None:
+TASK_FAILED = (
+    "The registry outbox sync failed; every runnable stage ran. The log names the cause; "
+    "run registry sync again."
+)
+
+
+def _report(report: WorkerReport, output: Output) -> int:
+    """The stage runs; exit 1 after them when a periodic task failed (SPEC_DECISIONS 85, rule 5)."""
+    failed = bool(report.task_failures)
+    stages: list[JsonValue] = [_run_document(run) for run in report.runs]
     if output.as_json:
-        output.success({"stages": [_run_document(run) for run in report.runs]})
-        return
-    output.table(
-        "Pipeline worker",
-        ("submission", "from", "outcome", "status", *FAILURE_KEYS),
-        [_run_row(run) for run in report.runs],
-        ("stage run", "stages run"),
-        "Nothing else is runnable now.",
-    )
+        error: dict[str, JsonValue] = (
+            {"code": report.task_failures[0], "message": TASK_FAILED} if failed else {}
+        )
+        output.json({"ok": not failed, "stages": stages, **({"error": error} if failed else {})})
+    else:
+        output.table(
+            "Pipeline worker",
+            ("submission", "from", "outcome", "status", *FAILURE_KEYS),
+            [_run_row(run) for run in report.runs],
+            ("stage run", "stages run"),
+            "Nothing else is runnable now.",
+        )
+    if failed:
+        output.error(TASK_FAILED)
+    return 1 if failed else 0
 
 
-def _worker(arguments: argparse.Namespace, output: Output, collaborators: Collaborators | None) -> None:
+def _worker(arguments: argparse.Namespace, output: Output, collaborators: Collaborators | None) -> int:
     settings = load_runtime_settings()
     _route_logs(settings.require_bank_code(), settings.log_level, arguments.quiet)
     with database_errors_as_operator_errors(), RuntimeComposition(settings, collaborators) as composition:
@@ -205,9 +219,9 @@ def _worker(arguments: argparse.Namespace, output: Output, collaborators: Collab
         signal.signal(signal.SIGTERM, request_stop)
         signal.signal(signal.SIGINT, request_stop)
         if arguments.once:
-            _report(worker.run_once(), output)
-            return
+            return _report(worker.run_once(), output)
         worker.run_until_stopped()
+        return 0
 
 
 def _runtime_command(

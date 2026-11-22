@@ -4,6 +4,7 @@ from onepledge_bank_agent.infrastructure.db.models.base import Base
 from onepledge_bank_agent.infrastructure.db.models.evidence import (
     AuditLogRow,
     IntegrityRunRow,
+    OutboxAttemptRow,
     QuarantinedMessageRow,
 )
 from onepledge_bank_agent.infrastructure.db.models.loans import LoanRow, LoanTokenRow, LocalCheckRow
@@ -41,6 +42,7 @@ __all__ = [
     "LoanTokenRow",
     "LocalCheckRow",
     "LoginAttemptRow",
+    "OutboxAttemptRow",
     "QuarantinedMessageRow",
     "RawRowRow",
     "RegistryRequestItemRow",

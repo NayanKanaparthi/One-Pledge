@@ -15,7 +15,7 @@ from onepledge_bank_agent.domain.audit import Actor, AuditDraft
 from onepledge_bank_agent.domain.canonical_json import JsonValue
 from onepledge_bank_agent.domain.entities import Checkpoint, RegistryRequest
 from onepledge_bank_agent.domain.enums import AuditAction, AuditObjectType, AuditOutcome
-from onepledge_bank_agent.domain.registry_records import QuarantinedPayload, RegistryAnswer
+from onepledge_bank_agent.domain.registry_records import QuarantinedMessage, RegistryAnswer
 
 SYSTEM = Actor.system()
 CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
@@ -137,18 +137,21 @@ def message_ignored(message_id: uuid.UUID, message_type: str) -> AuditDraft:
     )
 
 
-def message_quarantined(
-    message_id: uuid.UUID, message_type: str, quarantined: QuarantinedPayload
-) -> AuditDraft:
-    """`REGISTRY_MESSAGE_QUARANTINED` (SPEC_DECISIONS 57): a known type whose payload broke the contract."""
+def message_quarantined(row: QuarantinedMessage, sqlstate: str | None = None) -> AuditDraft:
+    """`REGISTRY_MESSAGE_QUARANTINED` (SPEC_DECISIONS 85): the message type, the reason, the payload hash,
+    the SQLSTATE when the store refused it; the object is the quarantine row (decision 89)."""
+    detail: dict[str, JsonValue] = {
+        "message_id": str(row.message_id),
+        "message_type": row.message_type if CODE.fullmatch(row.message_type) else UNREADABLE,
+        "reason": row.quarantined.reason.value,
+        "payload_sha256": row.quarantined.payload_sha256,
+    }
+    if sqlstate is not None:
+        detail["sqlstate"] = sqlstate
     return entry(
         AuditAction.REGISTRY_MESSAGE_QUARANTINED,
         AuditObjectType.REGISTRY_MESSAGE,
-        message_id,
-        {
-            "message_type": message_type if CODE.fullmatch(message_type) else UNREADABLE,
-            "reason": quarantined.reason.value,
-            "payload_sha256": quarantined.payload_sha256,
-        },
+        row.quarantine_id,
+        detail,
         AuditOutcome.FAILURE,
     )

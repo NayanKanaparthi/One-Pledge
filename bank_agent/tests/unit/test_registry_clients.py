@@ -258,6 +258,13 @@ ALERT = {
 }
 
 
+BODY = {"schema_version": 1, "checkpoint_seq": 3, "last_event_seq": 9000, "head_hash": "a" * 64,
+        "signed_at": "2026-11-22T00:00:00Z"}  # fmt: skip
+SIGNED = {"body": BODY, "signature": "A" * 86 + "==", "signing_key_id": "registry-local-1"}
+HUGE = "<a 5000 digit integer literal>"
+CASE = {"case_id": str(uuid.uuid4()), "asset_token": "d" * 64, "status": "CONFIRMED", "resolved_seq": 600}
+
+
 def message(message_type: str, payload: object) -> dict[str, object]:
     return {
         "message_id": str(uuid.uuid4()),
@@ -273,12 +280,12 @@ QUARANTINE_CASES = [
     (
         "an asset code in capitals",
         message("ALERT", {**ALERT, "asset_token": "D" * 64}),
-        "UNKNOWN_ASSET_TOKEN_FORMAT",
+        "SCHEMA_MISMATCH",
     ),
     (
         "a short asset code",
         message("ALERT", {**ALERT, "asset_token": "d" * 63}),
-        "UNKNOWN_ASSET_TOKEN_FORMAT",
+        "SCHEMA_MISMATCH",
     ),
     ("a missing field", message("ALERT", {k: v for k, v in ALERT.items() if k != "role"}), "SCHEMA_MISMATCH"),
     (
@@ -290,6 +297,38 @@ QUARANTINE_CASES = [
     ("a fraction", message("ALERT", {**ALERT, "opened_seq": 4.5}), "SCHEMA_MISMATCH"),
     ("an exponent", message("CHECKPOINT", {"body": {"checkpoint_seq": 1e3}}), "SCHEMA_MISMATCH"),
     ("over 64 KiB", message("CASE_UPDATE", {"case_id": "x", "notes": "n" * 66_000}), "OVERSIZED"),
+    (
+        "a kind listed twice",
+        message("ALERT", {**ALERT, "kinds_matched": ["ASSET", "ASSET", "VIN"]}),
+        "SCHEMA_MISMATCH",
+    ),
+    (
+        "no opened_seq",
+        message("ALERT", {k: v for k, v in ALERT.items() if k != "opened_seq"}),
+        "SCHEMA_MISMATCH",
+    ),
+    (
+        "no created_at",
+        {k: v for k, v in message("ALERT", ALERT).items() if k != "created_at"},
+        "SCHEMA_MISMATCH",
+    ),
+    (
+        "a seq of 2 to the 63",
+        message("CHECKPOINT", {**SIGNED, "body": {**BODY, "checkpoint_seq": 2**63}}),
+        "VALUE_OUT_OF_RANGE",
+    ),
+    (
+        "a 31 digit seq",
+        message("CHECKPOINT", {**SIGNED, "body": {**BODY, "last_event_seq": 10**30}}),
+        "VALUE_OUT_OF_RANGE",
+    ),
+    ("a 5000 digit seq", message("ALERT", {**ALERT, "opened_seq": HUGE}), "VALUE_OUT_OF_RANGE"),
+    (
+        "a too large seq and a missing field",
+        message("ALERT", {**{k: v for k, v in ALERT.items() if k != "role"}, "opened_seq": 2**63}),
+        "SCHEMA_MISMATCH",
+    ),
+    ("a position of 2 to the 63", {**message("CASE_UPDATE", CASE), "position": 2**63}, "VALUE_OUT_OF_RANGE"),
 ]
 
 
@@ -297,20 +336,21 @@ QUARANTINE_CASES = [
 def test_a_known_message_outside_the_contract_is_quarantined_with_its_reason_and_hash(
     case: tuple[str, dict[str, object], str | None],
 ) -> None:
-    """SPEC_DECISIONS 57: the page is never refused for one bad payload; the hash is over the payload."""
+    """SPEC_DECISIONS 85 rule 1: the whole schema and the storable range; the page is never refused."""
     _, sent, reason = case
-    body = json.dumps({"messages": [sent], "has_more": False}).encode()
+    body = json.dumps({"messages": [sent], "has_more": False}).replace(f'"{HUGE}"', "9" * 5000).encode()
     (received,) = registry(lambda r: httpx.Response(200, content=body)).outbox(100).messages
     if reason is None:
         assert not isinstance(received.payload, QuarantinedPayload)
         return
+    assert received.position == (None if "position of" in case[0] else 1)
     assert isinstance(received.payload, QuarantinedPayload)
     quarantined = received.payload
     assert (received.message_type, quarantined.reason.value) == (sent["type"], reason)
     assert len(quarantined.payload_sha256) == 64
     if reason == "OVERSIZED":
         assert quarantined.payload is None
-    elif "fraction" not in case[0] and "exponent" not in case[0]:
+    elif not any(word in case[0] for word in ("fraction", "exponent", "5000")):
         assert quarantined.payload == sent["payload"]
         assert quarantined.payload_sha256 == hashlib.sha256(canonical_json(sent["payload"])).hexdigest()
 

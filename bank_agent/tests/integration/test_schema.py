@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -21,11 +22,13 @@ from onepledge_bank_agent.infrastructure.operator_errors import OperatorError
 
 pytestmark = pytest.mark.integration
 
+VERSIONS = Path(__file__).resolve().parents[2] / "migrations" / "versions"
+
 TABLES = {
     "lenders", "facilities", "users", "login_attempts", "tape_submissions", "loans_raw", "cleaning_issues",
     "submission_items", "loans", "local_checks", "loan_tokens", "registry_requests", "registry_request_items",
     "certificates", "alerts", "checkpoints_seen", "audit_log", "integrity_runs",
-    "registry_messages_quarantined",
+    "registry_messages_quarantined", "registry_outbox_attempts",
 }  # fmt: skip
 ENUM_CHECKS: dict[str, type[StrEnum] | tuple[str, ...]] = {
     "ck_facilities_status": enums.FacilityStatus,
@@ -143,7 +146,7 @@ def test_the_schema_status_reads_the_revision_as_the_app_role(bank_db: BankDatab
         status = SchemaInspector(engine).status()
         assert (status.current_revision, status.head_revision, status.at_head) == (
             head_revision(),
-            "0007_certificate_evidence",
+            sorted(path.stem for path in VERSIONS.glob("0*.py"))[-1],
             True,
         )
         SchemaInspector(engine).require_head()

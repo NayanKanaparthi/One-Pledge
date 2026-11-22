@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import AfterValidator, Field
 
 from onepledge_bank_agent.domain.canonical_json import JsonValue
 from onepledge_bank_agent.domain.enums import (
@@ -41,9 +41,21 @@ SIGNATURE = r"^[A-Za-z0-9+/]{86}==$"
 KEY_ID = r"^[a-z0-9-]{1,64}$"
 KEY_VERSION = r"^[1-9][0-9]*\.[1-9][0-9]*$"
 CODE = r"^[A-Z][A-Z0-9_]{0,63}$"
+BIGINT_MAX = 9_223_372_036_854_775_807
+"""The largest sequence number or position the bank can store (SPEC_DECISIONS 85, rule 1)."""
 type Hash = Annotated[str, Field(pattern=HASH)]
-type Seq = Annotated[int, Field(ge=0)]
-type PositiveSeq = Annotated[int, Field(ge=1)]
+type Seq = Annotated[int, Field(ge=0, le=BIGINT_MAX)]
+type PositiveSeq = Annotated[int, Field(ge=1, le=BIGINT_MAX)]
+
+
+def _distinct(kinds: list[TokenKind]) -> list[TokenKind]:
+    """`uniqueItems: true`: a kind listed twice breaks the contract."""
+    if len(set(kinds)) != len(kinds):
+        raise ValueError("kinds_matched")
+    return kinds
+
+
+type Kinds = Annotated[list[TokenKind], AfterValidator(_distinct)]
 
 
 class ItemResultBody(Strict):
@@ -56,7 +68,7 @@ class ItemResultBody(Strict):
     already_held: bool
     match_kind: MatchKind | None
     match_basis: MatchBasis | None
-    kinds_matched: list[TokenKind]
+    kinds_matched: Kinds
     case_id: uuid.UUID | None
     reason: Annotated[str, Field(pattern=CODE)] | None
 
@@ -164,7 +176,7 @@ class AlertPayloadBody(Strict):
     asset_token: Hash
     match_kind: MatchKind
     match_basis: MatchBasis
-    kinds_matched: list[TokenKind]
+    kinds_matched: Kinds
     opened_seq: PositiveSeq
 
     def notice(self) -> AlertNotice:
@@ -189,28 +201,38 @@ class CasePayloadBody(Strict):
 
 
 class MessageEnvelope(Strict):
-    """What every outbox message has, whatever its type."""
+    """What the bank needs to acknowledge any outbox message, whatever its type and the rest of it."""
 
     message_id: uuid.UUID
-    position: PositiveSeq
     type: Annotated[str, Field(min_length=1, max_length=64)]
 
 
-class AlertMessageBody(Strict):
+class MessageBody(Strict):
+    """The fields every outbox message of a known type has (`registry.yaml`)."""
+
+    message_id: uuid.UUID
+    position: PositiveSeq
+    created_at: datetime
+
+
+class AlertMessageBody(MessageBody):
     """`AlertMessage`."""
 
+    type: Literal["ALERT"]
     payload: AlertPayloadBody
 
 
-class CaseMessageBody(Strict):
+class CaseMessageBody(MessageBody):
     """`CaseUpdateMessage`."""
 
+    type: Literal["CASE_UPDATE"]
     payload: CasePayloadBody
 
 
-class CheckpointMessageBody(Strict):
+class CheckpointMessageBody(MessageBody):
     """`CheckpointMessage`."""
 
+    type: Literal["CHECKPOINT"]
     payload: SignedCheckpointBody
 
 

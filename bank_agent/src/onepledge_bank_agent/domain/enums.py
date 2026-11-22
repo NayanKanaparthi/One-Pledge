@@ -283,11 +283,16 @@ class CertificateFailure(StrEnum):
 
 
 class QuarantineReason(StrEnum):
-    """Why a registry outbox message of a known type was quarantined (SPEC_DECISIONS 57)."""
+    """Why a registry outbox message was quarantined as poison (SPEC_DECISIONS 85, rule 6)."""
 
     SCHEMA_MISMATCH = "SCHEMA_MISMATCH"
-    UNKNOWN_ASSET_TOKEN_FORMAT = "UNKNOWN_ASSET_TOKEN_FORMAT"  # noqa: S105 - a reason code, not a secret
+    VALUE_OUT_OF_RANGE = "VALUE_OUT_OF_RANGE"
+    CONTRADICTS_STORED_STATE = "CONTRADICTS_STORED_STATE"
+    REFUSED_BY_DATABASE = "REFUSED_BY_DATABASE"
+    REJECTED_BY_DEPENDENCY = "REJECTED_BY_DEPENDENCY"
+    REPEATED_FAILURE = "REPEATED_FAILURE"
     OVERSIZED = "OVERSIZED"
+    UNEXPECTED_ERROR = "UNEXPECTED_ERROR"
 
 
 class CheckpointFailure(StrEnum):

@@ -6,11 +6,13 @@ from types import TracebackType
 from typing import Self
 
 from sqlalchemy import Engine
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from onepledge_bank_agent.application.ports import IdGenerator
 from onepledge_bank_agent.domain.audit import AuditDraft
 from onepledge_bank_agent.infrastructure.audit import HashChainedAuditWriter
+from onepledge_bank_agent.infrastructure.db.refusals import store_error
 from onepledge_bank_agent.infrastructure.db.repositories.alerts import SqlAlertRepository
 from onepledge_bank_agent.infrastructure.db.repositories.checks import SqlCheckRepository
 from onepledge_bank_agent.infrastructure.db.repositories.evidence_stores import SqlEvidenceStores
@@ -18,6 +20,7 @@ from onepledge_bank_agent.infrastructure.db.repositories.facilities import SqlFa
 from onepledge_bank_agent.infrastructure.db.repositories.history import SqlHistoryReader
 from onepledge_bank_agent.infrastructure.db.repositories.items import SqlSubmissionItemRepository
 from onepledge_bank_agent.infrastructure.db.repositories.loans import SqlLoanRepository
+from onepledge_bank_agent.infrastructure.db.repositories.outbox_attempts import SqlOutboxAttemptRepository
 from onepledge_bank_agent.infrastructure.db.repositories.raw_rows import SqlRawRowRepository
 from onepledge_bank_agent.infrastructure.db.repositories.requests import SqlRegistryRequestRepository
 from onepledge_bank_agent.infrastructure.db.repositories.tapes import SqlTapeRepository
@@ -36,6 +39,7 @@ class SqlUnitOfWork:
     facilities: SqlFacilityRepository
     requests: SqlRegistryRequestRepository
     alerts: SqlAlertRepository
+    outbox_attempts: SqlOutboxAttemptRepository
     evidence: SqlEvidenceStores
     history: SqlHistoryReader
 
@@ -59,6 +63,7 @@ class SqlUnitOfWork:
         self.facilities = SqlFacilityRepository(session)
         self.requests = SqlRegistryRequestRepository(session)
         self.alerts = SqlAlertRepository(session)
+        self.outbox_attempts = SqlOutboxAttemptRepository(session)
         self.evidence = SqlEvidenceStores(session)
         self.history = SqlHistoryReader(session)
         return self
@@ -66,12 +71,22 @@ class SqlUnitOfWork:
     def __exit__(
         self, kind: type[BaseException] | None, error: BaseException | None, trace: TracebackType | None
     ) -> None:
-        """Roll back whatever was not committed and release the connection."""
-        if self._session is not None:
-            self._session.rollback()
-            self._session.close()
-            self._session = None
+        """Roll back whatever was not committed and release the connection; a driver error that is a
+        refusal or a passing failure leaves as the store error it stands for (SPEC_DECISIONS 92)."""
+        session, self._session = self._session, None
         self._drafts.clear()
+        if session is not None:
+            try:
+                session.rollback()
+            except DBAPIError:
+                if not isinstance(error, DBAPIError):
+                    raise
+            finally:
+                session.close()
+        if isinstance(error, DBAPIError):
+            mapped = store_error(error)
+            if mapped is not None:
+                raise mapped from error
 
     def record(self, draft: AuditDraft) -> None:
         """Queue an audit entry for this transaction."""
@@ -82,7 +97,13 @@ class SqlUnitOfWork:
         if self._session is None:
             raise RuntimeError("the unit of work is not open")
         self._writer.append(self._session, self._drafts)
-        self._session.commit()
+        try:
+            self._session.commit()
+        except DBAPIError as error:
+            mapped = store_error(error)
+            if mapped is None:
+                raise
+            raise mapped from error
         self._drafts.clear()
 
 

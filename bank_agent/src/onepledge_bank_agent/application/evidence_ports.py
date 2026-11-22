@@ -122,6 +122,18 @@ class QuarantineRepository(Protocol):
         ...
 
 
+class OutboxAttemptRepository(Protocol):
+    """`registry_outbox_attempts` (mutable): how often each outbox message was deferred (decision 85)."""
+
+    def count(self, message_id: uuid.UUID) -> int:
+        """The deferrals recorded for a message (0 when none)."""
+        ...
+
+    def defer(self, message_id: uuid.UUID, reason: str, at: datetime) -> int:
+        """Record one more deferral with its reason; returns the new count."""
+        ...
+
+
 class AlertRepository(Protocol):
     """`alerts`."""
 

@@ -312,7 +312,10 @@ def test_only_the_case_outcome_closes_an_open_alert(
 
 def test_terminal_alerts_stay_terminal() -> None:
     cleared = alert_at(A.CLEARED)
-    assert cleared.apply_case_status(CaseStatus.CONFIRMED) is True and cleared.status is A.CLEARED
+    assert cleared.apply_case_status(cleared.record.case_status) is False, "a repeat changes nothing"
+    with pytest.raises(IllegalTransitionError):
+        cleared.apply_case_status(CaseStatus.CONFIRMED)
+    assert cleared.status is A.CLEARED
     assert alert_at(A.NEW).apply_case_status(CaseStatus.OPEN) is False
     with pytest.raises(IllegalTransitionError):
         alert_at(A.ESCALATED).apply_case_status(CaseStatus.OPEN)

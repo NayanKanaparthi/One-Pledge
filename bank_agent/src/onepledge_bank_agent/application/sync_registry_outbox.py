@@ -5,11 +5,12 @@ request (`POST /v1/registry/sync`, `onepledge-bank registry sync`). It holds the
 lock `onepledge:outbox`, so one sync runs per bank. Messages are read 100 at a time in
 position order; each is processed in one transaction, committed, then acknowledged. A
 crash between commit and acknowledgement causes a redelivery that changes nothing. A
-message type this bank does not know is acknowledged and audited. A known type whose
-payload broke the contract is quarantined (SPEC_DECISIONS 57): in one transaction the
-message is stored in `registry_messages_quarantined` and audited as
-`REGISTRY_MESSAGE_QUARANTINED`, then it is acknowledged and the sync continues. An
-outage ends the periodic sync quietly; an on-demand sync reports it.
+message type this bank does not know is acknowledged and audited. Every other message
+has one of three outcomes (SPEC_DECISIONS 85, `outbox_outcomes.py`): applied, deferred
+(the sync stops and the message comes back next time, at most five times), or poison
+(quarantined, audited, acknowledged, and the sync goes on). Nothing a registry sends can
+block the outbox or vanish. An outage ends the periodic sync quietly; an on-demand sync
+reports it.
 """
 
 from __future__ import annotations
@@ -19,20 +20,20 @@ from dataclasses import dataclass, field
 from onepledge_bank_agent.application.events import LogEvent
 from onepledge_bank_agent.application.faults import FaultPoint
 from onepledge_bank_agent.application.outbox_handlers import AlertMessages, CaseUpdateMessages
+from onepledge_bank_agent.application.outbox_outcomes import Poison, PoisonRecorder, deferral_reason
 from onepledge_bank_agent.application.ports import UnitOfWorkFactory
-from onepledge_bank_agent.application.registry_audit import message_ignored, message_quarantined
+from onepledge_bank_agent.application.registry_audit import message_ignored
 from onepledge_bank_agent.application.registry_ports import OutboxLock, RegistryClient
 from onepledge_bank_agent.application.requester import Requester
-from onepledge_bank_agent.application.runtime import Runtime
+from onepledge_bank_agent.application.runtime import Runtime, StopRequestedError
 from onepledge_bank_agent.application.verify_checkpoint import VerifyCheckpoint
 from onepledge_bank_agent.domain.audit import AuditDraft
-from onepledge_bank_agent.domain.enums import AuditAction, AuditObjectType, AuditOutcome
+from onepledge_bank_agent.domain.enums import AuditAction, AuditObjectType, AuditOutcome, QuarantineReason
 from onepledge_bank_agent.domain.errors import PipelineStageError
 from onepledge_bank_agent.domain.registry_records import (
     AlertNotice,
     CaseNotice,
     OutboxMessage,
-    QuarantinedMessage,
     QuarantinedPayload,
     SignedCheckpoint,
 )
@@ -100,6 +101,7 @@ class SyncRegistryOutbox:
         self._ids = runtime.ids
         self._log = runtime.log
         self._interval = interval_seconds
+        self._poison = PoisonRecorder(units, runtime)
 
     @property
     def interval_seconds(self) -> float:
@@ -136,7 +138,8 @@ class SyncRegistryOutbox:
         return result
 
     def sync(self) -> SyncResult:
-        """Process pages until none is waiting; raises the registry error that interrupts it."""
+        """Process pages until none is waiting. Each message is applied, deferred or quarantined as
+        poison (SPEC_DECISIONS 85); a deferral stops the sync by raising the failure that caused it."""
         result = SyncResult()
         with self._lock.hold() as granted:
             if not granted:
@@ -146,7 +149,7 @@ class SyncRegistryOutbox:
             while more:
                 page = self._registry.outbox(PAGE_SIZE)
                 for message in page.messages:
-                    self._process(message, result)
+                    self._settle(message, result)
                     self._faults.reached(FaultPoint.BETWEEN_OUTBOX_COMMIT_AND_ACK)
                     self._registry.acknowledge(message.message_id)
                     result.messages_processed += 1
@@ -157,13 +160,29 @@ class SyncRegistryOutbox:
             self._log.info(LogEvent.OUTBOX_SYNCED, count=result.messages_processed)
         return result
 
-    def _process(self, message: OutboxMessage, result: SyncResult) -> None:
+    def _settle(self, message: OutboxMessage, result: SyncResult) -> None:
+        """Apply the message, or quarantine it as poison; raise only when it is deferred."""
+        payload = message.payload
+        if isinstance(payload, QuarantinedPayload):
+            self._poison.quarantine(message, Poison(payload.reason))
+            return
+        try:
+            self._apply(message, result)
+        except StopRequestedError:
+            raise
+        except Exception as error:  # SPEC_DECISIONS 85: the poison class is defined by exclusion
+            reason = deferral_reason(error)
+            if reason is not None and not self._poison.defer(message, reason):
+                raise
+            repeated = Poison(QuarantineReason.REPEATED_FAILURE)
+            self._poison.quarantine(
+                message, repeated if reason is not None else self._poison.failed(message, error)
+            )
+
+    def _apply(self, message: OutboxMessage, result: SyncResult) -> None:
         payload = message.payload
         if isinstance(payload, SignedCheckpoint):
             self._checkpoint(payload, result)
-            return
-        if isinstance(payload, QuarantinedPayload):
-            self._quarantine(message, payload)
             return
         with self._units() as unit:
             if isinstance(payload, AlertNotice):
@@ -173,24 +192,8 @@ class SyncRegistryOutbox:
             else:
                 unit.record(message_ignored(message.message_id, message.message_type))
                 self._log.warning(LogEvent.REGISTRY_MESSAGE_IGNORED)
+            self._faults.reached(FaultPoint.OUTBOX_HANDLER_BEFORE_COMMIT)
             unit.commit()
-
-    def _quarantine(self, message: OutboxMessage, quarantined: QuarantinedPayload) -> None:
-        row = QuarantinedMessage(
-            self._ids.new_id(), message.message_id, message.position, message.message_type, quarantined,
-            self._clock.now(),
-        )  # fmt: skip
-        with self._units() as unit:
-            stored = unit.evidence.quarantine.add(row)
-            if stored:
-                unit.record(message_quarantined(message.message_id, message.message_type, quarantined))
-            unit.commit()
-        if stored:
-            self._log.warning(
-                LogEvent.REGISTRY_MESSAGE_QUARANTINED,
-                kind=message.message_type,
-                reason=quarantined.reason.value,
-            )
 
     def _checkpoint(self, signed: SignedCheckpoint, result: SyncResult) -> None:
         assessment = self._handlers.checkpoints.assess(signed)
@@ -198,6 +201,7 @@ class SyncRegistryOutbox:
             return
         with self._units() as unit:
             stored = self._handlers.checkpoints.record(unit, signed, assessment.verdict)
+            self._faults.reached(FaultPoint.OUTBOX_HANDLER_BEFORE_COMMIT)
             unit.commit()
         if stored is None:
             return

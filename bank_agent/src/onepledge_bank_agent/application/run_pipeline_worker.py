@@ -1,6 +1,7 @@
 """`RunPipelineWorker`: the loop that moves submissions through the pipeline (SPEC 13.1).
 
-Each step: run the periodic tasks that are due, pick the next runnable submission
+Each step: run the periodic tasks that are due (a task that fails is logged and reported,
+and never stops the step), pick the next runnable submission
 (upload order, one facility's tapes strictly in order, backoff respected), take its
 advisory lock, and run exactly one stage. A submission whose lock another worker holds
 is skipped. With nothing to do the worker waits `PIPELINE_POLL_SECONDS`, waking early
@@ -39,9 +40,10 @@ class PeriodicTask(Protocol):
 
 @dataclass
 class WorkerReport:
-    """What a worker run did, stage by stage."""
+    """What a worker run did, stage by stage, and the error code of each periodic task that failed."""
 
     runs: list[StageRun] = field(default_factory=list)
+    task_failures: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -74,9 +76,10 @@ class RunPipelineWorker:
         self._last_run: dict[int, datetime] = {}
 
     def run_once(self) -> WorkerReport:
-        """Process until no submission is runnable or a stop is requested (`worker --once`)."""
+        """Process until no submission is runnable or a stop is requested (`worker --once`). A periodic
+        task that fails is reported in the result; the stages run all the same (SPEC_DECISIONS 85)."""
         report = WorkerReport()
-        while not self._stop.is_set() and (run := self._step()) is not None:
+        while not self._stop.is_set() and (run := self._step(report)) is not None:
             report.runs.append(run)
         return report
 
@@ -86,7 +89,7 @@ class RunPipelineWorker:
         self._log.info(LogEvent.WORKER_STARTED)
         while not self._stop.is_set():
             try:
-                run = self._step()
+                run = self._step(report)
             except Exception as error:  # a failed step (database down) must not end the worker
                 self._log.failure(
                     LogEvent.WORKER_STEP_FAILED, error, error_code=error_code_of(error), **http_facts(error)
@@ -99,8 +102,8 @@ class RunPipelineWorker:
         self._log.info(LogEvent.WORKER_STOPPED, count=len(report.runs))
         return report
 
-    def _step(self) -> StageRun | None:
-        self._run_due_tasks()
+    def _step(self, report: WorkerReport) -> StageRun | None:
+        self._run_due_tasks(report)
         if self._stop.is_set():
             return None
         now = self._clock.now()
@@ -112,10 +115,18 @@ class RunPipelineWorker:
                     return self._advance.advance(submission_id)
         return None
 
-    def _run_due_tasks(self) -> None:
+    def _run_due_tasks(self, report: WorkerReport) -> None:
+        """Run the due tasks; whatever one does, including raising, the worker goes on to the stages."""
         now = self._clock.now()
         for index, task in enumerate(self._periodic):
             last = self._last_run.get(index)
             if last is None or (now - last).total_seconds() >= task.interval_seconds:
-                task.run()
                 self._last_run[index] = now
+                try:
+                    task.run()
+                except Exception as error:  # SPEC_DECISIONS 85 rule 5: a sync can never starve the stages
+                    code = error_code_of(error)
+                    report.task_failures.append(code)
+                    self._log.failure(
+                        LogEvent.PERIODIC_TASK_FAILED, error, error_code=code, **http_facts(error)
+                    )

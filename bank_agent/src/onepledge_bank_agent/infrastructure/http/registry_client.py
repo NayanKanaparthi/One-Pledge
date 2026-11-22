@@ -9,13 +9,14 @@
 | a success outside the contract | `RegistryProtocolError` |
 
 An outbox message of a type the bank does not know is returned without a payload, so
-the sync can acknowledge and audit it. A known type whose payload does not match the
-contract is returned as a `QuarantinedPayload` (SPEC_DECISIONS 57): OVERSIZED when the
-serialised payload exceeds 64 KiB, UNKNOWN_ASSET_TOKEN_FORMAT when only the asset code is
-not the agreed format, SCHEMA_MISMATCH otherwise, so the sync keeps it as evidence and
-the outbox is never blocked. A number with a fraction or an exponent in an outbox page is
-kept as its text, so it fails the payload's schema instead of the whole page. Only an
-envelope without a valid message id, position and type is a protocol error.
+the sync can acknowledge and audit it. A known type is validated against its whole
+schema (types, patterns, `uniqueItems`, required fields) and every number must fit the
+column it is stored in (SPEC_DECISIONS 85, rule 1); a message that fails is returned as a
+`QuarantinedPayload` with reason OVERSIZED (over 64 KiB), VALUE_OUT_OF_RANGE (only a
+number too large) or SCHEMA_MISMATCH, so the sync keeps it as evidence and the outbox is
+never blocked. A number with a fraction or an exponent, or an integer literal of more
+than 4000 digits, is kept as its text. Only a message without a valid id or type is a
+protocol error of the page.
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ from onepledge_bank_agent.domain.errors import PositionAlreadyRecordedError
 from onepledge_bank_agent.domain.registry_records import (
     CaseOutcome,
     EventPage,
+    MessageEvidence,
     MessagePayload,
     OutboxMessage,
     OutboxPage,
@@ -54,6 +56,7 @@ from onepledge_bank_agent.infrastructure.http.answers import error_code, json_ob
 from onepledge_bank_agent.infrastructure.http.base import JsonBody, OutboundRequest, RetryingHttpCaller
 from onepledge_bank_agent.infrastructure.http.classification import failure
 from onepledge_bank_agent.infrastructure.http.registry_wire import (
+    BIGINT_MAX,
     AlertMessageBody,
     CaseMessageBody,
     CaseViewBody,
@@ -103,40 +106,78 @@ class _FloatText(str):
     """A JSON number with a fraction or an exponent, kept as its text (the contract has none)."""
 
 
+class _LongIntText(str):
+    """An integer literal too long to convert, kept as its text; it stands for a value out of range."""
+
+
+MAX_INT_DIGITS = 4000
+
+
+def _integer(text: str) -> int | str:
+    return int(text) if len(text) <= MAX_INT_DIGITS else _LongIntText(text)
+
+
 KNOWN_MESSAGES: Mapping[str, type[BaseModel]] = MappingProxyType(
     {"ALERT": AlertMessageBody, "CASE_UPDATE": CaseMessageBody, "CHECKPOINT": CheckpointMessageBody}
 )
 MAX_QUARANTINED_PAYLOAD_BYTES = 64 * 1024
-ASSET_TOKEN_LOCATION = ("payload", "asset_token")
+OUT_OF_RANGE = frozenset({"less_than_equal"})
 
 
-def _quarantined(model: type[BaseModel], value: object, payload: JsonValue) -> QuarantinedPayload | None:
-    """None when the message matches its model; otherwise the payload as evidence, with its reason."""
+def _validation_copy(value: object) -> object:
+    """The message as validated: an over long integer becomes one past the largest storable value."""
+    if isinstance(value, _LongIntText):
+        return BIGINT_MAX + 1
+    if isinstance(value, dict):
+        return {key: _validation_copy(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_validation_copy(item) for item in value]
+    return value
+
+
+def _evidence(payload: JsonValue) -> MessageEvidence:
+    """The payload as received and its hash; only the hash when it exceeds 64 KiB."""
     serialised = canonical_json(payload)
-    digest = sha256_hex(serialised)
-    if len(serialised) > MAX_QUARANTINED_PAYLOAD_BYTES:
-        return QuarantinedPayload(QuarantineReason.OVERSIZED, None, digest)
+    oversized = len(serialised) > MAX_QUARANTINED_PAYLOAD_BYTES
+    return MessageEvidence(None if oversized else payload, sha256_hex(serialised), oversized)
+
+
+def _rejection(model: type[BaseModel], value: object, evidence: MessageEvidence) -> QuarantineReason | None:
+    """None when the message matches its contract in full and every number fits its column."""
+    if evidence.oversized:
+        return QuarantineReason.OVERSIZED
     try:
-        model.model_validate_json(json.dumps(value))
+        model.model_validate_json(json.dumps(_validation_copy(value)))
     except ValidationError as error:
-        locations = {tuple(detail["loc"]) for detail in error.errors()}
-        only_token = locations == {ASSET_TOKEN_LOCATION}
-        reason = (
-            QuarantineReason.UNKNOWN_ASSET_TOKEN_FORMAT if only_token else QuarantineReason.SCHEMA_MISMATCH
+        kinds = {str(detail["type"]) for detail in error.errors()}
+        return (
+            QuarantineReason.VALUE_OUT_OF_RANGE if kinds <= OUT_OF_RANGE else QuarantineReason.SCHEMA_MISMATCH
         )
-        return QuarantinedPayload(reason, payload, digest)
     return None
 
 
-def _message(value: object, status: int) -> OutboxMessage:
+def _position(value: object) -> int | None:
+    """The position when it is a storable one; anything else is kept as unknown."""
+    position = json_object(value).get("position")
+    if isinstance(position, int) and not isinstance(position, bool) and 1 <= position <= BIGINT_MAX:
+        return position
+    return None
+
+
+def outbox_message(value: object, status: int) -> OutboxMessage:
+    """One outbox message: its notice, or a `QuarantinedPayload` with the reason it fails rule 1 of
+    SPEC_DECISIONS 85. Only a message without a usable id or type is a protocol error of the page."""
     envelope = _validate(MessageEnvelope, value, status)
     document = json_object(value)
+    evidence = _evidence(document.get("payload"))
+    position = _position(value)
     model = KNOWN_MESSAGES.get(envelope.type)
     if model is None:
-        return OutboxMessage(envelope.message_id, envelope.position, envelope.type, None)
-    quarantined = _quarantined(model, value, document.get("payload"))
-    if quarantined is not None:
-        return OutboxMessage(envelope.message_id, envelope.position, envelope.type, quarantined)
+        return OutboxMessage(envelope.message_id, position, envelope.type, None, evidence)
+    reason = _rejection(model, value, evidence)
+    if reason is not None:
+        quarantined = QuarantinedPayload(reason, evidence.payload, evidence.payload_sha256)
+        return OutboxMessage(envelope.message_id, position, envelope.type, quarantined, evidence)
     payload: MessagePayload
     if envelope.type == "ALERT":
         payload = _validate(AlertMessageBody, value, status).payload.notice()
@@ -145,7 +186,7 @@ def _message(value: object, status: int) -> OutboxMessage:
     else:
         body = _validate(CheckpointMessageBody, value, status)
         payload = body.payload.record(json_object(document.get("payload")))
-    return OutboxMessage(envelope.message_id, envelope.position, envelope.type, payload)
+    return OutboxMessage(envelope.message_id, position, envelope.type, payload, evidence)
 
 
 class RegistryHttpClient:
@@ -196,7 +237,7 @@ class RegistryHttpClient:
         """`GET /v1/outbox?limit=`."""
         response = self._ok(self._caller.get(OUTBOX, OUTBOX, {"limit": limit}))
         try:
-            page = json.loads(response.content, parse_float=_FloatText)
+            page = json.loads(response.content, parse_float=_FloatText, parse_int=_integer)
         except ValueError:
             raise RegistryProtocolError(response.status_code) from None
         if not isinstance(page, dict):
@@ -205,7 +246,7 @@ class RegistryHttpClient:
         messages, more = document.get("messages"), document.get("has_more")
         if not isinstance(messages, list) or not isinstance(more, bool):
             raise RegistryProtocolError(response.status_code)
-        return OutboxPage(tuple(_message(value, response.status_code) for value in messages), more)
+        return OutboxPage(tuple(outbox_message(value, response.status_code) for value in messages), more)
 
     def acknowledge(self, message_id: uuid.UUID) -> None:
         """`POST /v1/outbox/{message_id}/ack` (204, also for a message already acknowledged)."""

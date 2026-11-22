@@ -203,6 +203,10 @@ class InProcessDoubles:
         }
         self._forged.setdefault(self.members[bank_code].registry_key, []).append(message)
 
+    def forged_pending(self, bank_code: str) -> int:
+        """How many injected messages the bank has not acknowledged yet."""
+        return len(self._forged.get(self.members[bank_code].registry_key, []))
+
     def checkpoints(self) -> list[dict[str, Any]]:
         """Every checkpoint the registry signed, oldest first."""
         found: list[dict[str, Any]] = self.control(REGISTRY_URL, "GET", "/_test/dump")["checkpoints"]

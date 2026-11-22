@@ -7,6 +7,7 @@ from collections.abc import Iterator
 
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
+from onepledge_bank_agent.domain.store_errors import StoreUnavailableError
 from onepledge_bank_agent.infrastructure.operator_errors import (
     DATABASE_UNAVAILABLE,
     SCHEMA_NOT_CURRENT,
@@ -19,7 +20,7 @@ def database_errors_as_operator_errors() -> Iterator[None]:
     """Report an unreachable database or a missing schema as what to do next."""
     try:
         yield
-    except OperationalError:
+    except (OperationalError, StoreUnavailableError):
         raise OperatorError(
             "PostgreSQL refused the connection or is not reachable; check it is running and run "
             "db provision.",

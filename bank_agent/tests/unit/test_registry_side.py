@@ -223,7 +223,7 @@ def test_alerts_and_case_updates_are_applied_once_and_acknowledged() -> None:
 def test_an_unknown_type_is_ignored_and_a_known_bad_payload_is_quarantined_once() -> None:
     bank = MemoryBank()
     bank.registry.deliver("MARKET_NEWS", None)
-    payload = QuarantinedPayload(QuarantineReason.UNKNOWN_ASSET_TOKEN_FORMAT, {"asset_token": "X"}, "b" * 64)
+    payload = QuarantinedPayload(QuarantineReason.SCHEMA_MISMATCH, {"asset_token": "X"}, "b" * 64)
     message = bank.registry.deliver("ALERT", payload)
     bank.world.faults.arm(FaultPoint.BETWEEN_OUTBOX_COMMIT_AND_ACK, skip=1)
     with pytest.raises(CrashError):
@@ -233,12 +233,14 @@ def test_an_unknown_type_is_ignored_and_a_known_bad_payload_is_quarantined_once(
     assert (held.message_id, held.message_type, held.quarantined.reason) == (
         message.message_id,
         "ALERT",
-        QuarantineReason.UNKNOWN_ASSET_TOKEN_FORMAT,
+        QuarantineReason.SCHEMA_MISMATCH,
     )
     (audited,) = bank.world.audit(AuditAction.REGISTRY_MESSAGE_QUARANTINED)
     assert dict(audited.detail) == {
-        "message_type": "ALERT", "reason": "UNKNOWN_ASSET_TOKEN_FORMAT", "payload_sha256": "b" * 64,
+        "message_id": str(message.message_id), "message_type": "ALERT", "reason": "SCHEMA_MISMATCH",
+        "payload_sha256": "b" * 64,
     }  # fmt: skip
+    assert audited.object_id == held.quarantine_id, "the audit entry names the quarantine row"
     assert audited.outcome.value == "FAILURE"
     assert len(bank.world.audit(AuditAction.REGISTRY_MESSAGE_IGNORED)) == 1
     report = bank.report()
