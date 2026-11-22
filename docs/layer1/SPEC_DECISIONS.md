@@ -855,3 +855,147 @@ How reviewers read the rubric from now on:
 | H22 | No redirects, request id binding, bounded JSON, `Allow` on 405: built into the HTTP layer when WP4 writes it | 35, 36, 38, 43.5 |
 
 Ratified as built in WP3, no change: `checkpoints_seen.body` (54), `attempts` counting every POST (55), the deep verification checkpoint reference, `UNKNOWN_RESULT`, the dependency names (60).
+
+---
+
+# Round 4 (2026-11-22): rulings on the round 3 fix hand-backs
+
+Inputs: WP1 fixes G1 to G19 (commits 0034344 to 65f3a00, plus e20b026 and 041cedb) and bank agent fixes H1 to H21 (commits 61545ad to 9809aac), with the questions the coordinator passed on. Decisions 63 to 70. Required changes are listed at the end of the round. No ruling here lowers a gate.
+
+## 63. The unit-only coverage gate for the bank agent stays, and the missing unit tests are written
+
+**Question.** `pytest bank_agent/tests/unit --cov=onepledge_bank_agent.domain --cov=onepledge_bank_agent.application --cov-fail-under=85` reports 69.87%. The registry-side use cases of WP3 are exercised only by integration tests. Option (a): let the combined unit plus integration gate stand in for it. Option (b): write in-memory unit tests for those use cases.
+
+**Decision.** Option (b). Both gates apply to the merged bank agent package, permanently:
+
+1. Unit only (`-m unit`, no PostgreSQL, no network, no file system): at least 85% line coverage of `onepledge_bank_agent.domain` plus `onepledge_bank_agent.application`, branch coverage on.
+2. All markers together: at least 85% on the same two packages (SPEC 2.2).
+
+`make test` enforces both and fails if either is below 85. `make test-fast` enforces the first.
+
+How the unit tests are built:
+
+- One set of in-memory implementations of the ports lives in the test kit (`bank_agent/tests/bank_testkit/memory/`): an in-memory `UnitOfWork` with in-memory repositories, an in-memory `AuditLog` that keeps the chain rule, and scripted fakes for `RegistryClient`, `KeyHolderClient`, the three outside records clients, `SignatureVerifier`, `Blinder`, `Clock`, `IdGenerator`.
+- Every use case of SPEC 8.6 that WP2 and WP3 built has unit tests against them covering its success path and every failure branch: each class of decision 49 for each dependency it calls, each halt condition of decision 56, each row of SPEC 13.4 and 13.5, each failure reason of SPEC 15.2 and 15.3, the quarantine path, the retry rules, and idempotent re-runs of each stage.
+- The in-memory repositories must be proven faithful. For each repository port there is one behavioural test class written once against the port and run twice: against the in-memory implementation (marker `unit`) and against the PostgreSQL implementation (marker `integration`). A behaviour the two disagree on fails the suite. The in-memory unit of work must also reproduce rollback (nothing written in a failed scope is visible afterwards).
+- In-memory fakes are test code. Nothing under `src/` imports them and no product code path selects them.
+
+**Why this is the bar and not a lowered one.** BUILD_PLAN section 9 and SPEC 2.1 say the application layer depends on interfaces only. A use case that can be exercised only with a database attached has not demonstrated that, and its failure branches are the ones integration tests reach least: a registry that answers 403 on the third batch, a holder that times out after the first answered, a certificate that fails content matching. Those branches decide whether collateral records are right after a bad day. Accepting option (a) would keep the number above 85 while leaving exactly that code thinly tested. The integration tests stay: they prove the SQL, the guards and the transactions; the unit tests prove the decisions.
+
+**Affects.** Bank agent implementer (change B1). TEST-01 (reviewers check both numbers), TEST-04, CODE-02, REL-02.
+
+## 64. The certificate delivery key uses a SHA-256 the bank computes, not `md5`
+
+**Question.** Decision 61 made `(certificate_id, body_hash, signature)` unique so the same bad certificate is stored once. The `CERTIFICATE_BODY` tamper changes only the body, so the tampered and the genuine delivery share that key and the genuine one would be refused. The implementer added `md5(body::text)` to the index.
+
+**Decision.** The implementer's diagnosis is right and decision 61's key was wrong. The remedy is replaced:
+
+- `certificates` gets a new column `delivered_body_sha256 char(64) not null` with the usual hex check: the SHA-256 of the canonical JSON (SPEC 4) of the body exactly as delivered, computed by the bank agent when it stores the row. It is never taken from the registry's answer.
+- `body_hash` keeps its meaning: the hash the registry claimed. The two differ exactly when the body was altered, which is now visible in one row.
+- The delivery key is unique `(certificate_id, delivered_body_sha256, signature)`. `body_hash` is not part of it. The `md5(body::text)` expression is removed from the index and from the model.
+- `VerifyCertificate` compares `delivered_body_sha256` with the claimed `body_hash` for the `BODY_HASH_MISMATCH` step, so the stored column is the value the verdict rested on.
+- Deep verification recomputes `delivered_body_sha256` from the stored `body` for every row and reports a difference as a certificate failure (`BODY_HASH_MISMATCH`), so an edit of a stored body is caught even if someone also edits `body_hash`.
+- The column is listed in the README table of additions. `Certificate` in `bank_agent.yaml` is unchanged (the column is internal evidence; WP4 may show it in the lineage only if a later decision adds it to the contract).
+
+Migration: no database outside test and review scratch databases exists, so `0007_certificate_evidence.py` is corrected in place rather than followed by a compensating migration. The same holds for any migration until layer 1 is released; after release, migrations are append only.
+
+**Rationale.** MD5 is not acceptable anywhere in a schema that exists to prove integrity, whatever its role in the index, and `body::text` is PostgreSQL's rendering of jsonb, not the canonical form every other hash in the system uses. A SHA-256 over the canonical delivered body is the same primitive as everything else, is independently recomputable, and gives the auditor a column that says what actually arrived.
+
+**Affects.** Bank agent implementer (change B2). SEC-11, AUD-03, CODE-05.
+
+## 65. The registry double gets a control that undoes a certificate tamper
+
+**Question.** The bank test kit serves the original certificate itself (`restore_certificate`) because the double cannot reverse `CERTIFICATE_BODY`.
+
+**Decision.** Yes, the double gains the control and the test goes through it.
+
+- `POST /_test/tamper` accepts a new mode `CERTIFICATE_RESTORE` with `certificate_id`. It puts the stored certificate back to exactly the document the double first signed. The double keeps that original from the moment of signing. Restoring a certificate that was never tampered is a no-op answered 200; an unknown id is 404 `CERTIFICATE_NOT_FOUND`.
+- `RegistryDouble` exposes the same operation in-process.
+- The bank test kit's `restore_certificate` no longer serves anything itself: it calls the control. The `_originals` and `_restored` stores in the kit are removed. `tamper_certificate` may still fetch the certificate before tampering if a test needs to compare, but it does not keep it for serving.
+- The doubles' README lists the mode next to the other four.
+
+**Rationale.** A test that answers on the double's behalf is testing the test kit. The recovery path of decision 61 is the one a bank relies on after a registry fault; it must be shown against the same surface layer 2 will be compared with.
+
+**Affects.** WP1 implementer (change A1), then bank agent implementer (change B3). SEC-11, DX-05.
+
+## 66. WP1 judgement calls
+
+| Call | Ruling |
+|---|---|
+| A form content type on `fail-next` is answered `Content-Type INVALID_VALUE` before anything about the body | **Confirmed**, and the order is fixed for every service: (1) route and method (404, 405), (2) authentication (401, including the test control key), (3) authorisation (403), (4) size limit (413), (5) `Content-Type`, (6) JSON well-formedness (`INVALID_JSON`), (7) unknown fields and parameters, (8) field validation. An unauthenticated caller never learns anything about steps 5 to 8. |
+| `BIND_HOST` must be an IP literal; `localhost` is refused | **Confirmed.** `BIND_HOST` is the address a server socket binds to, not a name clients use. It accepts an IPv4 or IPv6 literal that is an address of the machine, or the wildcard `0.0.0.0` or `::`. Compose service names are used only in the URL variables of the callers (`REGISTRY_URL`, `OUTSIDE_RECORDS_URL`, and so on), and containers bind `0.0.0.0`, so laptops and compose are unaffected. A name would make the bound interface depend on resolver configuration, which is exactly what a bind setting should not do. The refusal sentence must say what to use instead ("set BIND_HOST to 127.0.0.1 or 0.0.0.0"). The same rule applies to both doubles and to the bank agent (see decision 68, item 1). |
+| Settings values are trimmed of ASCII whitespace only | **Confirmed**: space, tab, carriage return, line feed at both ends; nothing inside the value is touched; a value that still contains any other Unicode whitespace or a control character is malformed and names its variable. This applies to secrets too (a trailing newline from a secrets file is the usual cause). |
+| `--seed` accepts 0 to 10^18 minus 1 | **Confirmed.** It is the integer rule of decision 37 with a minimum of 0. |
+| `verify` reports `VERIFICATION_FAILED` instead of `INVARIANTS_VIOLATED` | **Confirmed with a precise split**, because the code base currently carries both names. `VERIFICATION_FAILED` is the code of `onepledge-datagen verify` when a data set on disk fails any check (a 5.8 invariant, a checksum, or the regeneration comparison of decision 43.2); its document lists each failure with a `stage` of `INVARIANT`, `CHECKSUM` or `REGENERATION`. `INVARIANTS_VIOLATED` is the code of `onepledge-datagen generate` when the generator's own pre-write invariant check fails, which is a defect in the generator and writes nothing. Neither name appears in a contract file or in SPEC, so nothing else changes. Both are listed with their meaning in `datagen/README.md`. |
+| Checker closing line `contracts-check: FAILED, N problems` | **Confirmed.** It is grammatical, counted correctly, and RUBRIC DX-05 asks only for a non-zero exit that names the file. The success line stays `contracts-check: OK (N files, M examples)` exactly, because DX-05 quotes it. |
+| Library WARNING records keep `stack` | **Confirmed**: frame locations only, as SPEC 16.5 defines `stack`. No message, no locals. |
+| Outside records' record for a 500 raised as a named error has no `error_code` | **Overruled (all services).** Every log record written for a response with status 500 or above carries `error_code` (equal to `error.code` of the response body), `http_status`, `request_id`, and `exception_type`. An operator searching the log for the code a caller quotes must find it. |
+| Alembic's messages are replaced by one fixed sentence | **Confirmed**, on three conditions that reviewers check: the sentence says what failed and what to do next; the log record carries `exception_type` and the `revision` being applied; `--debug` shows the frames. |
+| Decisions 53.8 and 53.13 applied in WP1 as well | **Confirmed.** They were written under the bank agent review but are general hygiene; applying them everywhere is what the "all packages" rules intend. |
+
+**Affects.** WP1 implementer (change A2 for the `error_code` overrule; A3 for the README lines). PRES-03, PRES-04, PRES-05, SEC-13.
+
+## 67. Integrity runs under `unit.evidence.runs`
+
+**Decision.** Acceptable, on a condition about what the group is.
+
+Grouping repositories on the unit of work is a legitimate way to keep an interface small, provided each group is a real concept and not a bucket chosen to satisfy a count. `evidence` must contain exactly the insert-only proof stores and nothing else: certificates, checkpoints seen, quarantined registry messages, integrity runs. Mutable stores (alerts, registry requests and their items, tapes, loans) are not evidence and must not sit under it. The group's port has a docstring saying this in one sentence, and `ARCHITECTURE.md` (WP5) names the groups of the unit of work.
+
+Reviewers check the membership. If `evidence` holds a mutable store, or an insert-only proof store sits outside it, the grouping is corrected (change B4). The limit of 15 public members stays as it is.
+
+**Affects.** Bank agent implementer (B4, only if the membership is wrong). CODE-04, CODE-06.
+
+## 68. Defects and risks the reviewers should look at first
+
+Found while reading the two hand-backs against SPEC, BUILD_PLAN and this file. Items 1 to 3 are defects I am confident of from the code; they are required changes. Items 4 to 12 are places where the new work is most likely to be wrong; I have not proven a defect in them and the reviewers should attack them before anything else.
+
+Confirmed, to fix:
+
+1. **The bank agent does not validate `BIND_HOST`.** `infrastructure/settings.py` takes the text as it is (`read.text("BIND_HOST") or "127.0.0.1"`), while decision 43.3 requires every setting to be validated in the loader and decision 66 fixes the rule. A bad value would surface as a socket error at bind time, not as one line naming the variable. (B5)
+2. **`md5` in the certificate index.** Decision 64. (B2)
+3. **Application code tested only through PostgreSQL.** Decision 63. (B1)
+
+To attack first:
+
+4. **Insert guards under other statement forms.** `INSERT ... ON CONFLICT DO UPDATE`, `INSERT ... SELECT`, `COPY`, and multi-row inserts for `loans`, `tape_submissions` and `alerts`: each must be refused or must still pass through the guard. Also the alerts guard: `case_status` leaving OPEN a second time, `bank_position` changed after it was set, a CLEARED alert updated in any column.
+5. **The quarantine table's controls.** App role grants (SELECT, INSERT only), the statement level insert-only trigger including `TRUNCATE`, and whether `EVIDENCE_TABLES_IMMUTABILITY_TRIGGERS_ENABLED` now also requires the trigger on `registry_messages_quarantined`. A proof table missing from the control is a silent gap.
+6. **Halt and recovery order.** With a failed certificate the halt rule is active. The retry of that tape must still be able to fetch the certificate (a read), must not be blocked by the halt it is trying to clear, and must release the halt only when every affected request has a verified row. Also: a crash between storing a registry answer and storing its certificate leaves a request with no certificate row at all; that state must not activate the halt and must be completed by the certify stage on resume.
+7. **Tape guard and the worker's own writes.** The tightened guard refuses a change of failure columns while FAILED. Check that every legitimate write still passes: attempt counting and `next_attempt_at` while not FAILED, entering FAILED from each of the five statuses with the right `failed_stage`, and `retry` from each.
+8. **Shutdown.** A stop requested while the worker sleeps between polls, while an HTTP call is in flight, in the middle of the single clean transaction, and between a registry answer and its storage. In each case: exit 0, nothing half applied, and the next start reaches the same final state as an uninterrupted run. The last one is the dangerous one: the answer must be stored before the flag is honoured, or the retry must replay it.
+9. **Payments paging against a moving total.** Decision 52 treats a `total` that changes between pages as malformed. Check the client does not loop, does not hold a partial window as evidence, and that the tape ends `OUTSIDE_RECORDS_REJECTED` with `MALFORMED_RESPONSE`, not a held loan.
+10. **`verify` by regeneration.** It must fail when the answer key alone is weakened and the checksums are repaired (every case in WP1 review 2, finding 2). Also check its cost on the full profile and that it leaves no files behind.
+11. **Startup role check under trust authentication.** The build machine's PostgreSQL does not check passwords, so the check must rest on the connected role's attributes and privileges (`pg_roles`, `has_table_privilege`, table ownership), not on which URL was supplied. Start each service as the owner, as a superuser, and as an app role that was granted one extra privilege by hand; all three must be refused.
+12. **The neutral case table.** It is only as independent as its authorship. Reviewers read a sample of at least 30 cases of `contracts/examples/cleaning_cases.json` against SPEC 10.4 and decisions 13 and 45 by hand, confirm it was not produced by running either implementation (expected values that a hand would write, including cases where both implementations were wrong before round 3), and confirm that the bank agent, the datagen oracle and the test kit each run every case. The correction commit 041cedb to case `vin-021` should be read: a table that had to be corrected to match the code is a warning sign unless the original entry was plainly a transcription error.
+
+## 69. Reading of TEST-01 after this round
+
+RUBRIC TEST-01's coverage condition is read as: at least 85% for `onepledge_bank_agent.domain` plus `application` in the unit-only run and in the full run, and at least 85% for each of the other four listed packages in the full run. The reviewer runs both commands of decision 63 and records both numbers.
+
+## 70. Nothing in the contracts changes in this round
+
+The `CERTIFICATE_RESTORE` mode is a test control of the double and is not part of any contract file. `contracts/README.md` needs no change. `onepledge-contracts check` is unaffected.
+
+---
+
+## Round 4: required changes
+
+WP1 implementer:
+
+| # | Change | Decision |
+|---|---|---|
+| A1 | Registry double: tamper mode `CERTIFICATE_RESTORE` (HTTP and in-process), keeping the certificate as first signed; 200 no-op when not tampered; 404 for an unknown id; tests; README | 65 |
+| A2 | Every log record for a 5xx response carries `error_code`, `http_status`, `request_id`, `exception_type`, in outside records and both doubles, including 500s raised as named errors; tests assert the keys | 66 |
+| A3 | `datagen/README.md`: the two codes `VERIFICATION_FAILED` and `INVARIANTS_VIOLATED` with their meanings; `verify --json` failures carry a `stage` per failure; both doubles validate `BIND_HOST` by the same rule as outside records | 66 |
+
+Bank agent implementer:
+
+| # | Change | Decision |
+|---|---|---|
+| B1 | In-memory ports in the test kit; unit tests for every WP2 and WP3 use case with every failure branch; one behavioural test class per repository port run against both implementations; `make test` and `make test-fast` enforce the unit-only 85% gate | 63 |
+| B2 | `certificates.delivered_body_sha256` computed by the bank over the canonical delivered body; delivery key `(certificate_id, delivered_body_sha256, signature)`; `md5` removed; `VerifyCertificate` and deep verification use the column; migration 0007 corrected in place; README table | 64 |
+| B3 | Test kit `restore_certificate` calls the double's `CERTIFICATE_RESTORE`; the kit's own serving of certificates is removed | 65 |
+| B4 | Only if membership is wrong: `evidence` holds exactly certificates, checkpoints, quarantine and integrity runs; docstring on the group | 67 |
+| B5 | `BIND_HOST` validated in the settings loader by the rule of decision 66; one line naming the variable; tests | 66, 68 |
+| B6 | Every log record for a 5xx (once WP4 adds the HTTP layer) and every `error` record of the worker carries the keys of A2 that apply | 66 |
+
+Order: A1 before B3. Everything else is independent.
