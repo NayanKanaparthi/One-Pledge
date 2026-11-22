@@ -127,7 +127,9 @@ class Certificate:
 
     `certificate_row_id` identifies the stored row: a certificate that failed is kept as
     evidence, and a verified one fetched later for the same request is a new row
-    (SPEC_DECISIONS 61).
+    (SPEC_DECISIONS 61). `body_hash` is the hash the registry claimed;
+    `delivered_body_sha256` is the hash the bank computed over the canonical body it
+    received (SPEC_DECISIONS 64). They differ exactly when the body was altered.
     """
 
     certificate_row_id: uuid.UUID
@@ -144,6 +146,7 @@ class Certificate:
     failure: CertificateFailure | None
     verified_at: datetime
     received_at: datetime
+    delivered_body_sha256: Sha256Hex
 
     @property
     def verified(self) -> bool:

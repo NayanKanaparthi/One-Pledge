@@ -21,6 +21,7 @@ from onepledge_bank_agent.domain.canonical_json import ZERO_HASH, JsonValue, can
 from onepledge_bank_agent.domain.certificate_rules import (
     CertificateExpectation,
     content_matches,
+    delivered_sha256,
     verify_certificate,
 )
 from onepledge_bank_agent.domain.checkpoint_rules import (
@@ -99,7 +100,7 @@ EXPECTED = CertificateExpectation(
 
 
 def test_a_valid_certificate_verifies() -> None:
-    assert verify_certificate(signed_certificate(certificate_body()), EXPECTED, VERIFIER) is None
+    assert check(signed_certificate(certificate_body())) is None
 
 
 def test_each_certificate_reason_comes_from_the_first_failing_step() -> None:
@@ -115,10 +116,22 @@ def test_each_certificate_reason_comes_from_the_first_failing_step() -> None:
         CertificateFailure.CONTENT_MISMATCH: signed_certificate(certificate_body(as_of_seq=41)),
     }
     for reason, certificate in cases.items():
-        assert verify_certificate(certificate, EXPECTED, VERIFIER) is reason, reason
-    assert verify_certificate(
-        replace(valid, body={**valid.body, **json.loads('{"x": 1.5}')}), EXPECTED, VERIFIER
-    ) is (CertificateFailure.BODY_HASH_MISMATCH), "a float cannot be canonical, so its hash cannot match"
+        assert check(certificate) is reason, reason
+    assert check(replace(valid, body={**valid.body, **json.loads('{"x": 1.5}')})) is (
+        CertificateFailure.BODY_HASH_MISMATCH
+    ), "a float cannot be canonical, so its hash cannot match"
+
+
+def check(certificate: SignedCertificate) -> CertificateFailure | None:
+    """The four steps with the delivered hash computed as `VerifyCertificate` does."""
+    return verify_certificate(certificate, delivered_sha256(certificate.body), EXPECTED, VERIFIER)
+
+
+def test_the_delivered_hash_is_the_canonical_body_hash_and_a_claim_that_differs_fails() -> None:
+    valid = signed_certificate(certificate_body())
+    assert delivered_sha256(valid.body) == valid.body_hash
+    assert verify_certificate(valid, "0" * 64, EXPECTED, VERIFIER) is CertificateFailure.BODY_HASH_MISMATCH
+    assert verify_certificate(valid, None, EXPECTED, VERIFIER) is CertificateFailure.BODY_HASH_MISMATCH
 
 
 @pytest.mark.parametrize(

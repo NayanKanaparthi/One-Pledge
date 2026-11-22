@@ -1,8 +1,10 @@
 """`SqlCertificateRepository`: `certificates` (insert-only, SPEC_DECISIONS 61).
 
 Every certificate received is a row; a failed one stays as evidence beside the verified
-one a later fetch stores. The same delivery (certificate id, body hash, signature and
-body, index `uq_certificates_delivery`) is stored once: a second insert does nothing.
+one a later fetch stores. The same delivery (certificate id, the SHA-256 of the
+canonical delivered body and the signature, `uq_certificates_delivery`, SPEC_DECISIONS
+64) is stored once: a second insert does nothing. So does a second verified row for a
+certificate or request that a concurrent fetch already proved.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ def _certificate(row: CertificateRow) -> Certificate:
         failure=CertificateFailure(row.failure_reason) if row.failure_reason else None,
         verified_at=row.verified_at,
         received_at=row.received_at,
+        delivered_body_sha256=Sha256Hex(row.delivered_body_sha256),
     )
 
 
@@ -65,6 +68,7 @@ class SqlCertificateRepository:
                 verified_at=certificate.verified_at,
                 failure_reason=certificate.failure.value if certificate.failure else None,
                 received_at=certificate.received_at,
+                delivered_body_sha256=certificate.delivered_body_sha256.value,
             )
             .on_conflict_do_nothing()
             .returning(CertificateRow.certificate_row_id)

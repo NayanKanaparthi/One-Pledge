@@ -86,7 +86,7 @@ class CertificateRepository(Protocol):
 
     def add(self, certificate: Certificate) -> bool:
         """Store a received certificate with its verdict; False, storing nothing, when this exact
-        delivery (certificate id, body hash, signature and body) is already stored."""
+        delivery (certificate id, delivered body SHA-256 and signature) is already stored."""
         ...
 
     def verified_for_requests(self, request_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, Certificate]:

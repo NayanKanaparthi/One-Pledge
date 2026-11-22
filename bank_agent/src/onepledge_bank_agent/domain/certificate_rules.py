@@ -3,11 +3,15 @@
 In this order, the first failure is the reason:
 
 1. the signing key id is configured, else UNKNOWN_SIGNING_KEY;
-2. `sha256(canonical_json(body)) == body_hash`, else BODY_HASH_MISMATCH;
+2. the delivered body's hash, `sha256(canonical_json(body))` as the bank computed it
+   (`delivered_body_sha256`, SPEC_DECISIONS 64), equals the claimed `body_hash`, else
+   BODY_HASH_MISMATCH;
 3. the Ed25519 signature over `canonical_json(body)` verifies, else BAD_SIGNATURE;
 4. the body states what the bank sent and was told, else CONTENT_MISMATCH.
 
-Deep verification re-runs steps 1 to 3 on every stored certificate (SPEC 15.6).
+The caller computes the delivered hash once with `delivered_sha256` and passes it in, so
+the value a verdict rests on is the value stored. Deep verification recomputes it from
+the stored body and re-runs steps 1 to 3 on every stored verified certificate (SPEC 15.6).
 """
 
 from __future__ import annotations
@@ -58,12 +62,20 @@ def canonical_body(body: Mapping[str, JsonValue]) -> bytes | None:
         return None
 
 
-def verify_proof(certificate: SignedCertificate, verifier: SignatureVerifier) -> CertificateFailure | None:
-    """Steps 1 to 3: key id known, body hash, signature."""
+def delivered_sha256(body: Mapping[str, JsonValue]) -> str | None:
+    """SHA-256 of the canonical JSON of a body as delivered, or None when it is not canonical JSON."""
+    message = canonical_body(body)
+    return None if message is None else sha256_hex(message)
+
+
+def verify_proof(
+    certificate: SignedCertificate, delivered: str | None, verifier: SignatureVerifier
+) -> CertificateFailure | None:
+    """Steps 1 to 3: key id known, delivered hash equal to the claimed one, signature."""
     if not verifier.knows(certificate.signing_key_id):
         return CertificateFailure.UNKNOWN_SIGNING_KEY
     message = canonical_body(certificate.body)
-    if message is None or sha256_hex(message) != certificate.body_hash:
+    if message is None or delivered is None or delivered != certificate.body_hash:
         return CertificateFailure.BODY_HASH_MISMATCH
     if not verifier.verifies(certificate.signing_key_id, message, certificate.signature):
         return CertificateFailure.BAD_SIGNATURE
@@ -71,10 +83,13 @@ def verify_proof(certificate: SignedCertificate, verifier: SignatureVerifier) ->
 
 
 def verify_certificate(
-    certificate: SignedCertificate, expected: CertificateExpectation, verifier: SignatureVerifier
+    certificate: SignedCertificate,
+    delivered: str | None,
+    expected: CertificateExpectation,
+    verifier: SignatureVerifier,
 ) -> CertificateFailure | None:
     """All four steps; None when the certificate is verified."""
-    failure = verify_proof(certificate, verifier)
+    failure = verify_proof(certificate, delivered, verifier)
     if failure is not None:
         return failure
     if not content_matches(certificate.body, expected):

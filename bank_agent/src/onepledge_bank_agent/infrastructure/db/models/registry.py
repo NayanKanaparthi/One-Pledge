@@ -94,13 +94,8 @@ class CertificateRow(Base):
 
     __tablename__ = "certificates"
     __table_args__ = (
-        Index(
-            "uq_certificates_delivery",
-            "certificate_id",
-            "body_hash",
-            "signature",
-            text("md5(body::text)"),
-            unique=True,
+        UniqueConstraint(
+            "certificate_id", "delivered_body_sha256", "signature", name="uq_certificates_delivery"
         ),
         Index(
             "uq_certificates_verified_certificate_id",
@@ -132,6 +127,7 @@ class CertificateRow(Base):
     verified_at: Mapped[datetime] = timestamp()
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     received_at: Mapped[datetime] = timestamp()
+    delivered_body_sha256: Mapped[str] = hash_column()
 
 
 class CheckpointSeenRow(Base):

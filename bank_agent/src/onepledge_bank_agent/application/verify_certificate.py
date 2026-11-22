@@ -20,7 +20,12 @@ from onepledge_bank_agent.application.ports import UnitOfWork, UnitOfWorkFactory
 from onepledge_bank_agent.application.registry_audit import certificate_checked
 from onepledge_bank_agent.application.registry_ports import RegistryClient, SignatureVerifier
 from onepledge_bank_agent.application.runtime import Runtime
-from onepledge_bank_agent.domain.certificate_rules import CertificateExpectation, verify_certificate
+from onepledge_bank_agent.domain.certificate_rules import (
+    CertificateExpectation,
+    delivered_sha256,
+    verify_certificate,
+)
+from onepledge_bank_agent.domain.dependency_errors import RegistryProtocolError
 from onepledge_bank_agent.domain.entities import Certificate, RegistryRequest
 from onepledge_bank_agent.domain.enums import TokenKind
 from onepledge_bank_agent.domain.errors import IllegalTransitionError
@@ -117,7 +122,10 @@ class VerifyCertificate:
             facts.as_of_seq,
             tuple(expected_items),
         )
-        failure = verify_certificate(signed, expectation, self._verifier)
+        delivered = delivered_sha256(signed.body)
+        if delivered is None:
+            raise RegistryProtocolError(None)
+        failure = verify_certificate(signed, delivered, expectation, self._verifier)
         now = self._clock.now()
         return Certificate(
             certificate_row_id=self._ids.new_id(),
@@ -134,4 +142,5 @@ class VerifyCertificate:
             failure=failure,
             verified_at=now,
             received_at=now,
+            delivered_body_sha256=Sha256Hex(delivered),
         )

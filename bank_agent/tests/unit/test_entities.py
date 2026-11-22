@@ -94,6 +94,7 @@ def test_registry_proofs_report_whether_they_verified() -> None:
         issued_at=AT,
         body={},
         body_hash=Sha256Hex("b" * 64),
+        delivered_body_sha256=Sha256Hex("b" * 64),
         signature="sig",
         signing_key_id="key",
         failure=None,

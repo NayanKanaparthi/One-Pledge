@@ -290,13 +290,8 @@ class _Certificates:
         self._state = state
 
     def add(self, certificate: Certificate) -> bool:
-        delivery = (
-            certificate.certificate_id,
-            certificate.body_hash,
-            certificate.signature,
-            certificate.body,
-        )
-        held = ((c.certificate_id, c.body_hash, c.signature, c.body) for c in self._state.certificates)
+        delivery = (certificate.certificate_id, certificate.delivered_body_sha256, certificate.signature)
+        held = ((c.certificate_id, c.delivered_body_sha256, c.signature) for c in self._state.certificates)
         if delivery in held:
             return False
         self._state.certificates.append(certificate)

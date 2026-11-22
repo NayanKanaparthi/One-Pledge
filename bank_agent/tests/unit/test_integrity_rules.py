@@ -47,6 +47,7 @@ def certificate(request_id: uuid.UUID, failure: CertificateFailure | None, body:
         failure=failure,
         verified_at=AT,
         received_at=AT,
+        delivered_body_sha256=Sha256Hex(str(body) * 64),
     )
 
 

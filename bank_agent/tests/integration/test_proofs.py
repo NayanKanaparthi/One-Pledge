@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from psycopg.types.json import Jsonb
 
 from bank_testkit.data import seed_reference
 from bank_testkit.database import BankDatabase, pairs
@@ -30,6 +31,7 @@ from bank_testkit.outside import InProcessOutsideRecords
 from bank_testkit.pipeline import BankAgentHarness, Services
 from bank_testkit.world import Faults
 from onepledge_bank_agent.application.faults import FaultPoint
+from onepledge_bank_agent.domain.canonical_json import canonical_sha256
 from onepledge_bank_agent.domain.enums import (
     CertificateFailure,
     CheckpointFailure,
@@ -170,7 +172,7 @@ class TamperCertificate(Faults):
                 "SELECT certificate_id FROM registry_requests WHERE certificate_id IS NOT NULL LIMIT 1"
             )
             self.certificate_id = str(certificate_id)
-            self._bank.doubles.tamper_certificate("HARBOR", self.certificate_id)
+            self._bank.doubles.tamper_certificate(self.certificate_id)
         super().reached(point)
 
 
@@ -204,7 +206,7 @@ def test_a_tampered_certificate_fails_the_tape_halts_the_bank_and_a_retry_after_
         assert bank.tape(halted) == ("FAILED", "REGISTRY_INTEGRITY_BROKEN"), "the halt rule is active"
         assert bank.doubles.member_stats("HARBOR")["submissions"] == submissions, "nothing was sent"
 
-        bank.doubles.restore_certificate(tamper.certificate_id)
+        assert bank.doubles.restore_certificate(tamper.certificate_id)["restored"] is True
         agent.retry(tape)
         agent.run_worker()
         assert bank.tape(tape) == ("COMPLETED", None)
@@ -215,6 +217,13 @@ def test_a_tampered_certificate_fails_the_tape_halts_the_bank_and_a_retry_after_
         rows = "SELECT verified, count(*)::text FROM certificates WHERE certificate_id = %s GROUP BY 1"
         assert pairs(bank.database, rows, (tamper.certificate_id,)) == {"False": "1", "True": "1"}, (
             "the failed row stays as evidence beside the verified one"
+        )
+        hashes = (
+            "SELECT verified, (delivered_body_sha256 = body_hash)::text FROM certificates "
+            "WHERE certificate_id = %s"
+        )
+        assert pairs(bank.database, hashes, (tamper.certificate_id,)) == {"False": "false", "True": "true"}, (
+            "the bank's hash of what arrived differs from the claim exactly in the tampered row"
         )
         assert agent.verify().certificates.status is SectionStatus.OK
 
@@ -270,6 +279,47 @@ def test_a_stored_certificate_edited_by_a_superuser_is_found_by_deep_verificatio
     assert [(f.certificate_id, f.failure_reason) for f in report.certificates.failures] == [
         (certificate_id, CertificateFailure.BODY_HASH_MISMATCH)
     ]
+
+
+def test_a_stored_body_and_claimed_hash_edited_together_are_still_found(bank: Bank) -> None:
+    """SPEC_DECISIONS 64: deep verification recomputes delivered_body_sha256 from the stored body."""
+    with bank.agent() as agent:
+        bank.upload(agent)
+        agent.run_worker()
+        certificate_id, body = bank.one("SELECT certificate_id, body FROM certificates LIMIT 1")
+        assert isinstance(body, dict)
+        forged = {**body, "summary": {**body["summary"], "locked": 999}}
+        claimed = canonical_sha256(forged)
+        with bank.database.connect("admin") as connection:
+            connection.execute("ALTER TABLE certificates DISABLE TRIGGER ALL")
+            connection.execute(
+                "UPDATE certificates SET body = %s, body_hash = %s WHERE certificate_id = %s",
+                (Jsonb(forged), claimed, certificate_id),
+            )
+            connection.execute("ALTER TABLE certificates ENABLE TRIGGER ALL")
+        row = bank.one(
+            "SELECT body_hash, delivered_body_sha256 FROM certificates WHERE certificate_id = %s",
+            (certificate_id,),
+        )
+        assert row[0] == claimed != row[1], (
+            "the claim now matches the forged body; only the bank's own hash differs"
+        )
+        report = agent.verify()
+    assert report.certificates.status is SectionStatus.BROKEN
+    assert (certificate_id, CertificateFailure.BODY_HASH_MISMATCH) in [
+        (f.certificate_id, f.failure_reason) for f in report.certificates.failures
+    ]
+
+
+def test_no_md5_remains_in_the_certificate_schema(bank: Bank) -> None:
+    definitions = bank.one(
+        "SELECT string_agg(indexdef, ' ') FROM pg_indexes WHERE tablename = 'certificates'"
+    )
+    assert "md5" not in str(definitions[0])
+    delivery = bank.one(
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'uq_certificates_delivery'"
+    )
+    assert delivery == ("UNIQUE (certificate_id, delivered_body_sha256, signature)",)
 
 
 def latest_verified(bank: Bank) -> tuple[int, int, str]:

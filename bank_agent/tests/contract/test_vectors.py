@@ -16,7 +16,7 @@ import oprf
 import pytest
 
 from bank_testkit.data import CONTRACTS
-from onepledge_bank_agent.domain.certificate_rules import verify_proof
+from onepledge_bank_agent.domain.certificate_rules import delivered_sha256, verify_proof
 from onepledge_bank_agent.domain.checkpoint_rules import event_header_hash, signature_failure
 from onepledge_bank_agent.domain.enums import CertificateFailure, CheckpointFailure, TokenKind
 from onepledge_bank_agent.domain.registry_records import EventHeader, SignedCertificate
@@ -91,7 +91,7 @@ def test_the_vector_certificate_verifies_and_any_one_changed_byte_is_rejected() 
     certificate = registry_answering(example("certificate.response.json")).certificate(uuid.uuid4())
     vector = SIGNATURES["certificate"]
     message = vector["canonical_body_utf8"].encode("utf-8")
-    assert verify_proof(certificate, VERIFIER) is None
+    assert verify_proof(certificate, delivered_sha256(certificate.body), VERIFIER) is None
     assert certificate.body_hash == vector["body_hash"] and certificate.signature == vector["signature"]
     key = SIGNATURES["signing_key_id"]
     signature = base64.b64decode(vector["signature"])
@@ -133,7 +133,7 @@ def test_a_changed_certificate_gives_the_reason_of_the_first_failing_step() -> N
         ),
     }
     for reason, changed in cases.items():
-        assert verify_proof(changed, VERIFIER) is reason
+        assert verify_proof(changed, delivered_sha256(changed.body), VERIFIER) is reason
 
 
 def test_the_vector_checkpoint_verifies_and_any_one_changed_byte_is_rejected() -> None:
