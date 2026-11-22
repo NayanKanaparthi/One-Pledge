@@ -52,7 +52,7 @@ typecheck: ## Run mypy in strict mode over every source and test tree
 	@echo "typecheck: outside_records"
 	@$(MYPY) outside_records/src outside_records/tests outside_records/migrations
 	@echo "typecheck: bank_agent"
-	@MYPYPATH=outside_records/src $(MYPY) bank_agent/src bank_agent/tests bank_agent/migrations
+	@MYPYPATH=outside_records/src:contracts/fakes/src $(MYPY) bank_agent/src bank_agent/tests bank_agent/migrations
 
 contracts-check: ## Validate the contracts, their examples and the test vectors
 	@echo "contracts-check: onepledge-contracts check"

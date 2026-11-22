@@ -1,4 +1,5 @@
-"""The commands of `onepledge-bank`: `db provision|migrate|status`, `seed-reference` and `worker`.
+"""The commands of `onepledge-bank`: `db provision|migrate|status`, `seed-reference`, `worker`,
+`registry sync` and `integrity report|verify`.
 
 Each command loads the settings of its own scope, routes its log lines to stderr,
 calls collaborators built by the matching composition root, and prints the result
@@ -11,8 +12,8 @@ from __future__ import annotations
 import argparse
 import signal
 import sys
-from collections.abc import Callable
-from types import FrameType
+from collections.abc import Callable, Mapping
+from types import FrameType, MappingProxyType
 
 from onepledge_bank_agent.application.advance_submission import StageRun
 from onepledge_bank_agent.application.run_pipeline_worker import WorkerReport
@@ -26,10 +27,20 @@ from onepledge_bank_agent.infrastructure.settings import (
 )
 from onepledge_bank_agent.infrastructure.stop_signal import EventStopSignal
 from onepledge_bank_agent.interface.cli.output import Output, short_hash
+from onepledge_bank_agent.interface.cli.registry_commands import (
+    integrity_report,
+    integrity_verify,
+    registry_sync,
+)
 from onepledge_bank_agent.interface.composition import AdminComposition, Collaborators, RuntimeComposition
 
 QUIET_LEVEL = "WARNING"
+WORKER_PROCESS = "worker"
 type AdminHandler = Callable[[argparse.Namespace, AdminSettings, AdminComposition, Output], None]
+type RuntimeHandler = Callable[[argparse.Namespace, RuntimeComposition, Output], None]
+RUNTIME_HANDLERS: Mapping[str, RuntimeHandler] = MappingProxyType(
+    {"sync": registry_sync, "report": integrity_report, "verify": integrity_verify}
+)
 
 
 def _route_logs(bank_code: str | None, level: str, quiet: bool) -> None:
@@ -41,6 +52,9 @@ def run_command(arguments: argparse.Namespace, output: Output, collaborators: Co
     """Dispatch one parsed command; returns the exit code."""
     if arguments.command == "worker":
         _worker(arguments, output, collaborators)
+        return 0
+    if arguments.command in ("registry", "integrity"):
+        _runtime_command(arguments, output, collaborators)
         return 0
     handlers: dict[str, AdminHandler] = {
         "provision": _provision,
@@ -172,6 +186,7 @@ def _worker(arguments: argparse.Namespace, output: Output, collaborators: Collab
     _route_logs(settings.require_bank_code(), settings.log_level, arguments.quiet)
     with database_errors_as_operator_errors(), RuntimeComposition(settings, collaborators) as composition:
         composition.schema().require_head()
+        composition.startup_record().run(WORKER_PROCESS)
         worker = composition.worker()
         if arguments.once:
             _report(worker.run_once(), output)
@@ -184,3 +199,15 @@ def _worker(arguments: argparse.Namespace, output: Output, collaborators: Collab
         signal.signal(signal.SIGTERM, request_stop)
         signal.signal(signal.SIGINT, request_stop)
         worker.run_until_stopped(stop)
+
+
+def _runtime_command(
+    arguments: argparse.Namespace, output: Output, collaborators: Collaborators | None
+) -> None:
+    """`registry sync`, `integrity report`, `integrity verify`: the app role, the runtime settings."""
+    settings = load_runtime_settings()
+    _route_logs(settings.bank_code, settings.log_level, arguments.quiet)
+    action = arguments.registry_command if arguments.command == "registry" else arguments.integrity_command
+    with database_errors_as_operator_errors(), RuntimeComposition(settings, collaborators) as composition:
+        composition.schema().require_head()
+        RUNTIME_HANDLERS[action](arguments, composition, output)
