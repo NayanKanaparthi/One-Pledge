@@ -369,7 +369,7 @@
       "field": "vin",
       "kind": "PLEDGE",
       "as_of_date": "2026-11-05",
-      "input": "1hgcm82633а004352",
+      "input": "1HGCM82633а004352",
       "expected": {
         "action": "REJECTED",
         "problems": [
