@@ -18,7 +18,10 @@ from onepledge_bank_agent.domain.loan import StateChange
 
 
 def loan_state_changed(
-    change: StateChange, submission_id: uuid.UUID, reason_code: str, failed_checks: Sequence[str] = ()
+    change: StateChange,
+    submission_id: uuid.UUID,
+    reason_code: str,
+    failed_checks: Sequence[str] | None = None,
 ) -> AuditDraft:
     """`LOAN_STATE_CHANGED` with from, to, the submission and the reason."""
     detail: dict[str, JsonValue] = {
@@ -27,7 +30,7 @@ def loan_state_changed(
         "submission_id": str(submission_id),
         "reason_code": reason_code,
     }
-    if failed_checks:
+    if failed_checks is not None:
         detail["failed_checks"] = list(failed_checks)
     return AuditDraft(
         AuditAction.LOAN_STATE_CHANGED, Actor.system(), AuditObjectType.LOAN, change.loan_id, detail=detail

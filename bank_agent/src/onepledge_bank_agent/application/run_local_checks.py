@@ -24,8 +24,8 @@ from onepledge_bank_agent.application.ports import (
     UnitOfWorkFactory,
 )
 from onepledge_bank_agent.application.runtime import Runtime
-from onepledge_bank_agent.domain.checks import LocalCheckRules, holds_locally
-from onepledge_bank_agent.domain.enums import CheckOutcome, LoanState, TapeKind, TapeStatus
+from onepledge_bank_agent.domain.checks import LocalCheckRules, failed_check_types, holds_locally
+from onepledge_bank_agent.domain.enums import LoanState, TapeKind, TapeStatus
 from onepledge_bank_agent.domain.errors import FacilityNotFoundError
 from onepledge_bank_agent.domain.loan import Loan
 from onepledge_bank_agent.domain.outside_records import OutsideEvidence
@@ -103,7 +103,7 @@ class RunLocalChecks:
                 if loan.state is LoanState.PENDING and holds_locally(loan_results):
                     change = loan.hold_local(now)
                     unit.loans.save(loan)
-                    failed = [r.check_type.value for r in loan_results if r.outcome is not CheckOutcome.PASS]
+                    failed = [check_type.value for check_type in failed_check_types(loan_results)]
                     unit.record(loan_state_changed(change, facts.submission_id, LOCAL_CHECK_FAILED, failed))
             unit.commit()
         self._log.info(

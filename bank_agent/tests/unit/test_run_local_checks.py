@@ -83,7 +83,7 @@ def test_every_accepted_loan_gets_four_results_and_a_failure_holds_it(world: Wor
         VINS[3]: LoanState.PENDING,
     }
     (held,) = [c for c in world.audit(AuditAction.LOAN_STATE_CHANGED) if c.detail["to"] == "HELD_LOCAL"]
-    assert held.detail["failed_checks"] == [CheckType.TITLE_EXISTS.value, CheckType.LIENHOLDER_MATCH.value]
+    assert held.detail["failed_checks"] == [CheckType.TITLE_EXISTS.value], "LIENHOLDER_MATCH is UNKNOWN here"
     assert held.detail["reason_code"] == "LOCAL_CHECK_FAILED" and held.detail["submission_id"] == str(
         submission
     )
@@ -155,3 +155,23 @@ def test_a_missing_facility_is_an_error_not_a_silent_skip(world: World) -> None:
     del world.store.state.facilities[world.facility.facility_id]
     with pytest.raises(FacilityNotFoundError):
         checks(world, outside_for(VINS)).run(submission)
+
+
+def test_failed_checks_names_only_fail_outcomes_in_the_fixed_order(world: World) -> None:
+    """Decision 48: a tolerated UNKNOWN (first payment not due yet) is never listed as failed."""
+    young = AS_OF - timedelta(days=20)
+    data = summit_tape([summit_row(origination=young.strftime("%m/%d/%Y"))])
+    actor = Actor.user(uuid.uuid4(), Role.ANALYST)
+    command = IngestCommand(world.facility.facility_id, TapeKind.PLEDGE, AS_OF, "t.csv", data, actor)
+    submission = IngestTape(world.units, TapeFileReader(), AccessPolicy(), world.runtime).execute(command)
+    CleanTape(world.units, world.runtime).run(submission.submission_id)
+    outside = MemoryOutsideRecords()
+    outside.titles[VINS[0]] = TitleRecord("NJ", "CLEAN", "Some Other Lender Inc", None)
+    checks(world, outside).run(submission.submission_id)
+    (results,) = world.store.state.checks.values()
+    outcomes = {r.check_type: r.outcome.value for r in results}
+    assert outcomes[CheckType.PAYMENTS_RECEIVED] == "UNKNOWN"
+    (held,) = [c for c in world.audit(AuditAction.LOAN_STATE_CHANGED) if c.detail["to"] == "HELD_LOCAL"]
+    expected = [kind.value for kind in CheckType if outcomes[kind] == "FAIL"]
+    assert held.detail["failed_checks"] == expected
+    assert CheckType.PAYMENTS_RECEIVED.value not in expected and CheckType.LIENHOLDER_MATCH.value in expected

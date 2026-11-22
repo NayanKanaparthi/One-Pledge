@@ -151,6 +151,13 @@ class LocalCheckRules:
         return _result(check, CheckOutcome.PASS, CheckReason.CONTRACT_MATCHES, evidence)
 
 
+def failed_check_types(results: Iterable[CheckResult]) -> list[CheckType]:
+    """The check types whose outcome is FAIL, in the fixed order of SPEC 11.1; an UNKNOWN is never one
+    (SPEC_DECISIONS 48)."""
+    failed = {result.check_type for result in results if result.outcome is CheckOutcome.FAIL}
+    return [check_type for check_type in CheckType if check_type in failed]
+
+
 def holds_locally(results: Iterable[CheckResult]) -> bool:
     """Any FAIL holds the loan; an UNKNOWN is tolerated only for the two waiting reasons (SPEC 11.3)."""
     return any(
