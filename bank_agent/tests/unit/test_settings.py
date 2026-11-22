@@ -122,3 +122,51 @@ def test_a_malformed_admin_value_names_the_variable(name: str, value: str) -> No
 def test_each_scope_ignores_the_other_scopes_variables_even_when_malformed() -> None:
     RuntimeSettings.from_env({"DB_APP_ROLE": "Bad-Role", "MIGRATION_DATABASE_URL": "nonsense"})
     AdminSettings.from_env({"PORT": "http", "CHECK_CHUNK_LOANS": "0", "OUTSIDE_RECORDS_URL": "ftp://x"})
+
+
+@pytest.mark.parametrize(
+    ("value", "bound"),
+    [
+        ("127.0.0.1", "127.0.0.1"),
+        ("0.0.0.0", "0.0.0.0"),  # noqa: S104 - the wildcard is an accepted value under test
+        ("::", "::"),
+        ("::1", "::1"),
+        (" 10.0.0.7\n", "10.0.0.7"),
+        ("", "127.0.0.1"),
+    ],
+)
+def test_bind_host_accepts_an_ip_literal_or_a_wildcard(value: str, bound: str) -> None:
+    """SPEC_DECISIONS 66: the address a socket binds to, never a name."""
+    assert RuntimeSettings.from_env({**FULL, "BIND_HOST": value}).bind_host == bound
+
+
+BIND_SENTENCE = (
+    "Configuration error: BIND_HOST must be an IP address of this machine; "
+    "set BIND_HOST to 127.0.0.1 or 0.0.0.0."
+)
+FULL_WIDTH_LOOPBACK = "".join(chr(0xFF10 + int(d)) for d in "127") + ".0.0.1"
+UNPRINTABLE_KEYS = [
+    "opk_k" + chr(0xA0) + "k",
+    "opk_" + chr(9) + "kk",
+    "opk_" + chr(0x200B) + "kk",
+    "opk_kk" + chr(7),
+]
+
+
+@pytest.mark.parametrize(
+    "value", ["localhost", "bank-harbor", "127.0.0.256", "1.2.3", "127.0.0.1:8101", FULL_WIDTH_LOOPBACK]
+)
+def test_bind_host_refuses_a_name_or_a_malformed_address_in_one_sentence(value: str) -> None:
+    with pytest.raises(OperatorError) as raised:
+        RuntimeSettings.from_env({**FULL, "BIND_HOST": value})
+    assert raised.value.sentence == BIND_SENTENCE
+    assert value not in raised.value.sentence
+
+
+@pytest.mark.parametrize("value", UNPRINTABLE_KEYS)
+def test_a_value_with_a_control_character_or_other_whitespace_names_its_variable(value: str) -> None:
+    """SPEC_DECISIONS 66: only ASCII whitespace at the ends is trimmed; secrets included."""
+    with pytest.raises(OperatorError) as raised:
+        RuntimeSettings.from_env({**FULL, "OUTSIDE_RECORDS_API_KEY": value})
+    assert raised.value.sentence.startswith("Configuration error: OUTSIDE_RECORDS_API_KEY must be")
+    assert value not in raised.value.sentence

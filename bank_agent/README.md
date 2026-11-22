@@ -264,7 +264,12 @@ records and the worker output carry the same keys. Every failure code except
 | `HTTP_CONNECT_TIMEOUT_SECONDS`, `HTTP_READ_TIMEOUT_SECONDS` | `worker` | Defaults 2 and 10. |
 | `TITLE_PENDING_WINDOW_DAYS`, `FIRST_PAYMENT_GRACE_DAYS`, `PAYMENT_WINDOW_DAYS`, `CONTRACT_DATE_TOLERANCE_DAYS` | `worker` | Check windows of SPEC 11; defaults 30, 45, 90, 3. |
 
-`PORT` has no default (SPEC_DECISIONS 12); it is used by the HTTP API of WP4. Role names
+`BIND_HOST` (for the HTTP API of WP4, default `127.0.0.1`) is the address the socket
+binds to: an IPv4 or IPv6 literal, or the wildcard `0.0.0.0` or `::`; a name such as
+`localhost` is refused with "set BIND_HOST to 127.0.0.1 or 0.0.0.0" (SPEC_DECISIONS 66).
+Every value is trimmed of ASCII space, tab, CR and LF at both ends; a value that still
+holds a control character or whitespace other than the ASCII space names its variable,
+secrets included. `PORT` has no default (SPEC_DECISIONS 12); it is used by the HTTP API of WP4. Role names
 are derived from the two database URLs (SPEC_DECISIONS 17): the roles must be named
 `{db}_owner` and `{db}_app`. Database URLs and keys are held as secrets and never appear
 in a settings repr, a log line or an error message.

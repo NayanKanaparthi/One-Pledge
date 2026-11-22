@@ -10,37 +10,25 @@ masked in every repr.
 
 from __future__ import annotations
 
-import base64
-import binascii
-import json
 import os
 import re
 import uuid
 from collections.abc import Callable, Mapping
-from types import MappingProxyType
 from typing import Self
-from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, SecretStr
 
-from onepledge_bank_agent.domain.errors import InvalidValueError
-from onepledge_bank_agent.domain.text_rules import ascii_lower, ascii_upper, parse_integer, trim
+from onepledge_bank_agent.domain.text_rules import ascii_upper
 from onepledge_bank_agent.infrastructure.operator_errors import CONFIGURATION_ERROR, OperatorError
+from onepledge_bank_agent.infrastructure.setting_reader import SettingReader, invalid
 
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 _ROLE_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 _BANK_CODE = re.compile(r"^[A-Z]{3,12}$")
-_BOOLEANS = MappingProxyType({"true": True, "false": False})
 MAX_PORT = 65535
-MAX_SECONDS = 3600.0
 MAX_CHUNK = 1000
 MAX_TOKENIZE_CHUNK = 125  # 8 elements per loan, at most 1,000 elements per key holder request
 MAX_SUBMIT_BATCH = 500
-_KEY_ID = re.compile(r"^[a-z0-9-]{1,64}$")
-_SECONDS = re.compile(r"^([0-9]{1,6})(?:\.([0-9]{1,3}))?$")
-PUBLIC_KEY_BYTES = 32
-# The published test vector key (contracts/examples/vectors/signatures.json) is never a trust anchor.
-TEST_VECTOR_PUBLIC_KEYS = frozenset({"BlflaowBg3VkeFNDcT9cKZFMgLkwYA7l+SNUMxWPOVQ="})
 
 
 def read_environment() -> Mapping[str, str]:
@@ -54,10 +42,6 @@ def _reveal(secret: SecretStr) -> str:
 
 def _missing(name: str) -> OperatorError:
     return OperatorError(f"Configuration error: {name} is required but not set.", CONFIGURATION_ERROR)
-
-
-def _invalid(name: str, rule: str) -> OperatorError:
-    return OperatorError(f"Configuration error: {name} must be {rule}.", CONFIGURATION_ERROR)
 
 
 class Tunables(BaseModel):
@@ -81,106 +65,7 @@ class Tunables(BaseModel):
     halt_on_registry_integrity_failure: bool = True
 
 
-class _Reader:
-    """Reads and validates one variable at a time."""
-
-    def __init__(self, environ: Mapping[str, str]) -> None:
-        self._environ = environ
-
-    def text(self, name: str) -> str | None:
-        value = trim(self._environ.get(name, ""))
-        return value or None
-
-    def secret(self, name: str) -> SecretStr | None:
-        value = self.text(name)
-        return SecretStr(value) if value is not None else None
-
-    def matching(self, name: str, pattern: re.Pattern[str], rule: str) -> str | None:
-        value = self.text(name)
-        if value is not None and not pattern.fullmatch(value):
-            raise _invalid(name, rule)
-        return value
-
-    def integer(self, name: str, default: int, low: int, high: int) -> int:
-        value = self.text(name)
-        if value is None:
-            return default
-        try:
-            return parse_integer(value, name, low, high)
-        except InvalidValueError:
-            raise _invalid(name, f"a whole number from {low} to {high}") from None
-
-    def seconds(self, name: str, default: float) -> float:
-        value = self.text(name)
-        if value is None:
-            return default
-        match = _SECONDS.fullmatch(value)
-        if match is None:
-            raise _invalid(name, "a positive number of seconds")
-        fraction = (match[2] or "").ljust(3, "0")
-        milliseconds = parse_integer(match[1], name, 0) * 1000 + parse_integer(fraction, name, 0)
-        seconds = milliseconds / 1000
-        if not 0 < seconds <= MAX_SECONDS:
-            raise _invalid(name, "a positive number of seconds")
-        return seconds
-
-    def boolean(self, name: str, default: bool) -> bool:
-        value = self.text(name)
-        if value is None:
-            return default
-        if ascii_lower(value) not in _BOOLEANS:
-            raise _invalid(name, "true or false")
-        return _BOOLEANS[ascii_lower(value)]
-
-    def member_id(self, name: str) -> uuid.UUID | None:
-        value = self.text(name)
-        if value is None:
-            return None
-        try:
-            parsed = uuid.UUID(value)
-        except ValueError:
-            raise _invalid(name, "a UUID") from None
-        if str(parsed) != ascii_lower(value):
-            raise _invalid(name, "a UUID")
-        return parsed
-
-    def public_keys(self, name: str) -> tuple[tuple[str, str], ...] | None:
-        value = self.text(name)
-        if value is None:
-            return None
-        rule = "a JSON object of key ids to base64 Ed25519 public keys"
-        try:
-            document = json.loads(value)
-        except ValueError:
-            raise _invalid(name, rule) from None
-        if not isinstance(document, dict) or not document:
-            raise _invalid(name, rule)
-        keys: list[tuple[str, str]] = []
-        for key_id, key in sorted(document.items()):
-            if not isinstance(key, str) or not _KEY_ID.fullmatch(key_id) or not _is_public_key(key):
-                raise _invalid(name, rule)
-            if key in TEST_VECTOR_PUBLIC_KEYS:
-                raise _invalid(name, "a real registry key, not the published test vector key")
-            keys.append((key_id, key))
-        return tuple(keys)
-
-    def http_url(self, name: str) -> str | None:
-        value = self.text(name)
-        if value is not None:
-            parts = urlsplit(value)
-            if parts.scheme not in ("http", "https") or not parts.netloc:
-                raise _invalid(name, "an http or https URL")
-        return value
-
-
-def _is_public_key(text: str) -> bool:
-    try:
-        return len(base64.b64decode(text, validate=True)) == PUBLIC_KEY_BYTES
-    except (binascii.Error, ValueError):
-        return False
-
-
-def _tunables(read: _Reader) -> Tunables:
+def _tunables(read: SettingReader) -> Tunables:
     return Tunables(
         pipeline_worker_enabled=read.boolean("PIPELINE_WORKER_ENABLED", True),
         pipeline_poll_seconds=read.seconds("PIPELINE_POLL_SECONDS", 1.0),
@@ -199,14 +84,14 @@ def _tunables(read: _Reader) -> Tunables:
     )
 
 
-def _log_level(read: _Reader) -> str:
+def _log_level(read: SettingReader) -> str:
     level = ascii_upper(read.text("LOG_LEVEL") or "INFO")
     if level not in _LOG_LEVELS:
-        raise _invalid("LOG_LEVEL", "DEBUG, INFO, WARNING, ERROR or CRITICAL")
+        raise invalid("LOG_LEVEL", "DEBUG, INFO, WARNING, ERROR or CRITICAL")
     return level
 
 
-def _bank_code(read: _Reader) -> str | None:
+def _bank_code(read: SettingReader) -> str | None:
     return read.matching("BANK_CODE", _BANK_CODE, "3 to 12 upper case letters")
 
 
@@ -231,7 +116,7 @@ class RegistrySettings(BaseModel):
     key_holder_2_api_key: SecretStr | None
 
     @classmethod
-    def read(cls, read: _Reader) -> Self:
+    def read(cls, read: SettingReader) -> Self:
         """The variables that are present; requirements are checked per use."""
         return cls(
             registry_url=read.http_url("REGISTRY_URL"),
@@ -299,12 +184,12 @@ class RuntimeSettings(BaseModel):
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> Self:
         """Parse the variables of a runtime process that are present; requirements are checked per use."""
-        read = _Reader(environ)
+        read = SettingReader(environ)
         port_text = read.text("PORT")
         return cls(
             bank_code=_bank_code(read),
             bank_name=read.text("BANK_NAME"),
-            bind_host=read.text("BIND_HOST") or "127.0.0.1",
+            bind_host=read.bind_host(),
             port=read.integer("PORT", 0, 1, MAX_PORT) if port_text is not None else None,
             database_url=read.secret("DATABASE_URL"),
             outside_records_url=read.http_url("OUTSIDE_RECORDS_URL"),
@@ -350,7 +235,7 @@ class AdminSettings(BaseModel):
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> Self:
         """Parse the administrative variables that are present; requirements are checked per command."""
-        read = _Reader(environ)
+        read = SettingReader(environ)
         return cls(
             bank_code=_bank_code(read),
             database_url=read.secret("DATABASE_URL"),
