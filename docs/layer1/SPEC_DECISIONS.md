@@ -999,3 +999,368 @@ Bank agent implementer:
 | B6 | Every log record for a 5xx (once WP4 adds the HTTP layer) and every `error` record of the worker carries the keys of A2 that apply | 66 |
 
 Order: A1 before B3. Everything else is independent.
+
+---
+
+# Round 5 (2026-11-22): WP1 review 3 and bank agent review 2
+
+Inputs: `docs/layer1/reviews/WP1-review-3.md` and `docs/layer1/reviews/BANK-review-2.md`, both on commit `65adce8`. Decisions 71 to 96. Change tables per implementer are at the end. Where a decision here differs from an earlier one, this one wins and says which it replaces. No ruling lowers a gate.
+
+Every failure in both reviews is confirmed as graded, including the two the reviewers were unsure of (decision 71).
+
+## A. Rules that apply to more than one package
+
+### 71. Failures confirmed; PRES-06 covers broken documents
+
+- WP1 review 3: DATA-06, DX-05, CODE-03, CODE-04 and PRES-06 fail. PRES-06 is read through CONTEXT: a document a human reads that renders wrongly (a broken table, a list that does not render, a dangling sentence) is sloppy text and fails PRES-06.
+- Bank review 2: BANK-09, SEC-02, SEC-12, BANK-08, AUD-05 and the SEC-13 extra finding fail.
+- F3 of the bank review (an alert closed without its case) is a state the table of SPEC 8.5 does not contain. It is a BANK-09 failure, not a quality finding.
+
+Two enforcement rules follow, for every package:
+
+1. Each package has an architecture test that enforces the limits of SPEC 2.2 on its own `src/` tree (400 lines per module, 60 lines per function, 15 public methods per class). A limit that only a reviewer's script checks will be broken again.
+2. Each package has a test that parses every Markdown file it owns (and the root and `contracts/` READMEs for the package that owns them) and fails when a table has rows with differing cell counts, or when a table is interrupted by a line that is not a table row.
+
+### 72. One definition of a least-privilege role (replaces the role part of decisions 43.4 and 68 item 11)
+
+"Forbidden privilege" is not a list of things to look for. The runtime role must hold exactly what it was granted and nothing else. A role `R` connected to database `D` is least-privilege only when all of these hold:
+
+1. **Attributes.** `R` is not a superuser and has none of `CREATEDB`, `CREATEROLE`, `REPLICATION`, `BYPASSRLS`.
+2. **Membership.** `R` is a member of no role, directly or indirectly, including the predefined `pg_` roles.
+3. **Ownership.** `R` owns nothing in `D`: no table, sequence, view, function, type, schema, and not the database.
+4. **Database and schema.** On `D`: `CONNECT` only (no `CREATE`, no `TEMPORARY`). On schema `public`: `USAGE` only (no `CREATE`). No privilege on any other non-system schema.
+5. **Tables: exact match.** For every table in `public`, the set of privileges `R` effectively holds equals the set the service's grant matrix gives for that table. "Effectively holds" counts grants to `R` and to `PUBLIC`, at table level and at column level: `SELECT`, `INSERT`, `UPDATE` and `REFERENCES` are held when `has_table_privilege` or `has_any_column_privilege` is true; `DELETE`, `TRUNCATE` and `TRIGGER` when `has_table_privilege` is true. An extra privilege on any table fails. A missing one fails too (the database was provisioned wrongly). A table that exists in `public` and is not in the matrix fails.
+6. **Sequences.** `R` holds no privilege on any sequence.
+
+The grant matrix is one declarative table in the code of each service. The migration that issues the grants, the startup guard, the integrity report and a test all read that one table; the test asserts it equals SPEC 12.2 as amended by this file (bank agent) or SPEC 6.1 (outside records: `SELECT` on its four tables, nothing else).
+
+One function, `inspect_role()`, evaluates the six points and returns every violation as a code (`ROLE_IS_SUPERUSER`, `ROLE_HAS_ATTRIBUTE`, `ROLE_HAS_MEMBERSHIP`, `ROLE_OWNS_OBJECT`, `ROLE_HAS_DATABASE_PRIVILEGE`, `ROLE_HAS_SCHEMA_PRIVILEGE`, `TABLE_PRIVILEGE_EXTRA`, `TABLE_PRIVILEGE_MISSING`, `TABLE_NOT_IN_MATRIX`, `SEQUENCE_PRIVILEGE`) with the object name. The startup guard and the integrity report both call it. There is no second query anywhere.
+
+Which commands run the guard, and refuse with one line naming `DATABASE_URL` and the first violation code:
+
+| Service | Guarded | Exempt |
+|---|---|---|
+| Bank agent | Every command that connects with `DATABASE_URL`: `serve`, `worker`, `registry sync`, `integrity verify`, `tapes`, `loans`, `lineage`, `alerts`, `audit`, `users` | `integrity report` (it must be able to show a control that is false); `db provision`, `db migrate`, `db status`, `seed-reference` (they use the owner or admin URL by design) |
+| Outside records | `serve` | `db`, `seed`, `clients` (owner or admin URL by design) |
+
+The administrative commands apply the mirror check: `db migrate`, `seed-reference`, `seed` and `clients` refuse to run when the role of `MIGRATION_DATABASE_URL` is not the owner of the schema's tables, with a sentence that says so (this is the correct sentence for WP1 quality finding 8, first case).
+
+Integrity report controls (replaces the definitions in SPEC 15.5; the names stay):
+
+- `APP_ROLE_IS_NOT_OWNER_OR_SUPERUSER`: points 1 to 3 hold.
+- `APP_ROLE_CANNOT_UPDATE_LOANS_RAW`, `APP_ROLE_CANNOT_DELETE_LOANS_RAW`, `APP_ROLE_CANNOT_UPDATE_AUDIT_LOG`, `APP_ROLE_CANNOT_DELETE_AUDIT_LOG`: no such privilege at table or column level, by the same inspection.
+- New control `APP_ROLE_GRANTS_EXACT`: all six points hold. The report lists the violation codes and object names under the control when it is false.
+
+Tests: for each of the six points at least one hand-made violation that the guard refuses and the report shows, including a column-level `UPDATE` on `audit_log`, a column-level `INSERT` on an outside records table, a grant on a reference table, a grant on `alembic_version`, `ALTER ROLE ... CREATEDB`, membership of `pg_write_all_data`, a grant to `PUBLIC`, a `TEMPORARY` grant on the database, and a missing expected grant.
+
+### 73. `BIND_HOST`: one rule for all four services (replaces the `BIND_HOST` row of decision 66 where it differs)
+
+1. Only `serve` reads `BIND_HOST`. No other command parses it, so a wrong value cannot stop a worker or a one-shot command, and none of them reports on it.
+2. Format, in the settings loader: the value must be an IPv4 or IPv6 literal. A name, including `localhost`, is malformed.
+3. Machine address, at `serve` startup before anything else is opened: the service opens a socket of the literal's family and binds it to `(BIND_HOST, 0)`, then closes it. The wildcards `0.0.0.0` and `::` and the loopback addresses go through the same probe. Outcomes:
+   - bind succeeds: accepted;
+   - the address family is not available on this machine (for example no IPv6): refused with "BIND_HOST is an IPv6 address and this machine has no IPv6. Set BIND_HOST to 127.0.0.1 or 0.0.0.0.";
+   - the address is not assigned to this machine (for example `8.8.8.8`): refused with "BIND_HOST is not an address of this machine. Set BIND_HOST to 127.0.0.1 or 0.0.0.0.";
+   - any other socket error: refused with "BIND_HOST cannot be bound. Set BIND_HOST to 127.0.0.1 or 0.0.0.0."
+4. Every socket call, including creating the socket, is inside the guarded section. No socket error reaches the last resort handler.
+5. Sentences name the variable and never print its value (SPEC 3.1), here and for every other setting.
+6. The probe is behind a small port so unit tests can inject each outcome; one integration test per service uses the real probe with `127.0.0.1`, `0.0.0.0`, `8.8.8.8`, `::` and `::1` and accepts either "started" or the specific IPv6 sentence for the last two, never the last resort sentence.
+
+### 74. Every file and every message a tool reads is hostile input (all packages)
+
+A tool that reads a file it did not just write (a contract YAML, an example, a vector, a data set file, a CSV to seed, `reference.json`) parses it with bounds and reports the file by name:
+
+- JSON through the bounded parser of decision 38 (depth 32, number literal length 30, duplicate keys refused). YAML through the safe loader with the same depth bound, a size limit of 5 MiB and aliases refused. Any parser failure, including a recursion limit, is "FILE: not valid JSON" or "FILE: nests too deeply" and counts as one problem of that file.
+- A path taken from inside a file (a manifest step's `file`, a checksum entry, an example index entry) must be relative, must not contain `..`, and must resolve inside the directory being read without following a symbolic link out of it. Otherwise: "FILE names a path outside the directory."
+
+The contract checker, `verify`, `seed`, `seed-reference` and the replay driver of WP5 all follow this.
+
+### 75. Identifiers and encodings are canonical or refused (all services)
+
+- A UUID in a path, query, header or body is accepted only as 36 characters, lower case hexadecimal with hyphens in the 8-4-4-4-12 positions. Braces, `urn:uuid:`, upper case, or 32 characters without hyphens are `PATTERN_MISMATCH` (422), or 404 for a path id where the contract gives 404 for a malformed id. Nothing is rewritten into canonical form.
+- A base64 value is accepted only if decoding and re-encoding it gives the same text. A key holder element with non-zero padding bits is `NOT_A_VALID_POINT`.
+- A client that closes the connection before the request is complete is not a server failure: one record at level `info` with event `client_disconnected`, no `error` record, no access record with status 500.
+
+### 76. Test runs clean up after themselves, and cannot hang (all packages)
+
+1. Every scratch database and role a test creates is named `optest_<UTC yyyymmddHHMMSS>_<pid>_<8 hex>` followed by the usual suffix. The bank agent's `opwp2t_` prefix is replaced. Reviewers keep using their own prefixes.
+2. At the start of every test session that uses PostgreSQL, a sweep drops every database and role whose name starts with `optest_` and whose timestamp is more than two hours old. It never touches any other name.
+3. Teardown also runs on SIGTERM: the test session installs a handler that turns SIGTERM into an orderly exit so fixtures finalise. SIGKILL cannot be handled; the sweep of point 2 covers it.
+4. `make test-sweep` drops every `optest_` database and role regardless of age, and prints how many it dropped. `make clean` does not call it.
+5. `pytest-timeout` is added to the allowed dev-only packages. The root configuration sets a default of 120 seconds per test and 600 for tests marked `e2e`. A test that starts a server in process, or waits for a refusal that might not come, must fail by timeout, not hang.
+
+### 77. Markers: what `unit` means (amends decisions 16 and 63)
+
+- `unit`: no network, no database, no child process, and no write to the file system. Reading files that are committed in the repository is allowed.
+- A test that writes to `tmp_path` is `integration`, or is rewritten to work from a string.
+- The tokenisation vector test is marked `contract` (SPEC 21.4 lists it there). It may also be marked `unit`.
+- New marker `reliability` for the tests of SPEC 21.3. Tests are named for what they show; no test name carries a word only to match a `-k` filter. Where RUBRIC REL-02 says `-k "crash or resume or fault"`, reviewers run `-m reliability`.
+
+### 78. Command line details (all packages)
+
+- **Usage errors and `--json`.** When `--json` is among the arguments, a usage error prints one document on stdout, `{"ok": false, "error": {"code": "USAGE", "message": "The command line is not valid. See the usage text."}}`, the usage text on stderr, exit 2. Decision 20's "on success and on failure" has no exemption.
+- **Last resort.** Whenever any command ends through the last resort handler, it also writes one `error` log record with `exception_type` and `stack` (frames only). This holds for one-shot commands as well as long running ones.
+- **Sentences name the real cause.** A database that cannot be reached, a database that is reachable but has no tables, and a role that lacks a privilege are three different sentences in every command. `db provision` with an admin URL whose role is not a superuser says so. A numeric setting that is well formed but out of range says "out of range", not "must be a whole number". The same setting has the same sentence in every service. No message ends in a colon.
+- **Width.** Human readable output is at most 100 columns: long identifiers are shortened as SPEC 19 says, facts wrap onto continuation lines. `--wide` turns the limit off.
+- **Counts in messages are the real counts.** `seed-reference` prints the inserted, updated and unchanged counts it audits.
+- **Help text matches behaviour.** `--debug` is described as "print the exception type and call frames".
+- **Exit codes of the integrity commands.** `integrity report` and `integrity verify` exit 0 when the report status is OK and 1 when it is BROKEN, after printing the whole report in either case.
+
+### 79. Migration failures (all services with migrations)
+
+`db migrate` treats every exception raised while a migration runs as a migration failure, not as an unexpected error: any database driver or SQLAlchemy error (a statement refused, a missing privilege, an existing relation), and any Alembic error. It prints "The migration to REVISION failed and was rolled back. Fix the database state named in the log and run db migrate again.", writes one `schema_migration_failed` record with `exception_type` and `revision`, and exits 1. Tests provoke at least: a pre-existing conflicting table, a missing privilege, and an unreachable database.
+
+## B. WP1 review 3: remaining rulings
+
+### 80. Small literal failures
+
+- CODE-03, `RISTRETTO_ORDER`: write the number with digit group underscores of at most eight digits per group, so no run of 17 characters exists. The grep stays literal.
+- CODE-04, `web.py` at 461 lines: split by responsibility (request reading and bounded parsing; error envelope and handlers; middleware and logging). Decision 71 rule 1 then keeps it split.
+- PRES-06: the two tables are repaired; decision 71 rule 2 keeps them whole.
+
+### 81. Quality findings of WP1 review 3
+
+| # | Finding | Ruling |
+|---|---|---|
+| 1 | Oracle and bank agent disagree on a borrower reference with a removable separator and a forbidden character | **The oracle is right; the bank agent is fixed.** Decision 83. The neutral table gains the cases. |
+| 2 | Gaps in the neutral table | **Fix.** Decision 84. |
+| 3, 3a | Interrupted runs leave databases; a missing refusal hangs the suite | **Fix.** Decision 76. |
+| 4 | A client hang-up is logged as a server failure | **Fix.** Decision 75. |
+| 5 | Non-canonical UUID and base64 spellings accepted | **Fix.** Decision 75. |
+| 6 | `verify` follows a manifest path out of the directory | **Fix.** Decision 74. |
+| 7 | Usage errors ignore `--json` | **Fix.** Decision 78. |
+| 8 | Sentences that name the wrong cause | **Fix.** Decision 78, and decision 72 for the role case. |
+| 9 | The startup check stops at the four write privileges | **Fix.** Decision 72 replaces the check. |
+| 10 | The daily item cap also refuses a RELEASE | **Fix in the double and in the draft contract.** A member must always be able to give up a lock. The daily item cap counts BACK_BOOK and PLEDGE items only; a RELEASE submission is never refused for the cap and its items do not count toward it. `registry.yaml` gains this sentence in the description, under the decision rules: "The per member daily item cap counts BACK_BOOK and PLEDGE items only. A RELEASE is never refused for the cap." Shreyas is told when the contracts go for approval. |
+| 11 | Reviewers sharing one interpreter overwrite each other's installs | **Procedure.** Every reviewer and every implementer works in a private virtual environment created from the clone under review. Nobody installs into the shared interpreter during a review. The coordinator re-installs the main repository's packages once reviews end. |
+
+The equivalent mutation (the explicit identity test on key holder input) needs no change.
+
+## C. Cleaning: the cross-package disagreement
+
+### 82. The control character rule and trimming (replaces the trimming bullet of decision 45)
+
+For every required text cell, in this order:
+
+1. **Control characters, on the cell exactly as sent.** If the cell contains any character in U+0000 to U+001F or U+007F (this includes tab, carriage return and line feed, anywhere, also at the ends and inside a quoted cell): REJECTED `UNSAFE_CHARACTERS`. The field ends here, except that step 2 is still evaluated so the record shows both.
+2. **Trimming.** ASCII space, tab, carriage return and line feed are removed from both ends. If that changed the cell: FIXED `WHITESPACE_TRIMMED`.
+3. **Empty** after trimming: REJECTED `MISSING_REQUIRED_FIELD`. Field ends.
+4. **Formula lead**, on the trimmed cell: first character `=`, `+` or `@`: REJECTED `UNSAFE_CHARACTERS`. Field ends.
+5. The field's own steps.
+
+Consequences, all intended: a cell with a leading or trailing tab, CR or LF is always rejected (with `WHITESPACE_TRIMMED` also recorded when trimming changed it); only ASCII spaces at the ends can be trimmed into an accepted value; a quoted cell with an embedded line break is rejected. This is what both implementations do today; the rule is now written.
+
+### 83. Normalise, record, then validate (BANK-01)
+
+Within a field's own steps, a normalisation that changes the cell is recorded before the validation that may reject it, and both issues are kept (decision 13, point 3). For the borrower reference:
+
+1. `n` = the trimmed cell with ASCII letters upper cased and every occurrence of the five separators (space, `-`, `_`, `.`, `/`) removed.
+2. If `n` differs from the trimmed cell: FIXED `BORROWER_REF_NORMALISED`.
+3. If `n` does not match `^[A-Z0-9]{4,32}$`: REJECTED `BORROWER_REF_INVALID`.
+
+So `LK-#123456`, `lk#123456`, `LK 12٣4`, `c004821٣` and `LK-12é4` each give FIXED `BORROWER_REF_NORMALISED` and REJECTED `BORROWER_REF_INVALID`; `#123456` gives only the rejection. The same order holds for the VIN (case, separators, substitution recorded before length, character and check digit rejections) and is what case `vin-016` already expects. The bank agent's `text_fields.py` refuses before it normalises and is corrected. The row is rejected either way; what changes is that the record is complete and identical in every implementation.
+
+### 84. Additions to the neutral table
+
+`contracts/examples/cleaning_cases.json` gains, written by hand from decisions 82 and 83:
+
+- the five borrower inputs of decision 83 and `#123456`;
+- a VIN in lower case with one character outside the alphabet (FIXED `VIN_CASE_NORMALISED`, REJECTED `VIN_CHARACTER_INVALID`), restoring the combination that case `vin-021` used to hold;
+- for the VIN, the borrower reference, an amount and a date: a trailing tab, a trailing CR, a trailing LF, an embedded LF, a leading space with a leading `=` behind it, and trailing spaces only (the last is the one accepted case);
+- a loan number with a leading and a trailing space (accepted with `WHITESPACE_TRIMMED`).
+
+The correction of `vin-021` in commit `041cedb` is accepted as the repair of a transcription error, on the reviewer's reading. From now on a case's `input` is never edited: a wrong case is corrected in its `expected`, or deleted and replaced by a new id, and the commit message says which implementation was wrong, if any.
+
+## D. Bank agent review 2
+
+### 85. Poison messages: contain, record, acknowledge, continue (replaces the handling rules of decision 57; SEC-12, BANK-08)
+
+**The class.** A poison message is any registry outbox message the bank cannot apply for a reason that will not go away by itself. It is defined by exclusion, so no case can fall outside it. Processing one message has exactly three outcomes:
+
+| Outcome | When | What happens |
+|---|---|---|
+| Applied | The handler committed. | Acknowledge. |
+| Deferred | Only these: the bank's database connection was lost or timed out, a serialisation failure or deadlock, or a transient class of decision 49 while calling the registry (for example fetching event headers). | Nothing is stored, the message is not acknowledged, this sync stops and the next one starts with the same message. The deferral is counted (below). |
+| Poison | **Everything else**: a payload that fails the contract schema; a value the bank cannot store (out of range, too long); a message that contradicts stored state; any refusal by a database constraint or guard; a permanent class of decision 49; any exception the handler did not anticipate. | Roll back; in a new transaction insert the quarantine row and the audit entry `REGISTRY_MESSAGE_QUARANTINED`; commit; acknowledge; continue with the next message. For an unanticipated exception also one `error` log record with `exception_type`. |
+
+Rules that make the class hold:
+
+1. **Validation before use.** Every outbox message is validated against the full `registry.yaml` schema before any handler runs: types, patterns, bounds, `uniqueItems`, required fields. On top of the schema, every integer that will be stored must fit its column (1 to 9223372036854775807 for sequence numbers and positions). A failure is poison with reason `SCHEMA_MISMATCH` or `VALUE_OUT_OF_RANGE`. Unknown extra fields are ignored (additive evolution). The same full validation applies to every registry and key holder response (decision 49, `MALFORMED_RESPONSE`).
+2. **Checkpoints.** A CHECKPOINT message that passes rule 1 is handled by SPEC 15.3: every verification failure is stored in `checkpoints_seen` with its reason and acknowledged. One that fails rule 1 is quarantined, and a quarantined CHECKPOINT activates the halt rule (decision 56).
+3. **Messages that contradict stored state.** A CASE_UPDATE for an alert that is already CLEARED or ESCALATED: same status as stored is a repeat, acknowledged with no change; a different status is poison, reason `CONTRADICTS_STORED_STATE`, and the alert is not touched. An ALERT for a `(case, loan)` the bank already holds: identical facts is a repeat; different role, match kind, basis or kinds is poison with the same reason.
+4. **Deferral is bounded.** New table `registry_outbox_attempts` (`message_id uuid` PK, `attempts int`, `last_reason text`, `last_at timestamptz`; app role SELECT, INSERT, UPDATE; rows are removed never, a row is simply left when its message is finally handled). Each deferral increments it in its own transaction. At 5 deferrals the message becomes poison with reason `REPEATED_FAILURE`.
+5. **The sync can never starve the pipeline.** In the worker loop, whatever the sync does, including raising, the worker goes on to pick and run a stage. `worker --once` runs every runnable stage even if the sync failed, reports the sync failure in its result, and exits 1 only after the work is done. `registry sync` as a command exits 1 only when it could not reach the registry or the database.
+6. **Reasons.** `registry_messages_quarantined.reason` is one of `SCHEMA_MISMATCH`, `VALUE_OUT_OF_RANGE`, `CONTRADICTS_STORED_STATE`, `REFUSED_BY_DATABASE`, `REJECTED_BY_DEPENDENCY`, `REPEATED_FAILURE`, `OVERSIZED`, `UNEXPECTED_ERROR`. (`UNKNOWN_ASSET_TOKEN_FORMAT` of decision 57 is covered by `SCHEMA_MISMATCH`.) The audit detail carries the message type, the reason, the payload hash, and for `REFUSED_BY_DATABASE` the SQLSTATE.
+7. **An alert that cannot be matched to a loan** stays as SPEC 14.2 says (audit `ALERT_UNMATCHED`, acknowledge); it is not poison.
+
+Tests, each asserting: the row is quarantined with the stated reason, the audit entry exists, the message is acknowledged, the next message in the same poll is applied, a tape uploaded afterwards advances, and the integrity report shows the section BROKEN:
+
+- the two checkpoint messages of review F1 (a sequence number of 2^63, a 31 digit `last_event_seq`);
+- the CASE_UPDATE of review F2 on a CLEARED alert;
+- an ALERT repeated with different kinds; an ALERT with duplicate kinds; an ALERT without `opened_seq`;
+- a handler made to raise an arbitrary exception through the injected `FaultInjector`;
+- a message deferred five times;
+- a sync that raises while a tape is waiting (the tape still advances).
+
+### 86. Alerts guard: status and case status move together (BANK-09)
+
+`alerts` gets a check constraint: `(status IN ('NEW','REVIEWING') AND case_status = 'OPEN') OR (status = 'CLEARED' AND case_status IN ('CLEARED_DATA_ERROR','CLEARED_LATE_RELEASE')) OR (status = 'ESCALATED' AND case_status = 'CONFIRMED')`. The guard of decision 47 keeps refusing every change to a CLEARED or ESCALATED row and every transition outside SPEC 8.5 (SQLSTATE `OP006`); with the constraint, an alert can no longer close without its case, and `ResubmitLoan` can no longer see a cleared alert whose case is open. The three statements of review F3 are tests and must be refused.
+
+### 87. What may change on a row, column by column (bank quality findings 6 and 10, open question 3)
+
+Each guarded table classifies every one of its columns as immutable, conditionally mutable or mutable, and a test fails when a column exists that is not classified. One parametrised integration test per table then tries to change each immutable column alone, for each role and for each relevant row state, and expects the guard's SQLSTATE. A guard clause that can be deleted without a test failing does not exist as far as the suite knows; this is what makes it exist.
+
+| Table | Always immutable after insert | Conditionally mutable | Whole row frozen when |
+|---|---|---|---|
+| `loans` | `loan_id`, `facility_id`, `vin`, `first_submission_id`, `created_at` (`OP003`) | `borrower_ref`, `origination_date`, `original_amount_cents`, `lender_loan_number`: only while no `loan_tokens` row exists for the loan (`OP003`) | `state = 'RELEASED'` (`OP002`) |
+| `tape_submissions` | the columns of SPEC 12.4 point 4 and of decision 25 (`OP004`) | `attempts`, `next_attempt_at`: only while the status is not COMPLETED and not FAILED; failure columns as decision 46 | `status = 'COMPLETED'` (`OP004`) |
+| `alerts` | the columns of decision 47, plus `explanation_text`, `explanation_source` (`OP006`) | `bank_position`, `position_submitted_at`: null to a value once; `note`, `reviewed_by`, `reviewed_at`: while NEW or REVIEWING | status CLEARED or ESCALATED (`OP006`) |
+
+`facility_id` and `vin` move to the always immutable group: the repository never updates them, and re-presentation finds the loan by exactly that pair.
+
+### 88. The integrity report's text and JSON forms cannot differ (AUD-05)
+
+The text renderer and the JSON renderer walk the same list of sections and the same list of failures; neither has its own. The text report shows all sections of the JSON report, and under "Open failures" lists every finding that currently makes a section BROKEN (quarantined messages with their reason, failed checkpoints, requests without a verified certificate, evidence problems, false controls with their violation codes). Failures that were later recovered appear under a separate heading "Recovered (evidence kept)". A test renders both forms from one report object with every section BROKEN and asserts every section name and every failure id appears in both.
+
+### 89. Evidence that has disappeared is a finding (replaces point 5 of decision 61; bank quality finding 2)
+
+A report that says OK after certificates, checkpoints or audit entries were deleted is not acceptable. Absence is checked in three ways.
+
+**(a) Expected proofs, checked live by `GET /v1/integrity` and by the report command (cheap queries):**
+
+- Certificates. For every tape with status COMPLETED, every one of its registry requests with a stored answer must have a verified certificate row. A request without one is listed in `certificates.failures` with the certificate id the registry announced and reason `CERTIFICATE_MISSING`. `total` is the number of answered requests of all tapes; `verified` the number of those with a verified row. `status` is BROKEN when any answered request of a COMPLETED tape lacks a verified row, or any answered request of any tape has a failed row and no verified row (decision 61). A request of a tape still in progress with no row at all is not yet a failure.
+- Checkpoints. If any registry request has a stored answer and no verified checkpoint row exists, `registry_chain` is BROKEN, not NOT_VERIFIED. NOT_VERIFIED is only for a bank that has never had an answer from the registry.
+
+**(b) Reconciliation with the audit log, done by deep verification:**
+
+- Every audit entry that records the creation of a proof names the row's primary key as `object_id`: `CERTIFICATE_VERIFIED` and `CERTIFICATE_REJECTED` (the `certificate_row_id`), `CHECKPOINT_VERIFIED` and `CHECKPOINT_REJECTED` (the `checkpoint_id`), `REGISTRY_MESSAGE_QUARANTINED` (the `quarantine_id`), `INTEGRITY_VERIFICATION_RUN` (the `run_id`), `TAPE_UPLOADED` and `RELEASE_REQUESTED` (the `submission_id`).
+- Deep verification compares, for each of these, the set of ids in the audit log with the set of primary keys in the table. An id in the audit log with no row is `ROW_MISSING`. A row with no audit entry is `ROW_UNAUDITED`.
+- Stored checkpoint sequence numbers (verified and failed rows together) must be consecutive from the lowest to the highest; a hole is `SEQUENCE_GAP`.
+- Every tape must have its `TAPE_UPLOADED` or `RELEASE_REQUESTED` entry and its `row_count` rows in `loans_raw`; every loan must have its creating `LOAN_STATE_CHANGED` entry (`from` null). A missing entry is `ROW_UNAUDITED` on that table.
+
+**(c) The end of the audit log:**
+
+- Every stored `integrity_runs.report` records the audit log's `last_seq` and `last_entry_hash` at the time of the run. The next deep verification requires the log to still contain that seq with that hash and to be at least that long. If not: `AUDIT_TAIL_MISSING`, `audit_log` BROKEN.
+
+Findings of (b) are reported in a new report section `evidence` with `status` and a list `problems` of `{table, row_id, problem}` where `problem` is `ROW_MISSING`, `ROW_UNAUDITED` or `SEQUENCE_GAP`. The section is BROKEN when the list is not empty. `AUDIT_TAIL_MISSING` sets `audit_log.first_bad_seq` to the missing seq.
+
+What remains outside reach, stated in `THREAT_MODEL_L1.md` by WP5: a superuser who deletes the proof rows, the matching audit entries, every later audit entry and every integrity run consistently, and rebuilds the chain. Nothing inside one database can detect that; an off-host copy of the head hash would, and none exists yet (SPEC 23, limitation 13).
+
+Tests: each deletion the reviewer made (one certificate, all certificates, one checkpoint, the newest six, all checkpoints, all audit rows, the newest audit rows) turns the report BROKEN and names the table and, where it can be known, the rows.
+
+### 90. Controls prove the guard is the one that was shipped (bank quality finding 3)
+
+A trigger control is true only when all of these hold for every trigger it covers: the trigger exists on the table; `tgenabled` is `O` or `A`; `tgtype` equals the expected value (timing, level and the full set of events, so a trigger recreated for TRUNCATE only is false); the trigger calls the expected function; and the SHA-256 of that function's stored source (`pg_proc.prosrc`) equals the expected hash.
+
+The expected values are a guard manifest in the bank agent's `infrastructure/db/` (trigger name, table, `tgtype`, function name, source hash). A test migrates a fresh database to head and asserts the manifest equals what is installed, so the manifest cannot drift from the migrations. A migration that changes a guard changes the manifest in the same commit.
+
+Tests: replacing `onepledge_forbid_mutation()` with a function that returns NULL, replacing `onepledge_loans_guard()` with `RETURN NEW`, and recreating `audit_log_insert_only` for TRUNCATE only each turn the matching control false.
+
+### 91. Killing tests for the two surviving mutations (bank quality findings 1 and 6)
+
+- **Held loans are never tokenised.** (i) A unit test of `TokenizeLoans` with a submission holding one PENDING and one HELD_LOCAL loan asserts that the blinder and both key holder clients received the eight inputs of the PENDING loan only, and that no token exists for the held loan. (ii) The three bank replay test asserts, per bank: no `loan_tokens` row for any loan in HELD_LOCAL; no `registry_request_items` row for any such loan; the element count each key holder double received from the bank equals the bank's `loan_tokens` row count; the item count the registry double received equals the bank's answered request items. These are RUBRIC E2E-05 (a) to (d) as assertions.
+- **Guard clauses.** Decision 87's column by column test.
+
+RUBRIC TEST-04's mutation list gains two that reviewers apply from now on: (12) remove the PENDING filter in `TokenizeLoans`; (13) remove any one column from any guard's immutable list. Each must fail a test.
+
+### 92. Open questions of the bank implementer
+
+| Question | Ruling |
+|---|---|
+| Unit tests that read committed files or write to `tmp_path` | Decision 77. |
+| Role check on one-shot commands | Decision 72: every command that connects with `DATABASE_URL`, with `integrity report` exempt. |
+| `facility_id` and `vin` on a loan without tokens | Always immutable. Decision 87. |
+| The memory store does not refuse what the database refuses | **Required now, not later.** The refusals are part of each repository port's contract. Each port documents the writes it must refuse and raises one port level error for them (`StoreRefusedError` with the guard code `OP001` to `OP006` or `UNIQUE`); the PostgreSQL repositories map the SQLSTATEs to it and the in-memory repositories raise it themselves. The behavioural test class of decision 63 gains refusal cases run against both: a tape saved two steps ahead; a forged resume; a loan saved in an illegal state; a change of an immutable column; a second write of the same check, token, certificate delivery or checkpoint; an alert closed without its case. A use case that double steps must fail its unit test, not only its integration test. |
+
+### 93. Remaining quality findings of bank review 2
+
+| # | Finding | Ruling |
+|---|---|---|
+| 4 | The live report sees fewer grants than the startup check | **Fix.** Decision 72 (one function). |
+| 5 | Interrupted test runs leave databases and roles | **Fix.** Decision 76. |
+| 7 | Last resort sentence and no `error` record on one-shot commands; `db provision` with a non-superuser | **Fix.** Decisions 78 and 85 (the two database refusals no longer reach the last resort). |
+| 8 | `integrity report` exits with `SCHEMA_NOT_CURRENT` instead of showing the control false | **Fix.** `integrity report` is exempt from the "schema at head" startup check as it is from the role guard; it prints the report with `SCHEMA_AT_MIGRATION_HEAD` false and exits 1 (decision 78). If the schema is so far off that a query fails, that section is shown as `NOT_VERIFIED` with the reason and the rest is still printed. |
+| 9 | Duplicate kinds accepted silently | **Fix.** Decision 85, rule 1. |
+| 10 | Mutable fields outside decision 47's list | **Fix.** Decision 87. |
+| 11 | A missing `BANK_CODE` is accepted by `worker` and `registry sync` | **Fix now.** `BANK_CODE` and `BANK_NAME` are required by every runtime command; a log record without the bank it belongs to is not acceptable in a multi-bank deployment. This ends the intermediate state decision 29 allowed for these two variables. |
+| 12 | Wording, test names, table width | **Fix.** Decisions 77 and 78. |
+
+### 94. A limitation that this round makes explicit
+
+Failed checkpoints, quarantined messages and evidence problems are never removed, so the sections that report them stay BROKEN and (for checkpoints) the halt rule stays active until an operator turns it off. There is no workflow in layer 1 for an authorised person to record that a finding was investigated and accepted. That is deliberate for now (evidence is never edited) and is a known limitation: WP5 adds it to the README's limitations and to `THREAT_MODEL_L1.md` in these words. Building such a workflow needs its own decision.
+
+## E. Contract and rubric reading
+
+### 95. Contract changes (draft, additive)
+
+This commit does not touch the YAML files. The WP1 implementer makes exactly these edits, re-runs `onepledge-contracts check`, and changes nothing else:
+
+- `registry.yaml`, description, after the Rule C paragraph: the sentence of decision 81, finding 10.
+- `bank_agent.yaml`, `CertificateSection.failures[].failure_reason`: add the enum value `CERTIFICATE_MISSING`.
+- `bank_agent.yaml`: new optional property `evidence` on `IntegrityReport`, referring to a new schema `EvidenceSection`: object, `additionalProperties: false`, required `status` and `problems`; `status` refers to `IntegrityStatus`; `problems` is an array of objects (`additionalProperties: false`, required `table`, `row_id`, `problem`) with `table` a string matching `^[a-z_]{1,64}$`, `row_id` a string or null, `problem` one of `ROW_MISSING`, `ROW_UNAUDITED`, `SEQUENCE_GAP`.
+
+### 96. How reviewers read the rubric from now on
+
+| Rubric text | Read as |
+|---|---|
+| SEC-02 | The role is least-privilege by decision 72: each of its six points is attacked with at least one hand-made violation, including a column-level grant; the guard refuses and the report shows it. The guarded and exempt commands are those of decision 72. |
+| DATA-06 "read-only" | Outside records `serve` passes decision 72 with its matrix (SELECT on four tables); a column-level write grant is refused. |
+| AUD-05 | Seven sections (`evidence` added); thirteen controls (`APP_ROLE_GRANTS_EXACT` added); the text report shows the same sections and failures as the JSON (decision 88). |
+| AUD-03 | Also the deletions of decision 89 (each found and located) and the replaced or narrowed guards of decision 90 (each turns its control false). |
+| BANK-09 | Also the status and case status pairs of decision 86 and the column by column immutability of decision 87. |
+| BANK-01 | Also the inputs of decisions 82 to 84, each with exactly the stated issues, identically in the bank agent and the oracle. |
+| SEC-12, BANK-08 | Also the poison message tests of decision 85: nothing a registry sends can stop the pipeline or go unrecorded. |
+| SEC-13 | `BIND_HOST` by decision 73 on all four services. |
+| CODE-05 "19 tables" | 20 tables (`registry_outbox_attempts` added). SEC-01's insert-only list stays at ten; `registry_outbox_attempts` is mutable by design. |
+| CODE-04 | Also: each package's own architecture test enforces the size limits (decision 71). |
+| PRES-06 | Also: no broken Markdown table or list in any document (decision 71). |
+| PRES-03 | Also: at most 100 columns without `--wide`; a usage error with `--json` prints one document (decision 78). |
+| REL-02 | Selected with `-m reliability` (decision 77). |
+| TEST-01 | Markers as decision 77 defines them; both coverage numbers (decision 69). No test without a time limit (decision 76). |
+| TEST-04 | Mutations 12 and 13 of decision 91 are added to the list. |
+| Every review | Private virtual environment per reviewer (decision 81, finding 11). Scratch objects use the reviewer's own prefix, never `optest_`. |
+
+---
+
+## Round 5: changes for the WP1 implementer (`contracts/`, `datagen/`, `outside_records/`, root tooling)
+
+| # | Change | Decision |
+|---|---|---|
+| W1 | Outside records: `inspect_role()` with the six points and the grant matrix as one table; `serve` guarded by it; `db migrate`, `seed`, `clients` refuse a role that is not the owner; tests for every point including column-level grants; README sentence made true | 72 |
+| W2 | `BIND_HOST`: literal check in the loader, bind probe at `serve` start, three specific sentences, no value printed, all socket calls guarded; in outside records and both doubles; probe behind a port; tests | 73 |
+| W3 | Contract checker, `verify`, `seed`: bounded JSON and YAML loading, file named, one problem per file; paths from inside files confined to the directory | 74 |
+| W4 | Canonical UUIDs only; canonical base64 only; `client_disconnected` at info, no error record and no 500 access record | 75 |
+| W5 | Test databases named `optest_<timestamp>_<pid>_<hex>`; session start sweep of names older than two hours; SIGTERM teardown; `make test-sweep`; `pytest-timeout` with 120 s default in the root configuration; the in-process `serve` refusal tests bounded | 76 |
+| W6 | Markers per decision 77 (root configuration: add `reliability`, reword `unit`) | 77 |
+| W7 | Usage error with `--json` prints one document; last resort writes an `error` record; the wrong-cause sentences of review finding 8 corrected and made identical across services; no message ends in a colon; 100 column limit and `--wide` | 78 |
+| W8 | Outside records `db migrate`: every exception during a migration is a migration failure with the fixed sentence and a `schema_migration_failed` record; three provoked cases tested | 79 |
+| W9 | `RISTRETTO_ORDER` written with digit groups of at most eight; `web.py` split below 400 lines; the two README tables repaired | 80 |
+| W10 | Architecture test for the SPEC 2.2 size limits and a Markdown table test in each of the three packages | 71 |
+| W11 | Registry double: RELEASE never counted toward or refused by the daily item cap; test | 81.10 |
+| W12 | Oracle: control character rule and order of decision 82 confirmed by tests; neutral table gains the cases of decision 84; from now on a case's `input` is never edited | 82, 83, 84 |
+| W13 | The three YAML edits of decision 95; `onepledge-contracts check` passes | 95 |
+
+## Round 5: changes for the bank agent implementer (`bank_agent/`)
+
+| # | Change | Decision |
+|---|---|---|
+| K1 | Poison message containment exactly as decision 85: full schema and range validation before handlers; three outcomes; `registry_outbox_attempts`; quarantine reasons; sync cannot starve stages; `worker --once` and `registry sync` exit rules; the listed tests | 85 |
+| K2 | `inspect_role()` and one grant matrix used by the grants migration, the startup guard and the report; guard on every `DATABASE_URL` command except `integrity report`; mirror check on `db migrate` and `seed-reference`; control `APP_ROLE_GRANTS_EXACT`; the four `APP_ROLE_CANNOT_*` controls and `APP_ROLE_IS_NOT_OWNER_OR_SUPERUSER` derived from the same inspection; tests for every point | 72 |
+| K3 | Alerts check constraint on the status and case status pair; the three statements of review F3 refused | 86 |
+| K4 | Column classification and guards per decision 87 (`facility_id` and `vin` always immutable; RELEASED loans, COMPLETED tapes, closed alerts frozen; `explanation_*` immutable; `attempts` and `next_attempt_at` conditional); one parametrised test per table over every column; a test that every column is classified | 87 |
+| K5 | One list of sections and failures for the text and JSON reports; "Open failures" and "Recovered (evidence kept)"; test over a fully BROKEN report | 88 |
+| K6 | Absence checks: `CERTIFICATE_MISSING`; `registry_chain` BROKEN with answers and no checkpoint; audit `object_id` is the proof row's primary key; reconciliation, sequence gaps and tape and loan anchors in deep verification; audit tail check against the last integrity run; `evidence` section; tests for every deletion in the review | 89 |
+| K7 | Guard manifest (trigger, table, `tgtype`, function, source hash); controls compare against it; drift test against a freshly migrated database; the three replacement tests | 90 |
+| K8 | Killing tests: `TokenizeLoans` unit test with a held loan; replay assertions for tokens, items and the doubles' counters | 91 |
+| K9 | `StoreRefusedError` in the port contracts; in-memory repositories refuse what the database refuses; refusal cases in the shared behavioural test classes | 92 |
+| K10 | `BIND_HOST` read only by `serve`, by the rule of decision 73 (loader check now; the probe when WP4 adds `serve`); removed from every other command's settings | 73 |
+| K11 | `BANK_CODE` and `BANK_NAME` required by every runtime command | 93.11 |
+| K12 | `integrity report`: exempt from the head check, shows the control false, exits 1 when BROKEN and 0 when OK; `integrity verify` the same exit rule | 78, 93.8 |
+| K13 | Test databases, sweep, SIGTERM teardown and time limits as W5 (prefix `optest_`); markers as decision 77, including `reliability` and honest test names; the vector test marked `contract`; the `tmp_path` test moved or rewritten | 76, 77 |
+| K14 | `text_fields.py`: normalise, record, then validate; the new neutral table cases pass in the bank agent and in `bank_testkit/independent.py` | 83, 84 |
+| K15 | Command line details of decision 78: usage error with `--json`, `error` record on last resort, real-cause sentences, 100 columns and `--wide`, `seed-reference` counts, `--debug` help text | 78 |
+| K16 | `db migrate` failure handling as decision 79 | 79 |
+| K17 | Architecture test for the size limits and a Markdown table test in `bank_agent` | 71 |
+| K18 | Canonical UUID and base64 rules and the `client_disconnected` record built into the HTTP layer when WP4 writes it; canonical validation of ids in registry answers and messages now | 75 |
+
+Order: W12 and W13 before K14 and K6 (the bank agent needs the new table cases and the contract fields). Everything else is independent.
