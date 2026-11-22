@@ -6,8 +6,8 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date
 
-from bank_testkit.clocks import CountingIds, ManualClock
 from bank_testkit.memory import MemoryStore, MemoryUnits
+from bank_testkit.memory.clocks import CountingIds, ManualClock
 from onepledge_bank_agent.application.faults import FaultPoint
 from onepledge_bank_agent.application.ports import LogValue
 from onepledge_bank_agent.application.runtime import Runtime

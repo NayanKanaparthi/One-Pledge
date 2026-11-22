@@ -1,92 +1,89 @@
-"""`SeedReferenceData` and the reference file reader."""
+"""`SeedReferenceData`: one bank's lenders and facilities upserted in one audited transaction."""
 
 from __future__ import annotations
 
-import hashlib
-import json
 import uuid
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 
 import pytest
 
-from bank_testkit.world import World
+from bank_testkit.memory import MemoryStore, MemoryUnits
+from bank_testkit.records import lei
+from onepledge_bank_agent.application.ports import ReferenceData
 from onepledge_bank_agent.application.seed_reference import SeedReferenceData, UpsertCounts
-from onepledge_bank_agent.domain.audit import Actor
+from onepledge_bank_agent.domain.audit import Actor, AuditDraft
+from onepledge_bank_agent.domain.entities import Facility, Lender
 from onepledge_bank_agent.domain.enums import AuditAction, AuditObjectType, FacilityStatus
 from onepledge_bank_agent.domain.errors import ReferenceDataError
-from onepledge_bank_agent.infrastructure.seed_reference_file import ReferenceFileSource
+from onepledge_bank_agent.domain.values import Lei
 
 pytestmark = pytest.mark.unit
 
-LENDERS = [
-    {
-        "lender_id": str(uuid.uuid4()),
-        "lender_code": "SUMMIT",
-        "legal_name": "Summit Auto Finance LLC",
-        "lei": "00000ONEPLEDGESUM134",
-    },
-    {
-        "lender_id": str(uuid.uuid4()),
-        "lender_code": "LAKESIDE",
-        "legal_name": "Lakeside Motor Credit Inc",
-        "lei": "00000ONEPLEDGELAK198",
-    },
-]
+DATA_DIR = Path("reference-data")
+SUMMIT = Lender(uuid.uuid4(), "Summit Auto Finance LLC", Lei(lei("00000ONEPLEDGESUM1")))
+SUMMIT_LINE = Facility(
+    uuid.uuid4(), SUMMIT.lender_id, "HARBOR-SUMMIT", "HARBOR-SUMMIT line", 7_500_000_000, 8500,
+    FacilityStatus.ACTIVE, date(2025, 3, 1),
+)  # fmt: skip
 
 
-def facility(code: str, bank: str, lender: str) -> dict[str, object]:
-    return {
-        "facility_id": str(uuid.uuid4()), "facility_code": code, "bank_code": bank, "lender_code": lender,
-        "name": f"{code} line", "credit_limit_cents": 7_500_000_000, "advance_rate_bps": 8500,
-        "opened_on": "2025-03-01",
-    }  # fmt: skip
+class FixedReference:
+    """A `ReferenceSource` answering one bank's data, or refusing with one sentence."""
+
+    def __init__(self, data: ReferenceData | None, sentence: str = "") -> None:
+        self.data = data
+        self.sentence = sentence
+        self.loaded: list[tuple[Path, str]] = []
+
+    def load(self, data_dir: Path, bank_code: str) -> ReferenceData:
+        """The data, or `ReferenceDataError`."""
+        self.loaded.append((data_dir, bank_code))
+        if self.data is None:
+            raise ReferenceDataError(self.sentence)
+        return self.data
 
 
-def write(directory: Path, content: object) -> Path:
-    (directory / "reference.json").write_text(json.dumps(content), encoding="utf-8")
-    return directory
+def seeded(store: MemoryStore) -> list[AuditDraft]:
+    """The committed `REFERENCE_DATA_SEEDED` drafts."""
+    return [d for d in store.state.audit if d.action is AuditAction.REFERENCE_DATA_SEEDED]
 
 
-def test_one_banks_lenders_and_facilities_are_upserted_and_status_is_kept(tmp_path: Path) -> None:
-    facilities = [
-        facility("HARBOR-SUMMIT", "HARBOR", "SUMMIT"),
-        facility("NORTHGATE-LAKESIDE", "NORTHGATE", "LAKESIDE"),
-    ]
-    directory = write(tmp_path, {"banks": [], "lenders": LENDERS, "facilities": facilities, "demo_users": []})
-    world = World()
-    seeder = SeedReferenceData(world.units, ReferenceFileSource(), "cli")
-    result = seeder.run(directory, "HARBOR")
+def test_lenders_and_facilities_are_upserted_and_a_facilitys_status_is_kept() -> None:
+    store = MemoryStore()
+    source = FixedReference(ReferenceData((SUMMIT,), (SUMMIT_LINE,), "a" * 64))
+    seeder = SeedReferenceData(MemoryUnits(store), source, "cli")
+    result = seeder.run(DATA_DIR, "HARBOR")
     assert (result.lenders, result.facilities) == (UpsertCounts(1, 0, 0), UpsertCounts(1, 0, 0))
-    seeded_id = uuid.UUID(str(facilities[0]["facility_id"]))
-    stored = world.store.state.facilities[seeded_id]
-    assert stored.code == "HARBOR-SUMMIT" and stored.status is FacilityStatus.ACTIVE
-    world.store.state.facilities[seeded_id] = replace(stored, status=FacilityStatus.SUSPENDED)
-    again = seeder.run(directory, "HARBOR")
+    assert source.loaded == [(DATA_DIR, "HARBOR")]
+    stored = store.state.facilities[SUMMIT_LINE.facility_id]
+    assert stored == SUMMIT_LINE
+    store.state.facilities[SUMMIT_LINE.facility_id] = replace(stored, status=FacilityStatus.SUSPENDED)
+    again = seeder.run(DATA_DIR, "HARBOR")
     assert (again.lenders, again.facilities) == (UpsertCounts(0, 0, 1), UpsertCounts(0, 0, 1))
-    assert world.store.state.facilities[seeded_id].status is FacilityStatus.SUSPENDED
-    facilities[0]["name"] = "renamed line"
-    changed = seeder.run(write(tmp_path, {"lenders": LENDERS, "facilities": facilities}), "HARBOR")
+    assert store.state.facilities[SUMMIT_LINE.facility_id].status is FacilityStatus.SUSPENDED
+    source.data = ReferenceData((SUMMIT,), (replace(SUMMIT_LINE, name="renamed line"),), "b" * 64)
+    changed = seeder.run(DATA_DIR, "HARBOR")
     assert (changed.lenders, changed.facilities) == (UpsertCounts(0, 0, 1), UpsertCounts(0, 1, 0))
+    assert store.state.facilities[SUMMIT_LINE.facility_id].name == "renamed line"
+    assert store.state.facilities[SUMMIT_LINE.facility_id].status is FacilityStatus.SUSPENDED
 
 
-def test_every_run_is_audited_with_the_file_hash_and_the_counts(tmp_path: Path) -> None:
-    directory = write(
-        tmp_path, {"lenders": LENDERS, "facilities": [facility("HARBOR-SUMMIT", "HARBOR", "SUMMIT")]}
-    )
-    world = World()
-    seeder = SeedReferenceData(world.units, ReferenceFileSource(), "cli")
-    seeder.run(directory, "HARBOR")
-    seeder.run(directory, "HARBOR")
-    first, second = world.audit(AuditAction.REFERENCE_DATA_SEEDED)
+def test_every_run_is_audited_with_the_file_hash_and_the_counts() -> None:
+    store = MemoryStore()
+    source = FixedReference(ReferenceData((SUMMIT,), (SUMMIT_LINE,), "c" * 64))
+    seeder = SeedReferenceData(MemoryUnits(store), source, "cli")
+    seeder.run(DATA_DIR, "HARBOR")
+    seeder.run(DATA_DIR, "HARBOR")
+    first, second = seeded(store)
     assert (first.actor, first.object_type, first.object_id) == (
         Actor.system(),
         AuditObjectType.REFERENCE_DATA,
         None,
     )
-    digest = hashlib.sha256((directory / "reference.json").read_bytes()).hexdigest()
     assert dict(first.detail) == {
-        "via": "cli", "source_sha256": digest,
+        "via": "cli", "source_sha256": "c" * 64,
         "lenders": {"inserted": 1, "updated": 0, "unchanged": 0},
         "facilities": {"inserted": 1, "updated": 0, "unchanged": 0},
     }  # fmt: skip
@@ -95,48 +92,30 @@ def test_every_run_is_audited_with_the_file_hash_and_the_counts(tmp_path: Path) 
     )
 
 
-def test_a_refused_file_writes_no_entry(tmp_path: Path) -> None:
-    world = World()
+def test_a_refused_source_writes_nothing_and_no_entry() -> None:
+    store = MemoryStore()
+    seeder = SeedReferenceData(
+        MemoryUnits(store), FixedReference(None, "reference.json is not valid."), "cli"
+    )
+    with pytest.raises(ReferenceDataError) as raised:
+        seeder.run(DATA_DIR, "HARBOR")
+    assert raised.value.sentence == "reference.json is not valid."
+    assert (store.state.audit, store.state.lenders, store.commits) == ([], {}, 0)
+
+
+def test_a_conflicting_lender_rolls_the_whole_run_back() -> None:
+    store = MemoryStore()
+    clash = Lender(uuid.uuid4(), "Another name LLC", SUMMIT.lei)
+    other_line = replace(SUMMIT_LINE, facility_id=uuid.uuid4(), code="HARBOR-OTHER")
+    seeder = SeedReferenceData(
+        MemoryUnits(store), FixedReference(ReferenceData((SUMMIT,), (SUMMIT_LINE,), "d" * 64)), "cli"
+    )
+    seeder.run(DATA_DIR, "HARBOR")
+    refused = SeedReferenceData(
+        MemoryUnits(store), FixedReference(ReferenceData((clash,), (other_line,), "e" * 64)), "cli"
+    )
     with pytest.raises(ReferenceDataError):
-        SeedReferenceData(world.units, ReferenceFileSource(), "cli").run(tmp_path, "HARBOR")
-    assert world.audit() == []
-
-
-@pytest.mark.parametrize(
-    ("content", "sentence"),
-    [
-        (None, "cannot read {dir}/reference.json: no such file."),
-        ("{not json", "{dir}/reference.json is not a valid reference data file."),
-        ({"lenders": LENDERS, "facilities": []}, "reference.json has no facility for the bank code HARBOR."),
-        (
-            {"lenders": [], "facilities": [facility("HARBOR-SUMMIT", "HARBOR", "SUMMIT")]},
-            "reference.json names a lender that it does not define.",
-        ),
-        (
-            {
-                "lenders": [{**LENDERS[0], "lei": "00000ONEPLEDGESUM135"}],
-                "facilities": [facility("HARBOR-SUMMIT", "HARBOR", "SUMMIT")],
-            },
-            "reference.json has an invalid lei.",
-        ),
-        (
-            {"lenders": LENDERS, "facilities": [facility("bad code", "HARBOR", "SUMMIT")]},
-            "reference.json has an invalid facility_code.",
-        ),
-    ],
-)
-def test_an_unusable_file_is_one_sentence(tmp_path: Path, content: object, sentence: str) -> None:
-    if isinstance(content, str):
-        (tmp_path / "reference.json").write_text(content, encoding="utf-8")
-    elif content is not None:
-        write(tmp_path, content)
-    with pytest.raises(ReferenceDataError) as raised:
-        ReferenceFileSource().load(tmp_path, "HARBOR")
-    assert raised.value.sentence == sentence.format(dir=tmp_path)
-
-
-def test_a_reference_path_that_is_a_directory_is_named_in_the_sentence(tmp_path: Path) -> None:
-    (tmp_path / "reference.json").mkdir()
-    with pytest.raises(ReferenceDataError) as raised:
-        ReferenceFileSource().load(tmp_path, "HARBOR")
-    assert raised.value.sentence == f"cannot read {tmp_path}/reference.json: is a directory."
+        refused.run(DATA_DIR, "HARBOR")
+    assert list(store.state.lenders) == [SUMMIT.lender_id]
+    assert list(store.state.facilities) == [SUMMIT_LINE.facility_id]
+    assert len(seeded(store)) == 1

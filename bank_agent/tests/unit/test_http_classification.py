@@ -16,7 +16,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from bank_testkit.clocks import CountingIds
+from bank_testkit.memory.clocks import CountingIds
 from onepledge_bank_agent.domain.enums import FailureReason
 from onepledge_bank_agent.domain.errors import PipelineStageError
 from onepledge_bank_agent.domain.vin import Vin

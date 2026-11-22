@@ -13,10 +13,10 @@ import pytest
 from sqlalchemy import Engine
 
 from bank_testkit.audit_chain import first_broken_seq
-from bank_testkit.clocks import ManualClock
 from bank_testkit.data import seed_reference
 from bank_testkit.database import BankDatabase, insert_user, pairs
 from bank_testkit.doubles import InProcessDoubles
+from bank_testkit.memory.clocks import ManualClock
 from bank_testkit.outside import InProcessOutsideRecords
 from bank_testkit.pipeline import BankAgentHarness, Services
 from bank_testkit.tapes import SUMMIT_LAYOUT, summit_row, summit_tape

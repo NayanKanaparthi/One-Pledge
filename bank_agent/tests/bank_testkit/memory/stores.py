@@ -1,7 +1,10 @@
 """In-memory implementations of the persistence ports, for unit tests of the use cases (no I/O).
 
 A unit of work copies the store when it opens and replaces it on commit, so leaving
-without commit discards everything, as a database transaction would.
+without commit discards everything, as a database transaction would. The audit log is
+chained at commit with the domain's own chain rule (`chain_entry`), so a test can read
+it back, verify it, or break it. The behaviour of every repository is pinned by the
+shared port tests of `tests/ports/`, which run against these and against PostgreSQL.
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ from onepledge_bank_agent.domain.entities import (
     RegistryRequest,
 )
 from onepledge_bank_agent.domain.enums import LoanState, RequestOrigin, RowDisposition, TapeStatus, TokenKind
-from onepledge_bank_agent.domain.errors import ConcurrentUploadError
+from onepledge_bank_agent.domain.errors import ConcurrentUploadError, ReferenceDataError
 from onepledge_bank_agent.domain.integrity import DatabaseControl
 from onepledge_bank_agent.domain.loan import Loan
 from onepledge_bank_agent.domain.raw_evidence import StoredRow, StoredTape
@@ -60,6 +63,7 @@ class MemoryState:
     lenders: dict[uuid.UUID, Lender] = field(default_factory=dict)
     facilities: dict[uuid.UUID, Facility] = field(default_factory=dict)
     audit: list[AuditDraft] = field(default_factory=list)
+    audit_log: list[AuditEntry] = field(default_factory=list)
 
 
 class MemoryStore:
@@ -87,6 +91,9 @@ class _Tapes:
             winner = self._store.race_winner
             if winner is not None:
                 self._store.state.tapes[winner.submission_id] = winner
+            raise ConcurrentUploadError
+        facts = tape.facts
+        if self.find_by_file(facts.facility_id, facts.kind.value, facts.file_sha256) is not None:
             raise ConcurrentUploadError
         self._state.tapes[tape.submission_id] = copy.deepcopy(tape)
         self._state.layouts[tape.submission_id] = layout
@@ -215,7 +222,12 @@ class _Tokens:
         return {loan_id for loan_id in loan_ids if self._state.tokens.get(loan_id)}
 
     def for_loans(self, loan_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, tuple[Token, ...]]:
-        return {i: tuple(self._state.tokens[i]) for i in set(loan_ids) if self._state.tokens.get(i)}
+        order = {kind: index for index, kind in enumerate(TokenKind)}
+        return {
+            i: tuple(sorted(self._state.tokens[i], key=lambda t: (t.key_version, order[t.kind])))
+            for i in set(loan_ids)
+            if self._state.tokens.get(i)
+        }
 
     def add_many(self, tokens: Mapping[uuid.UUID, Sequence[Token]], at: datetime) -> None:
         for loan_id, loan_tokens in tokens.items():
@@ -294,6 +306,12 @@ class _Certificates:
         held = ((c.certificate_id, c.delivered_body_sha256, c.signature) for c in self._state.certificates)
         if delivery in held:
             return False
+        proven = [c for c in self._state.certificates if c.verified]
+        if certificate.verified and any(
+            c.certificate_id == certificate.certificate_id or c.request_id == certificate.request_id
+            for c in proven
+        ):
+            return False
         self._state.certificates.append(certificate)
         return True
 
@@ -302,7 +320,7 @@ class _Certificates:
         return {c.request_id: c for c in self._state.certificates if c.verified and c.request_id in wanted}
 
     def all(self) -> list[Certificate]:
-        return list(self._state.certificates)
+        return sorted(self._state.certificates, key=lambda c: (c.received_at, c.certificate_row_id))
 
     def expected(self) -> int:
         return sum(1 for request in self._state.requests.values() if request.certificate_id is not None)
@@ -349,14 +367,16 @@ class _Alerts:
 
     def for_case(self, registry_case_id: uuid.UUID, loan_ids: Iterable[uuid.UUID]) -> list[Alert]:
         wanted = set(loan_ids)
-        return [
+        found = [
             copy.deepcopy(a)
             for a in self._state.alerts.values()
             if a.record.registry_case_id == registry_case_id and a.record.loan_id in wanted
         ]
+        return sorted(found, key=lambda a: a.record.alert_id)
 
     def for_loan(self, loan_id: uuid.UUID) -> list[Alert]:
-        return [copy.deepcopy(a) for a in self._state.alerts.values() if a.record.loan_id == loan_id]
+        found = [copy.deepcopy(a) for a in self._state.alerts.values() if a.record.loan_id == loan_id]
+        return sorted(found, key=lambda a: (a.record.received_at, a.record.alert_id))
 
     def add(self, alert: Alert) -> None:
         self._state.alerts[alert.record.alert_id] = copy.deepcopy(alert)
@@ -391,7 +411,9 @@ class _Checkpoints:
         return any(not c.verified for c in self._state.checkpoints)
 
     def all(self) -> list[Checkpoint]:
-        return sorted(self._state.checkpoints, key=lambda c: c.checkpoint_seq)
+        return sorted(
+            self._state.checkpoints, key=lambda c: (c.checkpoint_seq, c.received_at, c.checkpoint_id)
+        )
 
 
 class _IntegrityRuns:
@@ -402,7 +424,8 @@ class _IntegrityRuns:
         self._state.integrity_runs.append(run)
 
     def latest(self) -> IntegrityRun | None:
-        return self._state.integrity_runs[-1] if self._state.integrity_runs else None
+        runs = sorted(self._state.integrity_runs, key=lambda run: run.run_id)
+        return max(runs, key=lambda run: run.ran_at, default=None)
 
 
 AUDIT_TIME = datetime(2026, 11, 20, tzinfo=UTC)
@@ -438,19 +461,14 @@ class _History:
         self._state = state
 
     def audit_entries(self) -> Iterator[AuditEntry]:
-        previous: tuple[int, str] | None = None
-        for index, draft in enumerate(self._state.audit):
-            entry = chain_entry(draft, uuid.UUID(int=index + 1, version=4), AUDIT_TIME, previous)
-            previous = (entry.seq, entry.entry_hash)
-            yield entry
+        return iter(sorted(self._state.audit_log, key=lambda entry: entry.seq))
 
     def audit_size(self) -> tuple[int, int]:
-        return len(self._state.audit), len(self._state.audit)
+        return len(self._state.audit_log), max((entry.seq for entry in self._state.audit_log), default=0)
 
     def submission_ids(self) -> list[uuid.UUID]:
-        return [
-            t.submission_id for t in sorted(self._state.tapes.values(), key=lambda t: t.facts.uploaded_at)
-        ]
+        ordered = sorted(self._state.tapes.values(), key=lambda t: (t.facts.uploaded_at, t.submission_id))
+        return [t.submission_id for t in ordered]
 
     def tape(self, submission_id: uuid.UUID) -> StoredTape | None:
         tape = self._state.tapes.get(submission_id)
@@ -459,7 +477,7 @@ class _History:
             return None
         rows = tuple(
             StoredRow(r.row_number, r.text, r.cells, raw_payload(layout.header_cells, r.cells), r.row_sha256)
-            for r in self._state.raw_rows.get(submission_id, [])
+            for r in sorted(self._state.raw_rows.get(submission_id, []), key=lambda r: r.row_number)
         )
         facts = tape.facts
         return StoredTape(
@@ -478,6 +496,9 @@ class MemoryControls:
         return dict(self.state)
 
 
+CONFLICT = "The reference data conflicts with a lender or facility already stored under another id."
+
+
 class _Facilities:
     def __init__(self, state: MemoryState) -> None:
         self._state = state
@@ -489,11 +510,19 @@ class _Facilities:
         return FacilityWithLender(facility, self._state.lenders[facility.lender_id])
 
     def upsert_lender(self, lender: Lender) -> Upserted:
+        others = (held for held in self._state.lenders.values() if held.lender_id != lender.lender_id)
+        if any(held.lei == lender.lei or held.legal_name == lender.legal_name for held in others):
+            raise ReferenceDataError(CONFLICT)
         existing = self._state.lenders.get(lender.lender_id)
         self._state.lenders[lender.lender_id] = lender
         return _outcome(existing, lender)
 
     def upsert_facility(self, facility: Facility) -> Upserted:
+        others = (
+            held for held in self._state.facilities.values() if held.facility_id != facility.facility_id
+        )
+        if any(held.code == facility.code for held in others):
+            raise ReferenceDataError(CONFLICT)
         existing = self._state.facilities.get(facility.facility_id)
         if existing is not None:
             facility = Facility(**{**facility.__dict__, "status": existing.status})
@@ -545,6 +574,11 @@ class MemoryUnitOfWork:
 
     def commit(self) -> None:
         self._state.audit.extend(self._drafts)
+        for draft in self._drafts:
+            last = self._state.audit_log[-1] if self._state.audit_log else None
+            previous = (last.seq, last.entry_hash) if last is not None else None
+            audit_id = uuid.UUID(int=len(self._state.audit_log) + 1, version=4)
+            self._state.audit_log.append(chain_entry(draft, audit_id, AUDIT_TIME, previous))
         self._drafts.clear()
         self._store.state = self._state
         self._store.commits += 1

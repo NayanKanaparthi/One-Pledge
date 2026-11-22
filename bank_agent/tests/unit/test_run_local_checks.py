@@ -8,7 +8,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from bank_testkit.outside import MemoryOutsideRecords
+from bank_testkit.memory.outside_records import MemoryOutsideRecords
 from bank_testkit.tapes import summit_row, summit_tape
 from bank_testkit.world import CrashError, World
 from onepledge_bank_agent.application.clean_tape import CleanTape

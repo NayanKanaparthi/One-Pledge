@@ -20,11 +20,11 @@ from pathlib import Path
 import pytest
 
 from bank_testkit.audit_chain import first_broken_seq
-from bank_testkit.clocks import ManualClock
 from bank_testkit.data import seed_reference
 from bank_testkit.database import BankDatabase, drop, new_bank_database, pairs, provision_and_migrate
 from bank_testkit.doubles import KEY_HOLDER_URLS, REGISTRY_URL, HolderScalars, InProcessDoubles
 from bank_testkit.independent import accepted_rows, held_vins
+from bank_testkit.memory.clocks import ManualClock
 from bank_testkit.outside import InProcessOutsideRecords, OutsideService
 from bank_testkit.pipeline import BankAgentHarness, Services
 from bank_testkit.world import CrashError, Faults

@@ -16,7 +16,7 @@ from collections.abc import Callable
 import httpx
 import pytest
 
-from bank_testkit.clocks import CountingIds
+from bank_testkit.memory.clocks import CountingIds
 from onepledge_bank_agent.domain.canonical_json import canonical_json
 from onepledge_bank_agent.domain.dependency_errors import (
     CaseAlreadyResolvedError,

@@ -30,10 +30,10 @@ import pytest
 import structlog
 
 from bank_testkit.banks import ThreeBanks
-from bank_testkit.clocks import ManualClock
 from bank_testkit.data import seed_reference
 from bank_testkit.database import BankDatabase
 from bank_testkit.doubles import KEY_HOLDER_URLS, REGISTRY_URL, InProcessDoubles
+from bank_testkit.memory.clocks import ManualClock
 from bank_testkit.outside import InProcessOutsideRecords, ScriptedOutsideRecords
 from bank_testkit.pipeline import BankAgentHarness, Services
 from bank_testkit.tapes import summit_row, summit_tape
