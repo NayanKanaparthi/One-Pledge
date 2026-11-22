@@ -94,7 +94,7 @@ Key holder double:
 |---|---|---|
 | `HOLDER_ID` | required | `kh1` or `kh2`. |
 | `PORT` | required | TCP port. |
-| `BIND_HOST` | `127.0.0.1` | IP address to bind (`0.0.0.0` in containers). A value that is not an IPv4 or IPv6 address, or not an address of this machine, stops startup with one line naming `BIND_HOST`. |
+| `BIND_HOST` | `127.0.0.1` | IP address to bind (`0.0.0.0` in containers). A value that is not an IPv4 or IPv6 address, or not an address of this machine, stops startup with one line naming `BIND_HOST` and saying to set it to 127.0.0.1 or 0.0.0.0, the rule of outside records (SPEC_DECISIONS 66). |
 | `FAKE_KH_KEYS` | required | JSON object of key version to base64 scalar, for example `{"1": "<44 base64 characters>"}`. Versions are ASCII digits; every scalar must decode to 32 bytes and be neither zero nor one (modulo the group order). |
 | `FAKE_KH_ACTIVE_VERSION` | required | The version used when a request does not pin one. |
 | `FAKE_KH_MEMBERS` | required | JSON list of `{"member_id": "<uuid>", "api_key_sha256": "<64 hex>"}`. |
@@ -168,7 +168,9 @@ application/json` (parameters such as `charset` allowed), otherwise `Content-Typ
 `INVALID_VALUE`. A malformed `Content-Length` is `Content-Length` `INVALID_INTEGER` (a negative one `OUT_OF_RANGE`), one
 above 1 MiB is 413. Integer settings and header values follow the same rule as query
 integers (ASCII digits only), so a malformed numeric setting stops startup with one line
-naming the variable.
+naming the variable. Every setting is trimmed of ASCII space, tab, CR and LF at both
+ends; a value that still holds any other whitespace or a control character is refused, with
+one line naming the variable (secrets included).
 
 ## Test controls (`/_test/`, not part of any contract)
 

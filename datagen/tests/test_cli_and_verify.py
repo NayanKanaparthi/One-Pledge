@@ -266,8 +266,11 @@ def test_generate_and_verify_print_one_json_document(tmp_path: Path) -> None:
     code, document, err = run_json("verify", "--data-dir", str(target))
     assert (code, document["ok"], document["error"]["code"]) == (1, False, "VERIFICATION_FAILED")
     assert document["violations"] == [
-        "stray.txt is present but not listed in checksums.json",
-        "stray.txt is not part of what seed 7, profile example generates",
+        {"stage": "CHECKSUM", "problem": "stray.txt is present but not listed in checksums.json"},
+        {
+            "stage": "REGENERATION",
+            "problem": "stray.txt is not part of what seed 7, profile example generates",
+        },
     ]
     assert err.splitlines()[0] == f"verify: 2 problems in {target}:"
     code, document, _ = run_json("generate", "--seed", "7", "--profile", "example", "--out", str(target))

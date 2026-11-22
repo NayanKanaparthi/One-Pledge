@@ -159,7 +159,8 @@ def run(arguments: argparse.Namespace, console: Console) -> int:
         console.result({"data_dir": str(source), "files": report.files, "rows_checked": report.rows_checked})
         return 0
     sentence = f"verify: {plural(len(report.violations), 'problem')} in {source}:"
-    console.failure("VERIFICATION_FAILED", sentence, {"violations": list(report.violations)})
+    failures: list[Json] = [{"stage": f.stage.value, "problem": f.problem} for f in report.failures]
+    console.failure("VERIFICATION_FAILED", sentence, {"violations": failures})
     _list_violations(console, report.violations)
     return 1
 

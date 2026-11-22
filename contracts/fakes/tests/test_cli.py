@@ -122,7 +122,7 @@ ONE = base64.b64encode((1).to_bytes(32, "little")).decode()
         (key_holder_env(json.dumps({"1": ONE})), "FAKE_KH_KEYS must not contain a scalar of zero or one"),
         (
             {**key_holder_env(json.dumps({"1": SCALAR})), "BIND_HOST": "999.1.1.1"},
-            "BIND_HOST must be an IP address such as 127.0.0.1 or 0.0.0.0.",
+            "BIND_HOST must be an IP address of this machine; set BIND_HOST to 127.0.0.1 or 0.0.0.0.",
         ),
     ],
 )

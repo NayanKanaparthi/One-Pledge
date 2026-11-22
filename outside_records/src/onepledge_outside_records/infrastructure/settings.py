@@ -12,6 +12,7 @@ from __future__ import annotations
 import ipaddress
 import os
 import re
+import unicodedata
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Self
@@ -28,6 +29,7 @@ _ROLE_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 MAX_PORT = 65535
 _DATABASE_SCHEMES = frozenset({"postgresql", "postgresql+psycopg"})
 DEFAULT_BIND_HOST = "127.0.0.1"
+BIND_HOST_SENTENCE = "BIND_HOST must be an IP address of this machine; set BIND_HOST to 127.0.0.1 or 0.0.0.0."
 # Settings are trimmed of ASCII whitespace only; any other space is part of the value and fails it.
 ASCII_WHITESPACE = " \t\r\n"
 
@@ -55,8 +57,19 @@ def _invalid(sentence: str) -> OperatorError:
     return OperatorError(f"Configuration error: {sentence}", "CONFIGURATION_ERROR")
 
 
+def _unplain(char: str) -> bool:
+    """Whitespace other than a space, or a control or format character (Unicode categories Cc, Cf)."""
+    return (char.isspace() and char != " ") or unicodedata.category(char) in ("Cc", "Cf")
+
+
 def _value(environ: Mapping[str, str], name: str) -> str | None:
+    """The value trimmed of ASCII whitespace; any other whitespace or control character is refused.
+
+    SPEC_DECISIONS 66: this holds for every setting, secrets included.
+    """
     text = environ.get(name, "").strip(ASCII_WHITESPACE)
+    if any(_unplain(char) for char in text):
+        raise _invalid(f"{name} contains whitespace other than a space, or a control character.")
     return text or None
 
 
@@ -93,7 +106,9 @@ def _bind_host(environ: Mapping[str, str]) -> str:
     try:
         return str(ipaddress.ip_address(text))
     except ValueError:
-        raise _invalid("BIND_HOST must be an IP address such as 127.0.0.1 or 0.0.0.0.") from None
+        raise _invalid(
+            "BIND_HOST must be an IP address of this machine; set BIND_HOST to 127.0.0.1 or 0.0.0.0."
+        ) from None
 
 
 def _log_level(environ: Mapping[str, str]) -> str:
@@ -204,7 +219,7 @@ def load_admin_settings(command: str) -> AdminSettings:
 
 def read_secret_variable(name: str) -> str:
     """The value of a variable that holds a secret (for `clients add --key-env`)."""
-    value = read_environment().get(name, "")
+    value = _value(read_environment(), name)
     if not value:
         raise OperatorError(
             f"The environment variable {name} is not set; export the client key in it first.",

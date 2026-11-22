@@ -13,6 +13,7 @@ import hashlib
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from onepledge_datagen import GENERATOR_VERSION
@@ -38,18 +39,39 @@ PROFILE_VALUES = tuple(profile.value for profile in Profile)
 _PLAIN_VERSION = re.compile(r"^[0-9A-Za-z.+-]{1,32}$")
 
 
+class Stage(StrEnum):
+    """Which check of `verify` found a failure (SPEC_DECISIONS 66)."""
+
+    CHECKSUM = "CHECKSUM"
+    INVARIANT = "INVARIANT"
+    REGENERATION = "REGENERATION"
+
+
+@dataclass(frozen=True)
+class Failure:
+    """One failure of `verify`: the stage that found it and the plain sentence."""
+
+    stage: Stage
+    problem: str
+
+
 @dataclass(frozen=True)
 class VerificationReport:
     """The outcome of `verify`."""
 
-    violations: tuple[str, ...]
+    failures: tuple[Failure, ...]
     files: int
     rows_checked: int
 
     @property
     def ok(self) -> bool:
-        """Whether nothing was violated."""
-        return not self.violations
+        """Whether nothing failed."""
+        return not self.failures
+
+    @property
+    def violations(self) -> tuple[str, ...]:
+        """The sentences of the failures, in order."""
+        return tuple(failure.problem for failure in self.failures)
 
 
 def checksum_violations(files: dict[str, bytes]) -> list[str]:
@@ -147,16 +169,18 @@ class VerifyDataSet:
         files = self._directory.read(source)
         version, seed, profile = manifest_origin(files)
         check_generator_version(version)
-        violations = checksum_violations(files)
+        failures = [Failure(Stage.CHECKSUM, problem) for problem in checksum_violations(files)]
         view = self._codec.parse(files)
         report = self._checker.check(view)
-        violations.extend(report.violations)
+        failures.extend(Failure(Stage.INVARIANT, problem) for problem in report.violations)
         # The example comparison needs the oracle's observations of a consistent data set; when
         # the invariants already failed, the regeneration below names the example files anyway.
         if EXAMPLE_EXPECTED in files and not report.violations:
-            violations.extend(self._example_violations(files, view, report.observations))
-        violations.extend(regeneration_violations(files, seed, profile, self._regenerate))
-        return VerificationReport(tuple(violations), len(files), report.rows_checked)
+            examples = self._example_violations(files, view, report.observations)
+            failures.extend(Failure(Stage.INVARIANT, problem) for problem in examples)
+        regeneration = regeneration_violations(files, seed, profile, self._regenerate)
+        failures.extend(Failure(Stage.REGENERATION, problem) for problem in regeneration)
+        return VerificationReport(tuple(failures), len(files), report.rows_checked)
 
     def _example_violations(
         self, files: dict[str, bytes], view: DataSetView, observations: dict[tuple[str, int], RowObservation]

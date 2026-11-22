@@ -200,7 +200,6 @@ BAD_INTEGER_TEXTS = [
     "\u0663",
     "\uff11",
     "+1",
-    "\u00a01",
     "1 1",
     "1.0",
     "1e3",
@@ -281,3 +280,22 @@ def test_an_invalid_bind_host_is_named(host: str) -> None:
 @pytest.mark.parametrize("host", ["192.0.2.1", "127.0.0.1", "::1", "2001:db8::1"])
 def test_ip_address_bind_hosts_are_accepted(host: str) -> None:
     assert KeyHolderSettings.from_env(key_holder_env(BIND_HOST=host)).bind_host == host
+
+
+# SPEC_DECISIONS 66: values are trimmed of ASCII whitespace only; any other whitespace or a
+# control character left in the value makes it malformed, secrets included.
+@pytest.mark.parametrize("bad", ["\u00a0", "\u2028", "\x07", "\u200b", "\t"])
+@pytest.mark.parametrize("variable", ["FAKE_TEST_CONTROL_KEY", "HOLDER_ID", "LOG_LEVEL"])
+def test_a_value_with_other_whitespace_or_a_control_character_is_named(variable: str, bad: str) -> None:
+    values = {"FAKE_TEST_CONTROL_KEY": CONTROL_KEY, "HOLDER_ID": "kh1", "LOG_LEVEL": "INFO"}
+    env = key_holder_env(FAKE_TEST_CONTROLS="true", FAKE_TEST_CONTROL_KEY=CONTROL_KEY)
+    env[variable] = values[variable][:2] + bad + values[variable][2:]
+    with pytest.raises(ConfigurationError) as raised:
+        KeyHolderSettings.from_env(env)
+    assert raised.value.variable == variable
+    assert raised.value.problem == "contains whitespace other than a space, or a control character"
+
+
+def test_a_secret_with_a_trailing_newline_is_trimmed() -> None:
+    env = key_holder_env(FAKE_TEST_CONTROLS="true", FAKE_TEST_CONTROL_KEY=CONTROL_KEY + "\n")
+    assert KeyHolderSettings.from_env(env).test_control_key is not None

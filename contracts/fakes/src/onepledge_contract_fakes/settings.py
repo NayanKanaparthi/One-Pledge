@@ -14,6 +14,7 @@ import hashlib
 import ipaddress
 import os
 import re
+import unicodedata
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -62,23 +63,34 @@ class EnvironmentReader:
     def __init__(self, environ: Mapping[str, str]) -> None:
         self._environ = environ
 
+    def _raw(self, name: str) -> str:
+        """The value trimmed of ASCII whitespace; anything else that is not plain text is refused.
+
+        SPEC_DECISIONS 66: no whitespace other than a space, and no control character, may stay
+        in a value once its ends are trimmed. This holds for secrets too.
+        """
+        value = self._environ.get(name, "").strip(ASCII_WHITESPACE)
+        if any(_unplain(char) for char in value):
+            raise ConfigurationError(name, "contains whitespace other than a space, or a control character")
+        return value
+
     def required(self, name: str) -> str:
         """A variable that must be present and not empty."""
-        value = self._environ.get(name, "").strip(ASCII_WHITESPACE)
+        value = self._raw(name)
         if not value:
             raise ConfigurationError(name, "is required but not set")
         return value
 
     def optional(self, name: str, default: str) -> str:
         """A variable with a default used when it is absent or empty."""
-        value = self._environ.get(name, "").strip(ASCII_WHITESPACE)
+        value = self._raw(name)
         return value or default
 
     def integer(
         self, name: str, default: int | None = None, minimum: int = 0, maximum: int | None = None
     ) -> int:
         """An integer variable inside a range."""
-        raw = self._environ.get(name, "").strip(ASCII_WHITESPACE)
+        raw = self._raw(name)
         if not raw:
             if default is None:
                 raise ConfigurationError(name, "is required but not set")
@@ -95,11 +107,13 @@ class EnvironmentReader:
         try:
             return str(ipaddress.ip_address(value))
         except ValueError:
-            raise ConfigurationError(name, "must be an IP address such as 127.0.0.1 or 0.0.0.0") from None
+            raise ConfigurationError(
+                name, "must be an IP address of this machine; set BIND_HOST to 127.0.0.1 or 0.0.0.0"
+            ) from None
 
     def boolean(self, name: str, default: bool) -> bool:
         """A `true` or `false` variable."""
-        raw = self._environ.get(name, "").strip(ASCII_WHITESPACE).lower()
+        raw = self._raw(name).lower()
         if not raw:
             return default
         if raw not in ("true", "false"):
@@ -157,6 +171,11 @@ class EnvironmentReader:
         if len({m.api_key_sha256 for m in members}) != len(members):
             raise ConfigurationError(name, "contains a duplicate api_key_sha256")
         return members
+
+
+def _unplain(char: str) -> bool:
+    """Whitespace other than a space, or a control or format character (Unicode categories Cc, Cf)."""
+    return (char.isspace() and char != " ") or unicodedata.category(char) in ("Cc", "Cf")
 
 
 def parse_setting_integer(name: str, text: str, minimum: int, maximum: int) -> int:

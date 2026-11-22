@@ -398,3 +398,23 @@ def test_no_field_of_any_data_set_document_can_reach_the_last_resort(
                 shutil.rmtree(target)
                 tried += 1
     assert tried > 100
+
+
+def test_every_json_failure_names_its_stage(small_dir: Path, tmp_path: Path) -> None:
+    """SPEC_DECISIONS 66: VERIFICATION_FAILED lists each failure with INVARIANT, CHECKSUM or REGENERATION."""
+
+    def change(directory: Path) -> None:
+        titles = directory / "outside_records" / "titles.csv"
+        lines = titles.read_text().splitlines(keepends=True)
+        titles.write_text("".join(lines[:1] + lines[2:]))
+
+    target = tampered(small_dir, tmp_path / "copy", change, repair=False)
+    code, out, _ = run("verify", "--data-dir", str(target), "--json")
+    document = json.loads(out)
+    assert (code, document["ok"], document["error"]["code"]) == (1, False, "VERIFICATION_FAILED")
+    stages = {failure["stage"] for failure in document["violations"]}
+    assert stages == {"INVARIANT", "CHECKSUM", "REGENERATION"}
+    assert all(set(failure) == {"stage", "problem"} for failure in document["violations"])
+    by_stage = {failure["problem"]: failure["stage"] for failure in document["violations"]}
+    assert by_stage["outside_records/titles.csv does not match its checksum"] == "CHECKSUM"
+    assert by_stage[f"outside_records/titles.csv differs from what {ORIGIN} generates"] == "REGENERATION"

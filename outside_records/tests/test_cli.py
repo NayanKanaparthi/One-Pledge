@@ -41,6 +41,10 @@ VARIABLES = (
     "OUTSIDE_CLI_TEST_KEY",
 )
 UNSEEDED_VIN = "1HGCM82633A004352"
+BIND_HOST_REFUSED = (
+    "Configuration error: BIND_HOST must be an IP address of this machine; "
+    "set BIND_HOST to 127.0.0.1 or 0.0.0.0.\n"
+)
 
 type Run = Callable[..., tuple[int, str, str]]
 
@@ -303,12 +307,12 @@ def test_provisioning_with_an_admin_url_that_is_not_a_superuser_says_so(run: Run
         (
             "BIND_HOST",
             "999.1.1.1",
-            "Configuration error: BIND_HOST must be an IP address such as 127.0.0.1 or 0.0.0.0.\n",
+            BIND_HOST_REFUSED,
         ),
         (
             "BIND_HOST",
             "localhost",
-            "Configuration error: BIND_HOST must be an IP address such as 127.0.0.1 or 0.0.0.0.\n",
+            BIND_HOST_REFUSED,
         ),
         (
             "PORT",

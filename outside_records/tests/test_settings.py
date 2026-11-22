@@ -221,3 +221,29 @@ def test_a_malformed_administrative_database_url_names_the_variable(variable: st
 def test_an_admin_url_may_omit_the_database_name() -> None:
     settings = AdminSettings.from_env({"PG_ADMIN_URL": "postgresql://postgres@localhost:55432"}, "provision")
     assert settings.require_admin_url() == "postgresql://postgres@localhost:55432"
+
+
+# SPEC_DECISIONS 66: ASCII trimming only; other whitespace or a control character is malformed.
+@pytest.mark.parametrize("bad", ["\u00a0", "\u2028", "\x07", "\u200b", "\t"])
+@pytest.mark.parametrize("variable", ["DATABASE_URL", "PORT", "BIND_HOST", "LOG_LEVEL"])
+def test_a_serving_value_with_other_whitespace_or_a_control_character_is_named(
+    variable: str, bad: str
+) -> None:
+    values = {"DATABASE_URL": APP, "PORT": "8200", "BIND_HOST": "127.0.0.1", "LOG_LEVEL": "INFO"}
+    environ = dict(values)
+    environ[variable] = values[variable][:2] + bad + values[variable][2:]
+    with pytest.raises(OperatorError) as raised:
+        ServeSettings.from_env(environ)
+    assert raised.value.sentence == (
+        f"Configuration error: {variable} contains whitespace other than a space, or a control character."
+    )
+    assert "secret" not in raised.value.sentence
+
+
+def test_a_client_key_is_trimmed_and_checked_like_every_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OUTSIDE_TEST_KEY", "opk_abc\n")
+    assert read_secret_variable("OUTSIDE_TEST_KEY") == "opk_abc"
+    monkeypatch.setenv("OUTSIDE_TEST_KEY", "opk_a\u00a0bc")
+    with pytest.raises(OperatorError) as raised:
+        read_secret_variable("OUTSIDE_TEST_KEY")
+    assert "OUTSIDE_TEST_KEY contains whitespace other than a space" in raised.value.sentence
