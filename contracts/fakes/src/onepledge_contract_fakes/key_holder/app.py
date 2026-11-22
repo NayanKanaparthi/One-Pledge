@@ -20,8 +20,10 @@ from onepledge_contract_fakes.web import (
     check_test_control,
     contract_routes,
     new_service_app,
-    parse_request_model,
+    parse_model_json,
+    read_body,
     route_template,
+    validate_in_order,
 )
 
 ELEMENT_PATTERN = r"^[A-Za-z0-9+/]{43}=$"
@@ -51,16 +53,19 @@ def create_key_holder_app(config: KeyHolderConfig, clock: Clock | None = None) -
 
     @app.post("/v1/evaluate")
     async def evaluate(request: Request) -> JSONResponse:
-        body = await request.body()
+        # The order of SPEC_DECISIONS 66: authentication, size, Content-Type, JSON, unknown, fields.
+        read = await read_body(request)
         api_key = request.headers.get("x-api-key")
         if controls is not None:
-            controls.record(request.url.path, double.identify(api_key), body)
+            controls.record(request.url.path, double.identify(api_key), read.body)
             status = controls.take(FailureWhen.BEFORE_PROCESSING, route_template(request))
             if status is not None:
                 raise InjectedFailureError(status)
         member_id = double.authenticate(api_key)
-        QueryParameters(request.query_params.multi_items(), ()).finish()
-        model, _ = parse_request_model(EvaluateRequestModel, body, request.headers.get("content-type"))
+        body = read.accept()
+        parse_json_request(body, request.headers.get("content-type"))
+        query = QueryParameters(request.query_params.multi_items(), ())
+        model = validate_in_order(query, lambda: parse_model_json(EvaluateRequestModel, body))
         command = EvaluationRequest(str(model.request_id), model.key_version, tuple(model.elements))
         result = double.evaluate(member_id, command)
         return JSONResponse(
@@ -73,8 +78,9 @@ def create_key_holder_app(config: KeyHolderConfig, clock: Clock | None = None) -
         )
 
     @app.get("/healthz")
-    async def healthz() -> JSONResponse:
+    async def healthz(request: Request) -> JSONResponse:
         # Probes add cache busters: health ignores its query (SPEC_DECISIONS 41).
+        (await read_body(request)).accept()
         return JSONResponse(
             {
                 "status": "ok",
@@ -104,9 +110,11 @@ def _mount_controls(app: FastAPI, double: KeyHolderDouble, controls: ControlStat
 
     @app.post("/_test/fail-next")
     async def fail_next(request: Request) -> JSONResponse:
-        check_test_control(request, key)
+        query = check_test_control(request, key, has_body=True)
         document = parse_json_request(await request.body(), request.headers.get("content-type"))
-        spec = parse_failure_spec(document, contract_routes(app), allow_after_commit=False)
+        spec = validate_in_order(
+            query, lambda: parse_failure_spec(document, contract_routes(app), allow_after_commit=False)
+        )
         controls.arm(spec)
         return JSONResponse(
             {"armed": spec.count, "status": spec.status, "when": spec.when.value, "path": spec.path}

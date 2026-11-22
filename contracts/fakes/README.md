@@ -147,6 +147,14 @@ with `kill %1 %2`.
 
 ## Input validation
 
+Every request is checked in one order (SPEC_DECISIONS 66): route and method (404, 405),
+authentication (401, the test control key included), the size limit and `Content-Length`
+(413, 422), `Content-Type`, JSON well-formedness (`INVALID_JSON`), unknown fields and
+parameters (reported alone), then field validation (every field, query and header problem
+together, `Idempotency-Key` included). An unauthenticated caller learns nothing about its
+body. An injected `BEFORE_PROCESSING` failure is answered before authentication, as an
+outage would be.
+
 Request bodies are checked by strict models: an integer field refuses `1.0`, `true` and
 `"1"`, a string field refuses numbers, and no float reaches hashing. Query integers are 1
 to 18 ASCII digits inside their bounds (`offset` at most 1,000,000). A 422 names a

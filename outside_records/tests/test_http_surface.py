@@ -239,3 +239,19 @@ def test_every_record_of_a_permission_failure_carries_the_failure_keys(
     engine.dispose()
     assert response.status_code == 500
     assert_failure_records(log, response, "ProgrammingError")
+
+
+# SPEC_DECISIONS 66: authentication first, then unknown parameters alone, then field problems.
+def test_the_check_order_holds_on_every_lookup(surface: tuple[FastAPI, InProcessApi], api_key: str) -> None:
+    _, api = surface
+    unauthenticated = api.request("GET", f"/v1/payments?vin=bad&limit=x&{CANARY}=1")
+    assert (unauthenticated.status_code, unauthenticated.json()["error"]["code"]) == (401, "UNAUTHENTICATED")
+    unknown = api.request("GET", f"/v1/payments?vin=bad&limit=x&{CANARY}=1", headers={"X-API-Key": api_key})
+    assert unknown.json()["error"]["details"] == [{"field": "query", "issue": "UNKNOWN_PARAMETER"}]
+    fields = api.request("GET", "/v1/payments?vin=bad&limit=x", headers={"X-API-Key": api_key})
+    assert {(d["field"], d["issue"]) for d in fields.json()["error"]["details"]} == {
+        ("vin", "PATTERN_MISMATCH"),
+        ("limit", "INVALID_INTEGER"),
+    }
+    title = api.request("GET", f"/v1/titles/bad?{CANARY}=1", headers={"X-API-Key": api_key})
+    assert title.json()["error"]["details"] == [{"field": "query", "issue": "UNKNOWN_PARAMETER"}]

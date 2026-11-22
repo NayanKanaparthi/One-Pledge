@@ -9,7 +9,7 @@ from __future__ import annotations
 import hmac
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Mapping, MutableMapping
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
 from types import MappingProxyType
@@ -22,7 +22,6 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ValidationError
 
-from onepledge_contract_fakes.canonical_json import JsonValue
 from onepledge_contract_fakes.errors import (
     DomainError,
     ErrorDetail,
@@ -32,7 +31,6 @@ from onepledge_contract_fakes.errors import (
     UnauthenticatedError,
     ValidationFailedError,
 )
-from onepledge_contract_fakes.json_body import parse_json_request
 from onepledge_contract_fakes.logging_setup import LogEvent, get_logger
 from onepledge_contract_fakes.validation import MAX_INTEGER, Issue, QueryParameters, parse_integer_text
 
@@ -147,32 +145,78 @@ def details_from_pydantic(errors: list[Any]) -> tuple[ErrorDetail, ...]:
     return tuple(details)
 
 
-def parse_model[M: BaseModel](model: type[M], document: object) -> M:
-    """Validate a parsed JSON document against a request model."""
-    try:
-        return model.model_validate(document)
-    except ValidationError as error:
-        raise ValidationFailedError(details=details_from_pydantic(list(error.errors()))) from None
+@dataclass(frozen=True)
+class BodyRead:
+    """A request body read before authentication, with the size or length problem held back.
 
-
-def parse_request_model[M: BaseModel](
-    model: type[M], body: bytes, content_type: str | None
-) -> tuple[M, dict[str, JsonValue]]:
-    """A JSON request body: content type, bounded parse, then the strict model on the same bytes.
-
-    Returns the model and the parsed document (the document is what a double hashes).
+    The body is read early only so a test double can record it; `accept` raises the held back
+    problem, and is called once the caller is authenticated (step 4 of SPEC_DECISIONS 66).
     """
-    document = parse_json_request(body, content_type)
+
+    body: bytes
+    problem: DomainError | None
+
+    def accept(self) -> bytes:
+        """The body, or the size or length problem found while reading it."""
+        if self.problem is not None:
+            raise self.problem
+        return self.body
+
+
+async def read_body(request: Request) -> BodyRead:
+    """Read the whole body, keeping a size or length problem for `BodyRead.accept`."""
     try:
-        return model.model_validate_json(body), document
+        return BodyRead(await request.body(), None)
+    except (PayloadTooLargeError, ValidationFailedError) as error:
+        return BodyRead(b"", error)
+
+
+def parse_model_json[M: BaseModel](model: type[M], body: bytes) -> M:
+    """Validate the JSON bytes of a body already accepted by `json_body` against a strict model."""
+    try:
+        return model.model_validate_json(body)
     except ValidationError as error:
         raise ValidationFailedError(details=details_from_pydantic(list(error.errors()))) from None
 
 
-def check_test_control(request: Request, expected_key: str) -> None:
-    """A `/_test/` call: the control key, and no query parameter (none of these routes declares one)."""
+_UNKNOWN = frozenset({Issue.UNKNOWN_FIELD, Issue.UNKNOWN_PARAMETER})
+
+
+def validate_in_order[T](
+    query: QueryParameters, validate_body: Callable[[], T], field_details: Sequence[ErrorDetail] = ()
+) -> T:
+    """Steps 7 and 8 of SPEC_DECISIONS 66 for a body already past its Content-Type and JSON checks.
+
+    Unknown body fields and unknown query parameters are reported first and alone; only when
+    there is none are the field problems of the query, the body and the headers reported, all
+    together. Steps 1 to 6 are done before this is called.
+    """
+    body_details: list[ErrorDetail] = []
+    result: T | None = None
+    try:
+        result = validate_body()
+    except ValidationFailedError as error:
+        body_details = list(error.details)
+    unknown = [*query.unknown_details(), *(d for d in body_details if d.issue in _UNKNOWN)]
+    if unknown:
+        raise ValidationFailedError(details=tuple(unknown))
+    details = [*query.field_details(), *body_details, *field_details]
+    if details or result is None:
+        raise ValidationFailedError(details=tuple(details))
+    return result
+
+
+def check_test_control(request: Request, expected_key: str, has_body: bool = False) -> QueryParameters:
+    """A `/_test/` call: the control key first; none of these routes declares a query parameter.
+
+    Without a body the query is checked at once; with one, `validate_in_order` checks it after
+    the body's Content-Type and JSON (SPEC_DECISIONS 66).
+    """
     check_test_control_key(request.headers.get(TEST_CONTROL_HEADER), expected_key)
-    QueryParameters(request.query_params.multi_items(), ()).finish()
+    query = QueryParameters(request.query_params.multi_items(), ())
+    if not has_body:
+        query.finish()
+    return query
 
 
 def check_test_control_key(presented: str | None, expected: str) -> None:
@@ -273,15 +317,16 @@ def _request_id_from(scope: Scope) -> str:
     return str(uuid.uuid4())
 
 
-def _declared_length(scope: Scope, limit: int) -> None:
-    """Refuse a malformed `Content-Length` (422) or one above the limit (413) before the body is read."""
+def _declared_length_problem(scope: Scope, limit: int) -> DomainError | None:
+    """A malformed `Content-Length` (422) or one above the limit (413), raised when the body is read."""
     for name, value in scope.get("headers", []):
         if name.lower() == b"content-length":
             parsed = parse_integer_text(value.decode("latin-1"), 0, MAX_INTEGER)
             if isinstance(parsed, Issue):
-                raise ValidationFailedError(details=(ErrorDetail("Content-Length", parsed),))
+                return ValidationFailedError(details=(ErrorDetail("Content-Length", parsed),))
             if parsed > limit:
-                raise PayloadTooLargeError
+                return PayloadTooLargeError()
+    return None
 
 
 @dataclass
@@ -318,8 +363,8 @@ class RequestContextMiddleware:
         sending = self._with_request_id(send, request_id, exchange)
         try:
             try:
-                _declared_length(scope, self._max_body_bytes)
-                await self._app(scope, self._limited(receive), sending)
+                problem = _declared_length_problem(scope, self._max_body_bytes)
+                await self._app(scope, self._limited(receive, problem), sending)
             except DomainError as error:
                 await failure_response(scope, error)(scope, receive, sending)
             except Exception as error:  # Every failure of the app ends here (SPEC_DECISIONS 34).
@@ -365,12 +410,18 @@ class RequestContextMiddleware:
         else:
             _log.warning(LogEvent.SERVER_ERROR, http_status=status, **facts)
 
-    def _limited(self, receive: Receive) -> Receive:
+    def _limited(self, receive: Receive, problem: DomainError | None) -> Receive:
+        """The body stream, refused at its first read when the declared length is bad or too large.
+
+        The refusal waits for the read so that a route authenticates first (SPEC_DECISIONS 66).
+        """
         received = 0
         limit = self._max_body_bytes
 
         async def wrapped() -> Message:
             nonlocal received
+            if problem is not None:
+                raise problem
             message = await receive()
             if message.get("type") == "http.request":
                 received += len(message.get("body", b""))

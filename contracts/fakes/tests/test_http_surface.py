@@ -328,11 +328,13 @@ def test_tamper_seq_is_bounded(value: int | None, issue: str) -> None:
 def test_idempotency_key_absent_is_required_and_malformed_is_pattern_mismatch() -> None:
     registry = _registry(io.StringIO())
     auth = {"X-API-Key": registry.api_key}
-    absent = registry.client.post("/v1/submissions", json={}, headers=auth)
-    malformed = registry.client.post("/v1/submissions", json={}, headers={**auth, "Idempotency-Key": "x"})
+    body = {"schema_version": 1, "kind": "PLEDGE", "key_version": "1.1", "items": []}
+    absent = registry.client.post("/v1/submissions", json=body, headers=auth)
+    malformed = registry.client.post("/v1/submissions", json=body, headers={**auth, "Idempotency-Key": "x"})
     registry.client.close()
-    assert absent.json()["error"]["details"] == [{"field": "Idempotency-Key", "issue": "REQUIRED"}]
-    assert malformed.json()["error"]["details"] == [{"field": "Idempotency-Key", "issue": "PATTERN_MISMATCH"}]
+    assert {"field": "Idempotency-Key", "issue": "REQUIRED"} in absent.json()["error"]["details"]
+    assert {"field": "Idempotency-Key", "issue": "PATTERN_MISMATCH"} in malformed.json()["error"]["details"]
+    assert {d["field"] for d in absent.json()["error"]["details"]} == {"Idempotency-Key", "items"}
 
 
 # SPEC_DECISIONS 41: health ignores its query; every `/_test/` route refuses unknown parameters.
@@ -414,3 +416,100 @@ def test_every_record_of_an_injected_5xx_carries_the_failure_keys(double: Double
     assert response.status_code == status
     mine = assert_failure_records(double.records(), response)
     assert {record["exception_type"] for record in mine} == {"InjectedFailureError"}
+
+
+# SPEC_DECISIONS 66: one order for every service. (1) route and method, (2) authentication,
+# (3) authorisation, (4) size limit, (5) Content-Type, (6) JSON, (7) unknown fields and
+# parameters, (8) field validation. An unauthenticated caller learns nothing of steps 4 to 8.
+
+
+async def call_raw(
+    app: AsgiApp, method: str, path: str, headers: list[tuple[bytes, bytes]], body: bytes
+) -> tuple[int, bytes]:
+    """One request straight to the ASGI app, with any header bytes; the status and the body."""
+    target, _, query = path.partition("?")
+    scope: Scope = {
+        "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": method,
+        "scheme": "http", "path": target, "raw_path": target.encode(), "query_string": query.encode(),
+        "root_path": "", "headers": headers, "server": ("testserver", 80), "client": ("127.0.0.1", 1),
+    }  # fmt: skip
+    messages: list[Message] = []
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    async def send(message: Message) -> None:
+        messages.append(message)
+
+    await app(scope, receive, send)
+    return messages[0]["status"], b"".join(m.get("body", b"") for m in messages[1:])
+
+
+def ordered(double: Double, path: str, headers: dict[str, str], body: bytes) -> tuple[int, Any]:
+    encoded = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
+    status, content = asyncio.run(call_raw(double.app, "POST", path, encoded, body))
+    return status, json.loads(content)
+
+
+def credentials(double: Double, path: str) -> dict[str, str]:
+    return CONTROL if path.startswith("/_test/") else {"X-API-Key": double.api_key}
+
+
+def test_an_unauthenticated_caller_learns_nothing_of_the_later_steps(double: Double) -> None:
+    for path, _ in body_routes(double):
+        headers = {"content-type": "text/plain", "content-length": str(10**9)}
+        status, document = ordered(double, f"{path}?{CANARY}=1", headers, b"{")
+        assert (status, document["error"]["code"]) == (401, "UNAUTHENTICATED"), path
+
+
+def test_the_size_limit_comes_before_the_content_type(double: Double) -> None:
+    for path, _ in body_routes(double):
+        headers = {**credentials(double, path), "content-type": "text/plain", "content-length": str(10**9)}
+        status, document = ordered(double, f"{path}?{CANARY}=1", headers, b"{")
+        assert (status, document["error"]["code"]) == (413, "PAYLOAD_TOO_LARGE"), path
+
+
+def test_the_content_type_comes_before_the_json(double: Double) -> None:
+    for path, _ in body_routes(double):
+        headers = {**credentials(double, path), "content-type": "text/plain"}
+        status, document = ordered(double, f"{path}?{CANARY}=1", headers, b"{")
+        assert status == 422
+        assert document["error"]["details"] == [{"field": "Content-Type", "issue": "INVALID_VALUE"}], path
+
+
+def test_the_json_comes_before_unknown_parameters(double: Double) -> None:
+    for path, _ in body_routes(double):
+        headers = {**credentials(double, path), **JSON_TYPE}
+        status, document = ordered(double, f"{path}?{CANARY}=1", headers, b"{")
+        assert status == 422
+        assert document["error"]["details"] == [{"field": "body", "issue": "INVALID_JSON"}], path
+
+
+def test_unknown_fields_and_parameters_come_before_field_validation(double: Double) -> None:
+    for path, _ in body_routes(double):
+        headers = {**credentials(double, path), **JSON_TYPE}
+        body = json.dumps({CANARY: 1, "count": "x", "mode": 5, "request_id": 5, "items": 5}).encode()
+        status, document = ordered(double, f"{path}?{CANARY}=1", headers, body)
+        assert status == 422
+        details = {(d["field"], d["issue"]) for d in document["error"]["details"]}
+        assert details == {("query", "UNKNOWN_PARAMETER"), ("body", "UNKNOWN_FIELD")}, path
+
+
+def test_field_validation_names_every_field_problem_together() -> None:
+    log = io.StringIO()
+    configure_logging("registry", "INFO", log)
+    registry = _registry(log)
+    response = registry.client.post(
+        "/v1/submissions", json={"schema_version": "x"}, headers={"X-API-Key": registry.api_key}
+    )
+    registry.client.close()
+    details = {(d["field"], d["issue"]) for d in response.json()["error"]["details"]}
+    assert ("Idempotency-Key", "REQUIRED") in details and ("schema_version", "INVALID_TYPE") in details
+
+
+def test_get_routes_authenticate_before_the_query(double: Double) -> None:
+    for method, template in routes(double.app):
+        if method != "GET" or template == "/healthz":
+            continue
+        response = double.client.get(f"{concrete(template)}?{CANARY}=1&limit=x")
+        assert response.status_code == 401, template

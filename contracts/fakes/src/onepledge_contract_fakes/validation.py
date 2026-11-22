@@ -110,10 +110,22 @@ class QueryParameters:
             return None
         return text
 
+    def unknown_details(self) -> list[ErrorDetail]:
+        """The one `query` UNKNOWN_PARAMETER detail, when an undeclared parameter was sent."""
+        return [d for d in self.details if d.issue == Issue.UNKNOWN_PARAMETER]
+
+    def field_details(self) -> list[ErrorDetail]:
+        """The problems of the declared parameters."""
+        return [d for d in self.details if d.issue != Issue.UNKNOWN_PARAMETER]
+
     def finish(self) -> None:
-        """Raise one validation error naming every problem found."""
-        if self.details:
-            raise ValidationFailedError(details=tuple(self.details))
+        """Raise one validation error: an unknown parameter alone, else every parameter problem.
+
+        Unknown parameters are step 7 and parameter values step 8 of SPEC_DECISIONS 66.
+        """
+        details = self.unknown_details() or self.field_details()
+        if details:
+            raise ValidationFailedError(details=tuple(details))
 
 
 class JsonFields:
@@ -177,6 +189,8 @@ class JsonFields:
         self.details.append(ErrorDetail(name, issue))
 
     def finish(self) -> None:
-        """Raise one validation error naming every problem found."""
-        if self.details:
-            raise ValidationFailedError(details=tuple(self.details))
+        """Raise one validation error: unknown fields alone (step 7), else every field problem (step 8)."""
+        unknown = [d for d in self.details if d.issue == Issue.UNKNOWN_FIELD]
+        details = unknown or self.details
+        if details:
+            raise ValidationFailedError(details=tuple(details))

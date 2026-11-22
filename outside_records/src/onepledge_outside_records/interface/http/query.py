@@ -65,6 +65,11 @@ class QueryParameters:
         return day
 
     def finish(self) -> None:
-        """Raise one validation error naming every problem found."""
-        if self.details:
-            raise ValidationFailedError(tuple(self.details))
+        """Raise one validation error: an unknown parameter alone, else every parameter problem.
+
+        Unknown parameters are step 7 and parameter values step 8 of SPEC_DECISIONS 66.
+        """
+        unknown = [d for d in self.details if d.issue == "UNKNOWN_PARAMETER"]
+        details = unknown or self.details
+        if details:
+            raise ValidationFailedError(tuple(details))

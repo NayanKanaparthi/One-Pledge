@@ -43,7 +43,8 @@ synthetic and comes from `onepledge-datagen`.
   `/healthz`. Issues
   come from the one vocabulary: `REQUIRED`, `INVALID_INTEGER`, `OUT_OF_RANGE`,
   `PATTERN_MISMATCH`, `INVALID_DATE`, `DUPLICATE`, `UNKNOWN_PARAMETER`. No input gives a
-  500.
+  500. The order is fixed (SPEC_DECISIONS 66): route and method, then the API key,
+  then an unknown parameter (reported alone), then every parameter and path problem together.
 
 ## Layout
 

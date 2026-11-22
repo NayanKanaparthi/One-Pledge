@@ -275,10 +275,8 @@ def test_integer_parameters_are_ascii_digits_inside_their_bounds(
         ("&limit=1&limit=2", [{"field": "limit", "issue": "DUPLICATE"}]),
         ("&vin=1HGCM82633A004352", [{"field": "vin", "issue": "DUPLICATE"}]),
         (f"&{CANARY}=1", [{"field": "query", "issue": "UNKNOWN_PARAMETER"}]),
-        (
-            f"&{CANARY}=1&limit=0",
-            [{"field": "query", "issue": "UNKNOWN_PARAMETER"}, {"field": "limit", "issue": "OUT_OF_RANGE"}],
-        ),
+        # SPEC_DECISIONS 66: an unknown parameter (step 7) is reported alone, before field values (step 8).
+        (f"&{CANARY}=1&limit=0", [{"field": "query", "issue": "UNKNOWN_PARAMETER"}]),
     ],
 )
 def test_repeated_and_unknown_parameters_are_refused_without_echo(

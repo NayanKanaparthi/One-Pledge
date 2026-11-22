@@ -12,7 +12,8 @@ from fastapi.responses import JSONResponse, Response
 from onepledge_contract_fakes.canonical_json import canonical_sha256
 from onepledge_contract_fakes.clock import Clock, IdSource, RandomIds, SystemClock
 from onepledge_contract_fakes.controls import SUBMISSIONS_ROUTE, ControlState, FailureWhen
-from onepledge_contract_fakes.errors import ErrorDetail, InjectedFailureError, ValidationFailedError
+from onepledge_contract_fakes.errors import ErrorDetail, InjectedFailureError
+from onepledge_contract_fakes.json_body import parse_json_request
 from onepledge_contract_fakes.registry.config import RegistryConfig
 from onepledge_contract_fakes.registry.control_routes import mount_test_controls
 from onepledge_contract_fakes.registry.double import RegistryDouble
@@ -22,8 +23,10 @@ from onepledge_contract_fakes.registry.wire import CasePositionRequestModel, Sub
 from onepledge_contract_fakes.validation import MAX_OFFSET, Issue, QueryParameters
 from onepledge_contract_fakes.web import (
     new_service_app,
-    parse_request_model,
+    parse_model_json,
+    read_body,
     route_template,
+    validate_in_order,
 )
 
 _IDEMPOTENCY_KEY = re.compile(r"^[0-9a-f]{64}$")
@@ -52,28 +55,34 @@ class _Guard:
             if status is not None:
                 raise InjectedFailureError(status)
 
-    @staticmethod
-    def _query(request: Request, declared: Collection[str]) -> QueryParameters:
-        query = QueryParameters(request.query_params.multi_items(), declared)
-        if not declared:
-            query.finish()
-        return query
+    async def enter(self, request: Request, declared: Collection[str] = (), has_body: bool = False) -> _Entry:
+        """Authenticate a member, then the size limit; the query is checked later for a body route.
 
-    async def enter(self, request: Request, declared: Collection[str] = ()) -> _Entry:
-        """Authenticate a member; a route without query parameters refuses any."""
-        body = await request.body()
+        The order is that of SPEC_DECISIONS 66: an unauthenticated caller learns nothing about
+        the size, the content type, the JSON or the fields of its request.
+        """
+        read = await read_body(request)
         api_key = request.headers.get("x-api-key")
         if self._controls is not None and request.method == "POST":
-            self._controls.record(request.url.path, self._double.identify(api_key), body)
+            self._controls.record(request.url.path, self._double.identify(api_key), read.body)
         self._inject(request)
         member_id = self._double.authenticate(api_key)
-        return _Entry(member_id, body, self._query(request, declared))
+        body = read.accept()
+        query = QueryParameters(request.query_params.multi_items(), declared)
+        if not declared and not has_body:
+            query.finish()
+        return _Entry(member_id, body, query)
 
     async def enter_reader(self, request: Request, declared: Collection[str] = ()) -> _Entry:
         """Like `enter` for the ledger reads, which also accept the auditor key."""
+        read = await read_body(request)
         self._inject(request)
         reader = self._double.reader_role(request.headers.get("x-api-key"))
-        return _Entry(reader, b"", self._query(request, declared))
+        read.accept()
+        query = QueryParameters(request.query_params.multi_items(), declared)
+        if not declared:
+            query.finish()
+        return _Entry(reader, b"", query)
 
     def after_commit(self) -> None:
         """Fail a submission after it was stored, to simulate a lost response."""
@@ -81,6 +90,15 @@ class _Guard:
             status = self._controls.take(FailureWhen.AFTER_COMMIT, SUBMISSIONS_ROUTE)
             if status is not None:
                 raise InjectedFailureError(status)
+
+
+def _idempotency_key_details(key: str | None) -> tuple[ErrorDetail, ...]:
+    """A missing key is REQUIRED, a malformed one PATTERN_MISMATCH (SPEC_DECISIONS 34): step 8."""
+    if key is None:
+        return (ErrorDetail("Idempotency-Key", Issue.REQUIRED),)
+    if not _IDEMPOTENCY_KEY.fullmatch(key):
+        return (ErrorDetail("Idempotency-Key", Issue.PATTERN_MISMATCH),)
+    return ()
 
 
 def create_registry_app(
@@ -103,14 +121,12 @@ def create_registry_app(
 def _mount_submissions(app: FastAPI, double: RegistryDouble, guard: _Guard) -> None:
     @app.post("/v1/submissions")
     async def create_submission(request: Request) -> Response:
-        entry = await guard.enter(request)
-        key = request.headers.get("idempotency-key")
-        if key is None:
-            raise ValidationFailedError(details=(ErrorDetail("Idempotency-Key", Issue.REQUIRED),))
-        if not _IDEMPOTENCY_KEY.fullmatch(key):
-            raise ValidationFailedError(details=(ErrorDetail("Idempotency-Key", Issue.PATTERN_MISMATCH),))
-        model, document = parse_request_model(
-            SubmissionRequestModel, entry.body, request.headers.get("content-type")
+        entry = await guard.enter(request, has_body=True)
+        document = parse_json_request(entry.body, request.headers.get("content-type"))
+        key = request.headers.get("idempotency-key") or ""
+        header_details = _idempotency_key_details(request.headers.get("idempotency-key"))
+        model = validate_in_order(
+            entry.query, lambda: parse_model_json(SubmissionRequestModel, entry.body), header_details
         )
         # The strict model refuses every float, so the parsed document is canonical JSON input.
         body_hash = canonical_sha256(document)
@@ -126,10 +142,9 @@ def _mount_submissions(app: FastAPI, double: RegistryDouble, guard: _Guard) -> N
 
     @app.post("/v1/cases/{case_id}/resolution")
     async def post_case_position(case_id: str, request: Request) -> JSONResponse:
-        entry = await guard.enter(request)
-        model, _ = parse_request_model(
-            CasePositionRequestModel, entry.body, request.headers.get("content-type")
-        )
+        entry = await guard.enter(request, has_body=True)
+        parse_json_request(entry.body, request.headers.get("content-type"))
+        model = validate_in_order(entry.query, lambda: parse_model_json(CasePositionRequestModel, entry.body))
         return JSONResponse(double.record_position(entry.caller, case_id, model.to_position()))
 
     @app.post("/v1/outbox/{message_id}/ack", status_code=204)
@@ -177,6 +192,7 @@ def _mount_reads(app: FastAPI, double: RegistryDouble, guard: _Guard) -> None:
         return JSONResponse(double.latest_checkpoint())
 
     @app.get("/healthz")
-    async def healthz() -> JSONResponse:
+    async def healthz(request: Request) -> JSONResponse:
         # Probes add cache busters: health ignores its query (SPEC_DECISIONS 41).
+        (await read_body(request)).accept()
         return JSONResponse({"status": "ok", "service": "registry", "test_double": True})
