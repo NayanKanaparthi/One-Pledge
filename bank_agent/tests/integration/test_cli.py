@@ -41,6 +41,7 @@ REGISTRY_SIDE = (
     "KEY_HOLDER_1_API_KEY", "KEY_HOLDER_2_URL", "KEY_HOLDER_2_API_KEY", "HALT_ON_REGISTRY_INTEGRITY_FAILURE",
 )  # fmt: skip
 UNREACHABLE = "http://127.0.0.1:9"
+IDENTITY = {"BANK_CODE": "HARBOR", "BANK_NAME": "Harbor Bank"}
 
 
 def unreachable_services(doubles: InProcessDoubles) -> dict[str, str]:
@@ -85,7 +86,8 @@ def fresh() -> Iterator[BankDatabase]:
 def cli_for(monkeypatch: pytest.MonkeyPatch, environment: dict[str, str]) -> Cli:
     """Calls `main()` with exactly these bank agent variables in the process environment."""
     for name in (
-        "PG_ADMIN_URL", "MIGRATION_DATABASE_URL", "DATABASE_URL", "DB_APP_ROLE", "BANK_CODE", "LOG_LEVEL",
+        "PG_ADMIN_URL", "MIGRATION_DATABASE_URL", "DATABASE_URL", "DB_APP_ROLE", "BANK_CODE", "BANK_NAME",
+        "BIND_HOST", "PORT", "LOG_LEVEL",
         "OUTSIDE_RECORDS_URL", "OUTSIDE_RECORDS_API_KEY", *REGISTRY_SIDE,
     ):  # fmt: skip
         monkeypatch.delenv(name, raising=False)
@@ -339,6 +341,12 @@ def test_a_missing_variable_is_one_sentence_on_stderr_and_exit_1(
         (["worker", "--once"], "KEY_HOLDER_2_API_KEY"),
         (["registry", "sync"], "REGISTRY_API_KEY"),
         (["integrity", "verify"], "REGISTRY_PUBLIC_KEYS"),
+        (["worker", "--once"], "BANK_CODE"),
+        (["worker", "--once"], "BANK_NAME"),
+        (["registry", "sync"], "BANK_CODE"),
+        (["registry", "sync"], "BANK_NAME"),
+        (["integrity", "report"], "BANK_CODE"),
+        (["integrity", "verify"], "BANK_NAME"),
     ):
         finished = run_program(
             "onepledge-bank", command, {k: v for k, v in environment.items() if k != missing}
@@ -355,12 +363,24 @@ def test_a_missing_variable_is_one_sentence_on_stderr_and_exit_1(
         assert json.loads(as_json.stdout)["error"]["code"] == "CONFIGURATION_ERROR"
 
 
+def test_no_runtime_command_reads_bind_host_or_port(bank_db: BankDatabase, doubles: InProcessDoubles) -> None:
+    """SPEC_DECISIONS 73, point 1: values `serve` would refuse stop no worker and no one-shot command."""
+    environment = {**bank_db.environment(), **unreachable_services(doubles), "BIND_HOST": "localhost",
+                   "PORT": "http"}  # fmt: skip
+    for command in (["worker", "--once"], ["integrity", "report"]):
+        finished = run_program("onepledge-bank", [*command, "--json"], environment)
+        assert (finished.returncode, json.loads(finished.stdout)["ok"]) == (0, True), (
+            command,
+            finished.stderr,
+        )
+
+
 def test_the_worker_never_needs_an_owner_credential(
     bank_db: BankDatabase, small_data: Path, doubles: InProcessDoubles
 ) -> None:
     """The worker runs from an environment without MIGRATION_DATABASE_URL, PG_ADMIN_URL or DB_APP_ROLE."""
     seed_reference(bank_db, small_data)
-    runtime_only = {"DATABASE_URL": bank_db.app_url, "BANK_CODE": "HARBOR", **unreachable_services(doubles)}
+    runtime_only = {"DATABASE_URL": bank_db.app_url, **IDENTITY, **unreachable_services(doubles)}
     finished = run_program("onepledge-bank", ["worker", "--once", "--json"], runtime_only)
     assert json.loads(finished.stdout) == {"ok": True, "stages": []}
 
@@ -374,7 +394,7 @@ def test_the_worker_refuses_to_start_as_the_owner_role(
     bank_db: BankDatabase, doubles: InProcessDoubles
 ) -> None:
     """SPEC_DECISIONS 43.4: as the owner, the worker exits 1 with one line naming DATABASE_URL."""
-    as_owner = {"DATABASE_URL": bank_db.owner_url, "BANK_CODE": "HARBOR", **unreachable_services(doubles)}
+    as_owner = {"DATABASE_URL": bank_db.owner_url, **IDENTITY, **unreachable_services(doubles)}
     finished = run_program("onepledge-bank", ["worker", "--once", "--json"], as_owner)
     assert finished.returncode == 1
     assert json.loads(finished.stdout) == {

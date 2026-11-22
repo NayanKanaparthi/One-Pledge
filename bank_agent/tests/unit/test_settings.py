@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 
 from onepledge_bank_agent.infrastructure.operator_errors import OperatorError
-from onepledge_bank_agent.infrastructure.settings import AdminSettings, RuntimeSettings, Tunables
+from onepledge_bank_agent.infrastructure.settings import (
+    AdminSettings,
+    RuntimeSettings,
+    ServeSettings,
+    Tunables,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -29,12 +34,15 @@ FULL = {
 }
 
 
+IDENTITY = {"BANK_CODE": "HARBOR", "BANK_NAME": "Harbor Bank"}
+
+
 def test_runtime_settings_read_the_runtime_variables() -> None:
     settings = RuntimeSettings.from_env(FULL)
-    assert settings.require_bank_code() == "HARBOR" and settings.require_port() == 8101
+    assert (settings.bank_code, settings.bank_name) == ("HARBOR", "Harbor Bank")
     assert settings.require_database_url() == APP_URL
     assert settings.require_outside_records() == ("http://127.0.0.1:8200", "opk_" + "k" * 43)
-    assert settings.log_level == "WARNING" and settings.bind_host == "127.0.0.1"
+    assert settings.log_level == "WARNING"
     assert settings.tunables.check_chunk_loans == 25 and settings.tunables.pipeline_poll_seconds == 0.5
     assert settings.tunables.pipeline_worker_enabled is False
 
@@ -57,8 +65,40 @@ def test_admin_settings_read_the_administrative_variables_only() -> None:
     assert not {"outside_records_api_key", "tunables", "port"} & set(AdminSettings.model_fields)
 
 
+@pytest.mark.parametrize("name", ["BANK_CODE", "BANK_NAME"])
+def test_every_runtime_command_requires_the_bank_code_and_name(name: str) -> None:
+    """SPEC_DECISIONS 93, item 11: a log record must say which bank it belongs to."""
+    with pytest.raises(OperatorError) as raised:
+        RuntimeSettings.from_env({k: v for k, v in FULL.items() if k != name})
+    assert raised.value.sentence == f"Configuration error: {name} is required but not set."
+
+
+@pytest.mark.parametrize(("name", "value"), [("BANK_NAME", "x" * 101), ("BANK_NAME", "Bank" + chr(0xE9))])
+def test_a_bank_name_is_printable_ascii_of_at_most_100_characters(name: str, value: str) -> None:
+    with pytest.raises(OperatorError) as raised:
+        RuntimeSettings.from_env({**FULL, name: value})
+    assert (
+        raised.value.sentence == "Configuration error: BANK_NAME must be 1 to 100 printable ASCII characters."
+    )
+
+
+def test_no_runtime_command_reads_bind_host_or_port() -> None:
+    """SPEC_DECISIONS 73, point 1: a wrong BIND_HOST or PORT cannot stop a worker or a one-shot command."""
+    settings = RuntimeSettings.from_env({**FULL, "BIND_HOST": "localhost", "PORT": "http"})
+    assert not {"bind_host", "port"} & set(RuntimeSettings.model_fields)
+    assert settings.bank_code == "HARBOR"
+
+
+def test_serve_settings_read_bind_host_and_port_beside_the_runtime_settings() -> None:
+    serve = ServeSettings.from_env(FULL)
+    assert (serve.bind_host, serve.port, serve.runtime) == ("127.0.0.1", 8101, RuntimeSettings.from_env(FULL))
+    with pytest.raises(OperatorError) as raised:
+        ServeSettings.from_env({k: v for k, v in FULL.items() if k != "PORT"})
+    assert raised.value.sentence == "Configuration error: PORT is required but not set."
+
+
 def test_defaults_are_the_spec_tunables() -> None:
-    assert RuntimeSettings.from_env({}).tunables == Tunables(
+    assert RuntimeSettings.from_env(IDENTITY).tunables == Tunables(
         pipeline_worker_enabled=True, pipeline_poll_seconds=1.0, pipeline_max_attempts=8,
         check_chunk_loans=100,
         http_connect_timeout_seconds=2.0, http_read_timeout_seconds=10.0, title_pending_window_days=30,
@@ -73,8 +113,6 @@ def test_secrets_never_appear_in_the_repr() -> None:
 
 
 REQUIRED: list[tuple[type[RuntimeSettings] | type[AdminSettings], str]] = [
-    (RuntimeSettings, "require_bank_code"),
-    (RuntimeSettings, "require_port"),
     (RuntimeSettings, "require_database_url"),
     (RuntimeSettings, "require_outside_records"),
     (AdminSettings, "require_bank_code"),
@@ -90,7 +128,7 @@ def test_a_missing_value_is_one_sentence_naming_the_variable(
     scope: type[RuntimeSettings] | type[AdminSettings], required: str
 ) -> None:
     with pytest.raises(OperatorError) as raised:
-        getattr(scope.from_env({}), required)()
+        getattr(scope.from_env(IDENTITY if scope is RuntimeSettings else {}), required)()
     assert raised.value.sentence.startswith("Configuration error: ") and raised.value.sentence.endswith(
         "is required but not set."
     )
@@ -99,14 +137,14 @@ def test_a_missing_value_is_one_sentence_naming_the_variable(
 
 @pytest.mark.parametrize(
     ("name", "value"),
-    [("BANK_CODE", "harbor"), ("PORT", "0"), ("PORT", "70000"), ("PORT", "http"), ("LOG_LEVEL", "LOUD"),
+    [("BANK_CODE", "harbor"), ("LOG_LEVEL", "LOUD"),
      ("OUTSIDE_RECORDS_URL", "ftp://x"), ("CHECK_CHUNK_LOANS", "0"),
      ("PIPELINE_MAX_ATTEMPTS", "-1"), ("PIPELINE_POLL_SECONDS", "never"), ("HTTP_READ_TIMEOUT_SECONDS", "0"),
      ("PIPELINE_WORKER_ENABLED", "yes")],
 )  # fmt: skip
 def test_a_malformed_runtime_value_names_the_variable_and_not_the_value(name: str, value: str) -> None:
     with pytest.raises(OperatorError) as raised:
-        RuntimeSettings.from_env({name: value})
+        RuntimeSettings.from_env({**IDENTITY, name: value})
     assert name in raised.value.sentence and (value not in raised.value.sentence or value in ("0",))
 
 
@@ -120,7 +158,7 @@ def test_a_malformed_admin_value_names_the_variable(name: str, value: str) -> No
 
 
 def test_each_scope_ignores_the_other_scopes_variables_even_when_malformed() -> None:
-    RuntimeSettings.from_env({"DB_APP_ROLE": "Bad-Role", "MIGRATION_DATABASE_URL": "nonsense"})
+    RuntimeSettings.from_env({**IDENTITY, "DB_APP_ROLE": "Bad-Role", "MIGRATION_DATABASE_URL": "nonsense"})
     AdminSettings.from_env({"PORT": "http", "CHECK_CHUNK_LOANS": "0", "OUTSIDE_RECORDS_URL": "ftp://x"})
 
 
@@ -137,7 +175,7 @@ def test_each_scope_ignores_the_other_scopes_variables_even_when_malformed() -> 
 )
 def test_bind_host_accepts_an_ip_literal_or_a_wildcard(value: str, bound: str) -> None:
     """SPEC_DECISIONS 66: the address a socket binds to, never a name."""
-    assert RuntimeSettings.from_env({**FULL, "BIND_HOST": value}).bind_host == bound
+    assert ServeSettings.from_env({**FULL, "BIND_HOST": value}).bind_host == bound
 
 
 BIND_SENTENCE = (
@@ -158,9 +196,16 @@ UNPRINTABLE_KEYS = [
 )
 def test_bind_host_refuses_a_name_or_a_malformed_address_in_one_sentence(value: str) -> None:
     with pytest.raises(OperatorError) as raised:
-        RuntimeSettings.from_env({**FULL, "BIND_HOST": value})
+        ServeSettings.from_env({**FULL, "BIND_HOST": value})
     assert raised.value.sentence == BIND_SENTENCE
     assert value not in raised.value.sentence
+
+
+@pytest.mark.parametrize("value", ["0", "70000", "http"])
+def test_a_malformed_port_names_the_variable(value: str) -> None:
+    with pytest.raises(OperatorError) as raised:
+        ServeSettings.from_env({**FULL, "PORT": value})
+    assert raised.value.sentence.startswith("Configuration error: PORT must be")
 
 
 @pytest.mark.parametrize("value", UNPRINTABLE_KEYS)

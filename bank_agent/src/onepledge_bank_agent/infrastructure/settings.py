@@ -1,11 +1,13 @@
 """Environment settings of the bank agent (SPEC 3.1, 3.3).
 
 The only module of this package that reads `os.environ`. Settings are scoped to the
-command: a runtime process (`worker`, later `serve`) parses `RuntimeSettings`, which
-cannot hold an owner or superuser URL; the administrative commands parse
-`AdminSettings`. A missing or malformed value stops the command with one sentence
-naming the variable, never its value. Database URLs and API keys are secrets and are
-masked in every repr.
+command: every runtime command (`worker`, `registry sync`, `integrity report` and
+`verify`) parses `RuntimeSettings`, which cannot hold an owner or superuser URL and
+requires `BANK_CODE` and `BANK_NAME` (SPEC_DECISIONS 93, item 11); `serve` (WP4) parses
+`ServeSettings`, the only settings that read `BIND_HOST` and `PORT` (SPEC_DECISIONS 73);
+the administrative commands parse `AdminSettings`. A missing or malformed value stops the
+command with one sentence naming the variable, never its value. Database URLs and API
+keys are secrets and are masked in every repr.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from onepledge_bank_agent.infrastructure.setting_reader import SettingReader, in
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 _ROLE_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 _BANK_CODE = re.compile(r"^[A-Z]{3,12}$")
+_BANK_NAME = re.compile(r"^[ -~]{1,100}$")
 MAX_PORT = 65535
 MAX_CHUNK = 1000
 MAX_TOKENIZE_CHUNK = 125  # 8 elements per loan, at most 1,000 elements per key holder request
@@ -95,6 +98,10 @@ def _bank_code(read: SettingReader) -> str | None:
     return read.matching("BANK_CODE", _BANK_CODE, "3 to 12 upper case letters")
 
 
+def _bank_name(read: SettingReader) -> str | None:
+    return read.matching("BANK_NAME", _BANK_NAME, "1 to 100 printable ASCII characters")
+
+
 def _required[T](name: str, value: T | None, reveal: Callable[[T], str]) -> str:
     if value is None:
         raise _missing(name)
@@ -162,18 +169,19 @@ class RegistrySettings(BaseModel):
 
 
 class RuntimeSettings(BaseModel):
-    """Settings of a serving or working process (`worker`, and `serve` from WP4).
+    """Settings of every runtime command: `worker`, `registry sync`, `integrity report` and `verify`.
 
     It has no field for MIGRATION_DATABASE_URL or PG_ADMIN_URL: a process that handles
-    tapes never holds an owner or superuser credential (SPEC_DECISIONS 22, finding 5).
+    tapes never holds an owner or superuser credential (SPEC_DECISIONS 22, finding 5). It
+    has no field for BIND_HOST or PORT either: only `serve` reads them (SPEC_DECISIONS 73),
+    so a wrong value cannot stop a worker or a one-shot command. BANK_CODE and BANK_NAME
+    are required here, at load (SPEC_DECISIONS 93, item 11).
     """
 
     model_config = ConfigDict(frozen=True)
 
-    bank_code: str | None
-    bank_name: str | None
-    bind_host: str
-    port: int | None
+    bank_code: str
+    bank_name: str
     database_url: SecretStr | None
     outside_records_url: str | None
     outside_records_api_key: SecretStr | None
@@ -185,12 +193,9 @@ class RuntimeSettings(BaseModel):
     def from_env(cls, environ: Mapping[str, str]) -> Self:
         """Parse the variables of a runtime process that are present; requirements are checked per use."""
         read = SettingReader(environ)
-        port_text = read.text("PORT")
         return cls(
-            bank_code=_bank_code(read),
-            bank_name=read.text("BANK_NAME"),
-            bind_host=read.bind_host(),
-            port=read.integer("PORT", 0, 1, MAX_PORT) if port_text is not None else None,
+            bank_code=_required("BANK_CODE", _bank_code(read), str),
+            bank_name=_required("BANK_NAME", _bank_name(read), str),
             database_url=read.secret("DATABASE_URL"),
             outside_records_url=read.http_url("OUTSIDE_RECORDS_URL"),
             outside_records_api_key=read.secret("OUTSIDE_RECORDS_API_KEY"),
@@ -198,16 +203,6 @@ class RuntimeSettings(BaseModel):
             log_level=_log_level(read),
             tunables=_tunables(read),
         )
-
-    def require_bank_code(self) -> str:
-        """BANK_CODE."""
-        return _required("BANK_CODE", self.bank_code, str)
-
-    def require_port(self) -> int:
-        """PORT (no default; the launcher always sets it)."""
-        if self.port is None:
-            raise _missing("PORT")
-        return self.port
 
     def require_database_url(self) -> str:
         """DATABASE_URL (app role)."""
@@ -218,6 +213,30 @@ class RuntimeSettings(BaseModel):
         url = _required("OUTSIDE_RECORDS_URL", self.outside_records_url, str)
         key = _required("OUTSIDE_RECORDS_API_KEY", self.outside_records_api_key, _reveal)
         return url, key
+
+
+class ServeSettings(BaseModel):
+    """Settings of `serve` (WP4): the runtime settings and the address to listen on.
+
+    The only settings that read BIND_HOST, an IPv4 or IPv6 literal (a name, `localhost`
+    included, is malformed), and PORT. Whether the address belongs to this machine is
+    probed by `serve` at startup (SPEC_DECISIONS 73, point 3), not here.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    runtime: RuntimeSettings
+    bind_host: str
+    port: int
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str]) -> Self:
+        """The runtime variables, BIND_HOST (default 127.0.0.1) and PORT (required; no default)."""
+        read = SettingReader(environ)
+        runtime = RuntimeSettings.from_env(environ)
+        if read.text("PORT") is None:
+            raise _missing("PORT")
+        return cls(runtime=runtime, bind_host=read.bind_host(), port=read.integer("PORT", 0, 1, MAX_PORT))
 
 
 class AdminSettings(BaseModel):
@@ -269,6 +288,11 @@ class AdminSettings(BaseModel):
 def load_runtime_settings() -> RuntimeSettings:
     """Runtime settings from the process environment."""
     return RuntimeSettings.from_env(read_environment())
+
+
+def load_serve_settings() -> ServeSettings:
+    """`serve` settings from the process environment."""
+    return ServeSettings.from_env(read_environment())
 
 
 def load_admin_settings() -> AdminSettings:

@@ -68,6 +68,7 @@ class BankAgentHarness:
         self.bank_code = extra.get("BANK_CODE", "HARBOR")
         variables = {
             "BANK_CODE": self.bank_code,
+            "BANK_NAME": f"{self.bank_code.title()} Bank",
             "OUTSIDE_RECORDS_URL": OUTSIDE_BASE_URL,
             "OUTSIDE_RECORDS_API_KEY": services.outside.api_key,
             "CHECK_CHUNK_LOANS": "20",

@@ -244,8 +244,8 @@ records and the worker output carry the same keys. Every failure code except
 
 | Variable | Used by | Meaning |
 |---|---|---|
-| `BANK_CODE` | `seed-reference`, `worker` | `HARBOR`, `NORTHGATE` or `CALDER`. |
-| `BANK_NAME` | later packages | The bank's display name. |
+| `BANK_CODE` | `seed-reference`, `worker`, `registry sync`, `integrity report`, `integrity verify` | `HARBOR`, `NORTHGATE` or `CALDER`. Required by every runtime command (SPEC_DECISIONS 93, item 11). |
+| `BANK_NAME` | `worker`, `registry sync`, `integrity report`, `integrity verify` | The bank's display name, 1 to 100 printable ASCII characters. Required by every runtime command. |
 | `DATABASE_URL` | `db provision`, `db status`, `worker` | `postgresql://{db}_app:PASSWORD@HOST:PORT/{db}`, the app role. |
 | `MIGRATION_DATABASE_URL` | `db provision`, `db migrate`, `seed-reference` | `postgresql://{db}_owner:PASSWORD@HOST:PORT/{db}`, the owner role. Never read by the worker. |
 | `DB_APP_ROLE` | `db migrate` | The role that receives the grants (`{db}_app`). |
@@ -265,9 +265,12 @@ records and the worker output carry the same keys. Every failure code except
 | `HTTP_CONNECT_TIMEOUT_SECONDS`, `HTTP_READ_TIMEOUT_SECONDS` | `worker` | Defaults 2 and 10. |
 | `TITLE_PENDING_WINDOW_DAYS`, `FIRST_PAYMENT_GRACE_DAYS`, `PAYMENT_WINDOW_DAYS`, `CONTRACT_DATE_TOLERANCE_DAYS` | `worker` | Check windows of SPEC 11; defaults 30, 45, 90, 3. |
 
-`BIND_HOST` (for the HTTP API of WP4, default `127.0.0.1`) is the address the socket
-binds to: an IPv4 or IPv6 literal, or the wildcard `0.0.0.0` or `::`; a name such as
-`localhost` is refused with "set BIND_HOST to 127.0.0.1 or 0.0.0.0" (SPEC_DECISIONS 66).
+`BIND_HOST` (default `127.0.0.1`) and `PORT` are read only by `serve`, the HTTP API of
+WP4 (SPEC_DECISIONS 73): no other command parses them, so a wrong value cannot stop a
+worker or a one-shot command. `BIND_HOST` is an IPv4 or IPv6 literal, or the wildcard
+`0.0.0.0` or `::`; a name such as `localhost` is refused with "set BIND_HOST to 127.0.0.1
+or 0.0.0.0". The loader checks the format now (`ServeSettings`); the probe that the
+address belongs to this machine comes with `serve`.
 Every value is trimmed of ASCII space, tab, CR and LF at both ends; a value that still
 holds a control character or whitespace other than the ASCII space names its variable,
 secrets included. `PORT` has no default (SPEC_DECISIONS 12); it is used by the HTTP API of WP4. Role names

@@ -138,10 +138,14 @@ def test_every_well_formed_integer_reads_back(value: int) -> None:
     assert parse_integer(str(value), "x") == value
 
 
+IDENTITY = {"BANK_CODE": "HARBOR", "BANK_NAME": "Harbor Bank"}
+"""The two variables every runtime command requires (SPEC_DECISIONS 93, item 11)."""
+
+
 @pytest.mark.parametrize("value", ["\u00b2", "\u0663", "+3", "3.0", "-1"])
 def test_a_malformed_integer_setting_names_its_variable(value: str) -> None:
     with pytest.raises(OperatorError) as raised:
-        RuntimeSettings.from_env({"PIPELINE_MAX_ATTEMPTS": value})
+        RuntimeSettings.from_env({**IDENTITY, "PIPELINE_MAX_ATTEMPTS": value})
     assert "PIPELINE_MAX_ATTEMPTS" in raised.value.sentence and raised.value.code == "CONFIGURATION_ERROR"
 
 
@@ -149,6 +153,9 @@ def test_a_malformed_integer_setting_names_its_variable(value: str) -> None:
 def test_a_malformed_seconds_setting_names_its_variable(value: str) -> None:
     if value.strip(" "):
         with pytest.raises(OperatorError) as raised:
-            RuntimeSettings.from_env({"PIPELINE_POLL_SECONDS": value})
+            RuntimeSettings.from_env({**IDENTITY, "PIPELINE_POLL_SECONDS": value})
         assert "PIPELINE_POLL_SECONDS" in raised.value.sentence
-    assert RuntimeSettings.from_env({"PIPELINE_POLL_SECONDS": "0.5"}).tunables.pipeline_poll_seconds == 0.5
+    assert (
+        RuntimeSettings.from_env({**IDENTITY, "PIPELINE_POLL_SECONDS": "0.5"}).tunables.pipeline_poll_seconds
+        == 0.5
+    )

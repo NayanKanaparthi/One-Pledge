@@ -207,7 +207,7 @@ def _report(report: WorkerReport, output: Output) -> int:
 
 def _worker(arguments: argparse.Namespace, output: Output, collaborators: Collaborators | None) -> int:
     settings = load_runtime_settings()
-    _route_logs(settings.require_bank_code(), settings.log_level, arguments.quiet)
+    _route_logs(settings.bank_code, settings.log_level, arguments.quiet)
     with database_errors_as_operator_errors(), RuntimeComposition(settings, collaborators) as composition:
         composition.schema().require_head()
         composition.role_guard().require_least_privilege()
