@@ -102,7 +102,7 @@ def test_records_are_json_with_fixed_keys_and_no_exception_text(captured: io.Str
     try:
         raise ValueError("1HGCM82633A004352 belongs to C1234567")
     except ValueError as error:
-        log.failure(LogEvent.STAGE_UNEXPECTED_ERROR, error, stage="CHECKED")
+        log.failure(LogEvent.STAGE_UNEXPECTED_ERROR, error, error_code="INTERNAL_ERROR", stage="CHECKED")
     first, second = lines(captured)
     assert {"ts", "level", "event", "service", "bank_code"} <= set(first)
     assert (first["service"], first["bank_code"], first["event"], first["rows"]) == (
@@ -112,6 +112,7 @@ def test_records_are_json_with_fixed_keys_and_no_exception_text(captured: io.Str
         3,
     )
     assert second["exception_type"] == "ValueError" and "test_logging.py" in second["stack"]
+    assert (second["level"], second["error_code"]) == ("error", "INTERNAL_ERROR"), "SPEC_DECISIONS 66"
     text = captured.getvalue()
     assert "1HGCM82633A004352" not in text and "C1234567" not in text and "belongs" not in text
 

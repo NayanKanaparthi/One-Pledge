@@ -192,6 +192,6 @@ class StructlogOperationalLog:
         """A warning record."""
         self._logger.warning(event, **fields)
 
-    def failure(self, event: str, error: BaseException, **fields: LogValue) -> None:
-        """An error record with the exception's type and frame locations (never its message)."""
-        self._logger.error(event, exc_info=error, **fields)
+    def failure(self, event: str, error: BaseException, *, error_code: str, **fields: LogValue) -> None:
+        """An error record with its code, the exception's type and frame locations (never its message)."""
+        self._logger.error(event, exc_info=error, error_code=error_code, **fields)

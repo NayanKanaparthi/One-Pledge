@@ -16,7 +16,8 @@ from bank_testkit.world import World
 from onepledge_bank_agent.application.advance_submission import AdvanceSubmission
 from onepledge_bank_agent.application.ports import StopSignal
 from onepledge_bank_agent.application.run_pipeline_worker import RunPipelineWorker, WorkerSettings
-from onepledge_bank_agent.domain.enums import TapeKind, TapeSource, TapeStatus
+from onepledge_bank_agent.domain.dependency_errors import RegistryRejectedError
+from onepledge_bank_agent.domain.enums import FailureReason, TapeKind, TapeSource, TapeStatus
 from onepledge_bank_agent.domain.errors import OutsideRecordsUnavailableError
 from onepledge_bank_agent.domain.tape import TapeFacts, TapeSubmission
 
@@ -161,4 +162,25 @@ def test_a_failing_step_is_logged_and_the_worker_keeps_going() -> None:
         failures
         and failures[0]["exception_type"] == "ConnectionError"
         and "database down" not in repr(failures)
+    )
+    assert failures[0]["error_code"] == "INTERNAL_ERROR"
+
+
+def test_a_failing_step_with_a_dependency_error_names_its_code_and_status() -> None:
+    """SPEC_DECISIONS 66: the worker's error record carries the A2 keys that apply."""
+    world = World()
+    upload(world, world.facility.facility_id, 0)
+
+    class Refused(Tick):
+        def run(self) -> None:
+            raise RegistryRejectedError(403, FailureReason.FORBIDDEN)
+
+    stop = Stop(idle_waits=1)
+    runner = worker(world, Locks(), FakeStage(world, TapeStatus.CLEANED), periodic=(Refused(0),), stop=stop)
+    runner.run_until_stopped()
+    (failed,) = [fields for _, event, fields in world.log.events if event == "worker_step_failed"][:1]
+    assert (failed["error_code"], failed["http_status"], failed["exception_type"]) == (
+        "REGISTRY_REJECTED_REQUEST",
+        403,
+        "RegistryRejectedError",
     )

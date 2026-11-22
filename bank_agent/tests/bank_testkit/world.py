@@ -56,8 +56,9 @@ class RecordingLog:
     def warning(self, event: str, **fields: LogValue) -> None:
         self.events.append(("warning", event, fields))
 
-    def failure(self, event: str, error: BaseException, **fields: LogValue) -> None:
-        self.events.append(("error", event, {**fields, "exception_type": type(error).__name__}))
+    def failure(self, event: str, error: BaseException, *, error_code: str, **fields: LogValue) -> None:
+        record = {**fields, "error_code": error_code, "exception_type": type(error).__name__}
+        self.events.append(("error", event, record))
 
 
 class World:

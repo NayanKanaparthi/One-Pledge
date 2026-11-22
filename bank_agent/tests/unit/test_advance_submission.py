@@ -167,6 +167,10 @@ def test_an_unexpected_error_is_logged_without_its_message_and_fails_with_intern
     }  # fmt: skip
     (level, event, fields), *_ = world.log.events
     assert (level, event, fields["exception_type"]) == ("error", "stage_unexpected_error", "KeyError")
+    assert (fields["error_code"], fields["submission_id"]) == ("INTERNAL_ERROR", str(submission)), (
+        "SPEC_DECISIONS 66: an error record names its code"
+    )
+    assert "http_status" not in fields, "no dependency answered"
     assert "1HGCM82633A004352" not in repr(world.log.events)
 
 

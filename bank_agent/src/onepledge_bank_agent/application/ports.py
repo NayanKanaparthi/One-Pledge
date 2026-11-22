@@ -369,8 +369,8 @@ class OperationalLog(Protocol):
         """Something an operator should look at."""
         ...
 
-    def failure(self, event: str, error: BaseException, **fields: LogValue) -> None:
-        """An unexpected error, logged with its type and frame locations only."""
+    def failure(self, event: str, error: BaseException, *, error_code: str, **fields: LogValue) -> None:
+        """An unexpected error: its code, type and frame locations only (SPEC_DECISIONS 66)."""
         ...
 
 

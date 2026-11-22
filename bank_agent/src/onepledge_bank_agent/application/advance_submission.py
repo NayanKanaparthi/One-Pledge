@@ -28,6 +28,7 @@ from onepledge_bank_agent.application.audit_entries import (
     stage_attempt_failed,
     tape_failed,
 )
+from onepledge_bank_agent.application.error_records import error_code_of, http_facts
 from onepledge_bank_agent.application.events import LogEvent
 from onepledge_bank_agent.application.ports import UnitOfWorkFactory
 from onepledge_bank_agent.application.runtime import Runtime, StopRequestedError
@@ -115,6 +116,8 @@ class AdvanceSubmission:
             self._log.failure(
                 LogEvent.STAGE_UNEXPECTED_ERROR,
                 error,
+                error_code=error_code_of(error),
+                **http_facts(error),
                 submission_id=str(submission_id),
                 stage=stage.reached.value,
             )

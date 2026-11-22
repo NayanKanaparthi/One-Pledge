@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Protocol
 
 from onepledge_bank_agent.application.advance_submission import AdvanceSubmission, StageRun
+from onepledge_bank_agent.application.error_records import error_code_of, http_facts
 from onepledge_bank_agent.application.events import LogEvent
 from onepledge_bank_agent.application.ports import SubmissionLocks, UnitOfWorkFactory
 from onepledge_bank_agent.application.runtime import Runtime
@@ -87,7 +88,9 @@ class RunPipelineWorker:
             try:
                 run = self._step()
             except Exception as error:  # a failed step (database down) must not end the worker
-                self._log.failure(LogEvent.WORKER_STEP_FAILED, error)
+                self._log.failure(
+                    LogEvent.WORKER_STEP_FAILED, error, error_code=error_code_of(error), **http_facts(error)
+                )
                 run = None
             if run is not None:
                 report.runs.append(run)
