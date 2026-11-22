@@ -1,5 +1,10 @@
 """Shared fixtures of the bank agent tests.
 
+The `ports` fixture runs each shared repository port test of `tests/ports/` twice: against
+the in-memory store (marker `unit`) and against PostgreSQL (marker `integration`), so a
+behaviour the two disagree on fails one of the runs (SPEC_DECISIONS 63). Those classes are
+the only definition of each port's behaviour; the memory store is held to it.
+
 Databases and roles are created through the bank agent's own provisioning code with a
 unique name, migrated with its own migration runner, and dropped afterwards. Data sets
 come from the `onepledge-datagen` command (the bank agent never imports datagen).
@@ -12,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from bank_testkit.backends import PortWorld, memory_backend, postgres_backend
 from bank_testkit.data import CONTRACTS, EXAMPLE_TAPES, SMALL_SEED, generate
 from bank_testkit.database import BankDatabase, drop, new_bank_database, provision_and_migrate
 from bank_testkit.doubles import InProcessDoubles
@@ -90,3 +96,18 @@ def doubles() -> Iterator[InProcessDoubles]:
     made = InProcessDoubles()
     yield made
     made.close()
+
+
+@pytest.fixture(
+    params=[
+        pytest.param("memory", marks=pytest.mark.unit),
+        pytest.param("postgres", marks=pytest.mark.integration),
+    ]
+)
+def ports(request: pytest.FixtureRequest) -> Iterator[PortWorld]:
+    """A seeded world over one implementation of the repository ports."""
+    if request.param == "memory":
+        yield PortWorld(memory_backend())
+        return
+    with postgres_backend() as backend:
+        yield PortWorld(backend)

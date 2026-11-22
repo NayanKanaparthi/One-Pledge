@@ -1,4 +1,8 @@
-"""SQL repositories, the audit writer and the advisory locks on a real PostgreSQL server."""
+"""What only PostgreSQL can show: concurrent writers, the gapless audit chain under them, advisory locks.
+
+The behaviour of each repository port is defined once, in `tests/ports/`, and run against
+both implementations; the tests here are the concurrency properties a single thread cannot reach.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +10,7 @@ import threading
 import uuid
 from collections.abc import Iterator
 from dataclasses import replace
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -21,20 +25,15 @@ from bank_testkit.outside import InProcessOutsideRecords
 from bank_testkit.pipeline import BankAgentHarness, Services
 from bank_testkit.tapes import SUMMIT_LAYOUT, summit_row, summit_tape
 from onepledge_bank_agent.domain.audit import Actor, AuditDraft
-from onepledge_bank_agent.domain.entities import Facility, Lender
 from onepledge_bank_agent.domain.enums import (
     AuditAction,
     AuditObjectType,
-    FacilityStatus,
-    FailureCode,
     Role,
     TapeKind,
     TapeSource,
-    TapeStatus,
 )
-from onepledge_bank_agent.domain.errors import ConcurrentUploadError, ReferenceDataError, TapeDuplicateError
+from onepledge_bank_agent.domain.errors import ConcurrentUploadError, TapeDuplicateError
 from onepledge_bank_agent.domain.tape import TapeFacts, TapeSubmission
-from onepledge_bank_agent.domain.values import Lei
 from onepledge_bank_agent.infrastructure.audit import HashChainedAuditWriter
 from onepledge_bank_agent.infrastructure.db.engines import make_engine
 from onepledge_bank_agent.infrastructure.db.locks import SqlSubmissionLocks
@@ -92,38 +91,6 @@ def tape(
         sha, "b" * 64, date(2026, 10, 15), 1, user, uploaded,
     )  # fmt: skip
     return TapeSubmission.receive(facts)
-
-
-def add(engine: Engine, *tapes: TapeSubmission) -> None:
-    with units(engine)() as unit:
-        for item in tapes:
-            unit.tapes.add(item, SUMMIT_LAYOUT)
-        unit.commit()
-
-
-def test_runnable_respects_upload_order_facility_order_and_backoff(
-    seeded: BankDatabase, app_engine: Engine
-) -> None:
-    start = datetime(2026, 11, 20, 9, tzinfo=UTC)
-    other_facility = second_facility(seeded)
-    first, second = tape(seeded, start), tape(seeded, start + timedelta(minutes=1))
-    elsewhere = tape(seeded, start + timedelta(minutes=2), facility=other_facility)
-    add(app_engine, second, elsewhere, first)
-    statuses = {TapeStatus.RECEIVED}
-    with units(app_engine)() as unit:
-        assert unit.tapes.runnable(statuses, start, 10) == [first.submission_id, elsewhere.submission_id]
-        assert unit.tapes.runnable(set(), start, 10) == []
-        assert unit.tapes.runnable(statuses, start, 1) == [first.submission_id]
-        assert not first.record_failed_attempt(FailureCode.OUTSIDE_RECORDS_UNAVAILABLE, start, 8)
-        unit.tapes.save(first)
-        unit.commit()
-    with units(app_engine)() as unit:
-        assert unit.tapes.runnable(statuses, start, 10) == [elsewhere.submission_id], (
-            "backing off and still blocking"
-        )
-        assert unit.tapes.runnable(statuses, start + timedelta(seconds=2), 10)[0] == first.submission_id
-        stored = unit.tapes.get(first.submission_id)
-        assert stored is not None and stored.progress.attempts == 1
 
 
 def test_a_concurrent_insert_of_the_same_file_raises_concurrent_upload(
@@ -213,16 +180,6 @@ def test_concurrent_audit_appends_keep_the_chain_gapless(seeded: BankDatabase, a
     assert first_broken_seq(seeded) is None
 
 
-def test_a_rolled_back_unit_of_work_writes_no_audit_entry(seeded: BankDatabase, app_engine: Engine) -> None:
-    before = pairs(seeded, "SELECT 'n', count(*)::text FROM audit_log")
-    assert before == {"n": "1"}, "only the seeding entry"
-    with units(app_engine)() as unit:
-        unit.record(
-            AuditDraft(AuditAction.TAPE_FAILED, Actor.system(), AuditObjectType.TAPE_SUBMISSION, None)
-        )
-    assert pairs(seeded, "SELECT 'n', count(*)::text FROM audit_log") == before
-
-
 def test_an_advisory_lock_is_exclusive_until_released(seeded: BankDatabase, app_engine: Engine) -> None:
     second_engine = make_engine(seeded.app_url)
     locks, other = SqlSubmissionLocks(app_engine), SqlSubmissionLocks(second_engine)
@@ -238,41 +195,3 @@ def test_an_advisory_lock_is_exclusive_until_released(seeded: BankDatabase, app_
             assert after
     finally:
         second_engine.dispose()
-
-
-def test_reference_upserts_keep_status_and_refuse_conflicting_ids(seeded: BankDatabase) -> None:
-    engine = make_engine(seeded.owner_url)
-    try:
-        current = facility_id(seeded)
-        with seeded.connect("owner") as connection:
-            connection.execute(
-                "UPDATE facilities SET status = 'SUSPENDED' WHERE facility_id = %s", (current,)
-            )
-        with units(engine)() as unit:
-            found = unit.facilities.get(current)
-            assert found is not None
-            unit.facilities.upsert_facility(found.facility)
-            unit.commit()
-        assert pairs(seeded, "SELECT code, status FROM facilities WHERE code = 'HARBOR-SUMMIT'") == {
-            "HARBOR-SUMMIT": "SUSPENDED"
-        }
-        stored_lei = pairs(
-            seeded, "SELECT 'lei', lei FROM lenders WHERE lender_id = %s", (found.lender.lender_id,)
-        )
-        clash = Lender(uuid.uuid4(), found.lender.legal_name, Lei(stored_lei["lei"]))
-        with pytest.raises(ReferenceDataError), units(engine)() as unit:
-            unit.facilities.upsert_lender(clash)
-        twin = Facility(
-            uuid.uuid4(),
-            found.lender.lender_id,
-            "HARBOR-SUMMIT",
-            "x",
-            1,
-            1,
-            FacilityStatus.ACTIVE,
-            date(2025, 1, 1),
-        )
-        with pytest.raises(ReferenceDataError), units(engine)() as unit:
-            unit.facilities.upsert_facility(twin)
-    finally:
-        engine.dispose()
