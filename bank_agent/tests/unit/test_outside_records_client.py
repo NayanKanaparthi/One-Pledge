@@ -251,6 +251,7 @@ def test_payments_are_requested_for_the_window_and_checked_for_the_vin() -> None
         "from": "2026-07-17",
         "to": "2026-10-15",
         "limit": "200",
+        "offset": "0",
     }
     foreign = {"items": [{**item, "vin": "5YJ3E1EA2KF317000"}], "total": 1, "limit": 200, "offset": 0}
     with pytest.raises(OutsideRecordsProtocolError):

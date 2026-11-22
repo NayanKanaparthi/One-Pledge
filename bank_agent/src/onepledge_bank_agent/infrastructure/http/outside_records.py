@@ -30,6 +30,7 @@ TITLE_ROUTE = "/v1/titles/{vin}"
 PAYMENTS_ROUTE = "/v1/payments"
 CONTRACTS_ROUTE = "/v1/contracts/{vin}"
 PAYMENTS_PAGE_LIMIT = 200
+MAX_PAYMENTS_IN_WINDOW = 10_000
 VIN_PATTERN = r"^[A-HJ-NPR-Z0-9]{17}$"
 
 
@@ -95,6 +96,60 @@ def _parse[M: BaseModel](model: type[M], response: httpx.Response) -> M:
         raise OutsideRecordsProtocolError(response.status_code) from None
 
 
+class _PaymentPages:
+    """The pages of one payments window, each checked against decision 52 as it arrives."""
+
+    def __init__(self, vin: Vin, window_from: date, window_to: date) -> None:
+        self._vin, self._from, self._to = vin.value, window_from, window_to
+        self._items: list[_PaymentBody] = []
+        self._total: int | None = None
+
+    @property
+    def held(self) -> int:
+        """The number of payments held so far: the offset of the next page."""
+        return len(self._items)
+
+    @property
+    def complete(self) -> bool:
+        """True once `total` payments are held."""
+        return self._total is not None and len(self._items) == self._total
+
+    def add(self, page: _PaymentPageBody, status: int) -> None:
+        """Take one page, or raise MALFORMED_RESPONSE when it breaks the window."""
+        if self._total is None:
+            self._total = page.total
+        newest = self._items[-1].paid_on if self._items else self._to
+        held = len(self._items) + len(page.items)
+        if (
+            page.total != self._total
+            or page.total > MAX_PAYMENTS_IN_WINDOW
+            or len(page.items) > PAYMENTS_PAGE_LIMIT
+            or held > page.total
+            or (not page.items and held < page.total)
+            or not _newest_first(newest, page.items)
+            or any(item.vin != self._vin or not self._from <= item.paid_on <= self._to for item in page.items)
+        ):
+            raise OutsideRecordsProtocolError(status)
+        self._items.extend(page.items)
+
+    def window(self) -> PaymentWindow:
+        """The complete window: every payment held, which is `total`."""
+        payments = tuple(
+            PaymentRecord(item.payment_id, item.paid_on, item.amount_cents, item.deposit_bank_code)
+            for item in self._items
+        )
+        return PaymentWindow(self._from, self._to, payments, len(payments))
+
+
+def _newest_first(previous: date, items: list[_PaymentBody]) -> bool:
+    """True when `paid_on` never increases, starting from the last payment already held."""
+    for item in items:
+        if item.paid_on > previous:
+            return False
+        previous = item.paid_on
+    return True
+
+
 class OutsideRecordsClient:
     """Implements the `TitleRecordsClient`, `PaymentsClient` and `ContractsClient` ports."""
 
@@ -120,24 +175,26 @@ class OutsideRecordsClient:
         return TitleRecord(body.state, body.title_status, body.lienholder_name, body.lien_recorded_on)
 
     def payments(self, vin: Vin, window_from: date, window_to: date) -> PaymentWindow:
-        """`GET /v1/payments?vin&from&to&limit=200`: payments in the inclusive window, newest first."""
-        params: dict[str, str | int] = {
-            "vin": vin.value,
-            "from": window_from.isoformat(),
-            "to": window_to.isoformat(),
-            "limit": PAYMENTS_PAGE_LIMIT,
-        }
-        response = self._caller.get(PAYMENTS_ROUTE, "/v1/payments", params)
-        if response.status_code != httpx.codes.OK:
-            raise self._failure(response)
-        body = _parse(_PaymentPageBody, response)
-        if any(item.vin != vin.value for item in body.items):
-            raise OutsideRecordsProtocolError(response.status_code)
-        payments = tuple(
-            PaymentRecord(item.payment_id, item.paid_on, item.amount_cents, item.deposit_bank_code)
-            for item in body.items
-        )
-        return PaymentWindow(window_from, window_to, payments, body.total)
+        """`GET /v1/payments?vin&from&to&limit=200&offset`: every payment in the inclusive window.
+
+        Pages with `offset` until `total` items are held, and proves the window complete
+        (SPEC_DECISIONS 52): any page that cannot belong to one consistent, newest first
+        answer about this vehicle and window is MALFORMED_RESPONSE.
+        """
+        pages = _PaymentPages(vin, window_from, window_to)
+        while not pages.complete:
+            params: dict[str, str | int] = {
+                "vin": vin.value,
+                "from": window_from.isoformat(),
+                "to": window_to.isoformat(),
+                "limit": PAYMENTS_PAGE_LIMIT,
+                "offset": pages.held,
+            }
+            response = self._caller.get(PAYMENTS_ROUTE, "/v1/payments", params)
+            if response.status_code != httpx.codes.OK:
+                raise self._failure(response)
+            pages.add(_parse(_PaymentPageBody, response), response.status_code)
+        return pages.window()
 
     def contracts(self, vin: Vin) -> tuple[ContractRecord, ...]:
         """`GET /v1/contracts/{vin}`: every contract, or none for 404 CONTRACT_NOT_FOUND."""
