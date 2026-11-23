@@ -144,11 +144,11 @@ class Console:
         if self.json_mode:
             self._write_json({"ok": True, **document})
 
-    def failure(self, code: str, sentence: str) -> None:
+    def failure(self, code: str, sentence: str, extra: dict[str, Json] | None = None) -> None:
         """The sentence on stderr and, in JSON mode, the failure document on stdout."""
         self.error(sentence)
         if self.json_mode:
-            self._write_json({"ok": False, "error": {"code": code, "message": sentence}})
+            self._write_json({"ok": False, "error": {"code": code, "message": sentence}, **(extra or {})})
 
     def traceback(self, error: BaseException) -> None:
         """The exception type and its frames on stderr (`--debug` only, SPEC_DECISIONS 53.12).

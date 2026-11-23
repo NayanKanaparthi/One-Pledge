@@ -270,6 +270,16 @@ class SqlClientRegistry:
             index_elements=[ApiClientRow.name],
             set_={"api_key_sha256": values.excluded.api_key_sha256, "active": True},
         ).returning(ApiClientRow.client_id)
+        taken = select(ApiClientRow.name).where(
+            ApiClientRow.api_key_sha256 == api_key_sha256, ApiClientRow.name != name
+        )
         with _owner_transaction(self._engine) as connection:
+            # Locks out a concurrent registration of the same key until this transaction ends.
+            connection.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": api_key_sha256})
+            if connection.execute(taken).first() is not None:
+                raise OperatorError(
+                    "Another client already has this key; generate a new key for this client.",
+                    "INVALID_INPUT",
+                )
             client_id: uuid.UUID = connection.execute(statement).scalar_one()
         return ApiClient(str(client_id), name)

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from onepledge_outside_records.domain.errors import OperatorError
+from onepledge_outside_records.domain.errors import OperatorError, RecordsRefusedError
 from onepledge_outside_records.infrastructure.csv_source import CsvRecordsSource
 
 pytestmark = pytest.mark.integration
@@ -51,7 +51,7 @@ def replace_cell(column: int, value: str) -> Callable[[str], str]:
     return change
 
 
-# SPEC_DECISIONS 43.3 and 45: a malformed file names the file and the problem; digits are ASCII.
+# SPEC_DECISIONS 43.3 and 45: a file that is not the generator's CSV is one sentence naming it.
 @pytest.mark.parametrize(
     ("name", "change", "fragment"),
     [
@@ -60,42 +60,10 @@ def replace_cell(column: int, value: str) -> Callable[[str], str]:
             lambda t: t.replace("vin,state", "vin,st", 1),
             "does not start with the header vin, state",
         ),
-        ("payments.csv", lambda t: t + "extra,cells\n", "line .* has 2 cells instead of 5"),
-        (
-            "titles.csv",
-            lambda t: t.replace(second_line(t)[:17], second_line(t)[:16] + "O", 1),
-            "titles.csv line 2 column vin",
-        ),
-        (
-            "payments.csv",
-            replace_cell(2, "2025-13-01"),
-            "payments.csv line 2 column paid_on is not a YYYY-MM-DD date",
-        ),
-        ("payments.csv", replace_cell(2, "2025-W01-1"), "column paid_on is not a YYYY-MM-DD date"),
-        (
-            "payments.csv",
-            replace_cell(2, "\u0662\u0660\u0662\u0665-01-01"),
-            "column paid_on is not a YYYY-MM-DD date",
-        ),
-        (
-            "contracts.csv",
-            replace_cell(3, "12.5"),
-            "contracts.csv line 2 column amount_cents is not a positive",
-        ),
-        ("contracts.csv", replace_cell(3, "\u00b2345"), "column amount_cents is not a positive whole number"),
-        (
-            "payments.csv",
-            replace_cell(3, "\uff11\uff12"),
-            "column amount_cents is not a positive whole number",
-        ),
-        ("payments.csv", replace_cell(3, "9" * 5000), "column amount_cents is not a positive whole number"),
-        ("payments.csv", replace_cell(3, "0"), "column amount_cents is not a positive whole number"),
-        ("payments.csv", replace_cell(3, "+5"), "column amount_cents is not a positive whole number"),
-        ("titles.csv", replace_cell(4, "2026-02-30"), "titles.csv line 2 column lien_recorded_on"),
         ("titles.csv", lambda t: t + '"unterminated\n', "is not well formed CSV"),
     ],
 )
-def test_malformed_files_stop_with_one_sentence(
+def test_a_file_that_is_not_the_generators_csv_stops_with_one_sentence(
     tmp_path: Path,
     copy_records: Callable[[Path], Path],
     name: str,
@@ -108,6 +76,151 @@ def test_malformed_files_stop_with_one_sentence(
         CsvRecordsSource().load(directory)
     assert "\n" not in raised.value.sentence
     assert "Unexpected" not in raised.value.sentence
+
+
+# SPEC_DECISIONS 109: every cell of every row of the three files is checked against the contract
+# before anything is written; each problem is FILE line N, column NAME: PROBLEM.
+DATE_RULE = "must be a date from 2000-01-01 to 2099-12-31"
+CENTS_RULE = "must be a whole number of cents from 1 to 999,999,999,999,999,999"
+CELL_PROBLEMS: list[tuple[str, Callable[[str], str], str]] = [
+    (
+        "titles.csv",
+        lambda t: t.replace(second_line(t)[:17], second_line(t)[:16] + "O", 1),
+        "titles.csv line 2, column vin: must match the VIN pattern of the contract",
+    ),
+    ("titles.csv", replace_cell(1, "nj"), "titles.csv line 2, column state: must be two upper case letters"),
+    ("titles.csv", replace_cell(1, "NJX"), "titles.csv line 2, column state: must be two upper case letters"),
+    (
+        "titles.csv",
+        replace_cell(2, "STOLEN"),
+        "titles.csv line 2, column title_status: must be one of CLEAN, SALVAGE, JUNK",
+    ),
+    (
+        "titles.csv",
+        replace_cell(3, "B" * 201),
+        "titles.csv line 2, column lienholder_name: must be at most 200 characters",
+    ),
+    (
+        "titles.csv",
+        replace_cell(3, "Harbor\x00Bank"),
+        "titles.csv line 2, column lienholder_name: must not hold a control character",
+    ),
+    ("titles.csv", replace_cell(4, "2026-02-30"), f"titles.csv line 2, column lien_recorded_on: {DATE_RULE}"),
+    ("titles.csv", replace_cell(4, "1999-12-31"), f"titles.csv line 2, column lien_recorded_on: {DATE_RULE}"),
+    (
+        "payments.csv",
+        replace_cell(0, "not-a-uuid"),
+        "payments.csv line 2, column payment_id: must be a UUID in lower case",
+    ),
+    ("payments.csv", replace_cell(2, "2025-13-01"), f"payments.csv line 2, column paid_on: {DATE_RULE}"),
+    ("payments.csv", replace_cell(2, "2025-W01-1"), f"payments.csv line 2, column paid_on: {DATE_RULE}"),
+    (
+        "payments.csv",
+        replace_cell(2, "\u0662\u0660\u0662\u0665-01-01"),
+        f"payments.csv line 2, column paid_on: {DATE_RULE}",
+    ),
+    (
+        "payments.csv",
+        replace_cell(3, "\uff11\uff12"),
+        f"payments.csv line 2, column amount_cents: {CENTS_RULE}",
+    ),
+    ("payments.csv", replace_cell(3, "9" * 5000), f"payments.csv line 2, column amount_cents: {CENTS_RULE}"),
+    ("payments.csv", replace_cell(3, "0"), f"payments.csv line 2, column amount_cents: {CENTS_RULE}"),
+    ("payments.csv", replace_cell(3, "+5"), f"payments.csv line 2, column amount_cents: {CENTS_RULE}"),
+    (
+        "payments.csv",
+        replace_cell(4, "harbor bank 1"),
+        "payments.csv line 2, column deposit_bank_code: must be 3 to 12 upper case letters",
+    ),
+    ("contracts.csv", replace_cell(3, "12.5"), f"contracts.csv line 2, column amount_cents: {CENTS_RULE}"),
+    (
+        "contracts.csv",
+        replace_cell(3, "\u00b2345"),
+        f"contracts.csv line 2, column amount_cents: {CENTS_RULE}",
+    ),
+    (
+        "contracts.csv",
+        replace_cell(2, "A" * 201),
+        "contracts.csv line 2, column lender_name: must be at most 200 characters",
+    ),
+    (
+        "contracts.csv",
+        replace_cell(2, "A" * 5000),
+        "contracts.csv line 2, column lender_name: must be at most 200 characters",
+    ),
+    (
+        "contracts.csv",
+        replace_cell(2, "Summit\x07Credit"),
+        "contracts.csv line 2, column lender_name: must not hold a control character",
+    ),
+    (
+        "contracts.csv",
+        replace_cell(5, "A" * 64),
+        "contracts.csv line 2, column document_sha256: must be 64 lower case hexadecimal digits",
+    ),
+    (
+        "contracts.csv",
+        replace_cell(5, "a" * 63),
+        "contracts.csv line 2, column document_sha256: must be 64 lower case hexadecimal digits",
+    ),
+    ("payments.csv", lambda t: t + "extra,cells\n", "payments.csv line {last}: has 2 cells instead of 5"),
+]
+
+
+@pytest.mark.parametrize(("name", "change", "problem"), CELL_PROBLEMS, ids=[p for _, _, p in CELL_PROBLEMS])
+def test_a_cell_outside_the_contract_is_named_by_file_line_and_column(
+    tmp_path: Path,
+    copy_records: Callable[[Path], Path],
+    name: str,
+    change: Callable[[str], str],
+    problem: str,
+) -> None:
+    directory = copy_records(tmp_path)
+    edit(directory, name, change)
+    last = len((directory / "outside_records" / name).read_text(encoding="utf-8").splitlines())
+    with pytest.raises(RecordsRefusedError) as raised:
+        CsvRecordsSource().load(directory)
+    assert raised.value.problems == (problem.format(last=last),)
+    assert raised.value.sentence == "The outside records hold 1 problem; nothing was loaded."
+
+
+def test_review_4_failure_1_every_problem_of_every_file_is_named_before_anything_is_loaded(
+    tmp_path: Path, copy_records: Callable[[Path], Path]
+) -> None:
+    """Review 4 failure 1: these four cells were loaded and the service then broke its contract."""
+    directory = copy_records(tmp_path)
+    edit(directory, "titles.csv", replace_cell(1, "nj"))
+    edit(directory, "titles.csv", replace_cell(3, "B" * 201))
+    edit(directory, "contracts.csv", replace_cell(2, "A" * 201))
+    edit(directory, "payments.csv", replace_cell(4, "harbor bank 1"))
+    with pytest.raises(RecordsRefusedError) as raised:
+        CsvRecordsSource().load(directory)
+    assert raised.value.problems == (
+        "titles.csv line 2, column state: must be two upper case letters",
+        "titles.csv line 2, column lienholder_name: must be at most 200 characters",
+        "payments.csv line 2, column deposit_bank_code: must be 3 to 12 upper case letters",
+        "contracts.csv line 2, column lender_name: must be at most 200 characters",
+    )
+
+
+def _repeat_first_row(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    return "".join([*lines, lines[1]])
+
+
+@pytest.mark.parametrize(
+    ("name", "column"),
+    [("titles.csv", "vin"), ("payments.csv", "payment_id"), ("contracts.csv", "contract_id")],
+)
+def test_a_repeated_key_inside_a_file_is_named_with_the_line_it_repeats(
+    tmp_path: Path, copy_records: Callable[[Path], Path], name: str, column: str
+) -> None:
+    directory = copy_records(tmp_path)
+    edit(directory, name, _repeat_first_row)
+    last = len((directory / "outside_records" / name).read_text(encoding="utf-8").splitlines())
+    with pytest.raises(RecordsRefusedError) as raised:
+        CsvRecordsSource().load(directory)
+    assert raised.value.problems == (f"{name} line {last}, column {column}: repeats the {column} of line 2",)
 
 
 def test_a_file_with_only_its_header_holds_no_records(

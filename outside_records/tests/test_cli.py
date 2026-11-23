@@ -95,7 +95,7 @@ def test_the_whole_command_sequence_on_a_fresh_database(
         assert all(line["service"] == "outside_records" for line in json_lines(err))
         assert out == f"Provisioned database {name} with roles {name}_owner and {name}_app.\n"
     code, out, err = run(["db", "migrate"], **env)
-    assert (code, out) == (0, "Migrated the outside records database to revision 0002_grants.\n")
+    assert (code, out) == (0, "Migrated the outside records database to revision 0003_contract_checks.\n")
     assert all(line["service"] == "outside_records" for line in json_lines(err))
     code, out, _ = run(["seed", "--data-dir", str(example_dir)], **env)
     titles, payments, contracts = (
@@ -129,7 +129,7 @@ def test_json_results_are_one_document_and_logs_stay_on_stderr(
         {"ok": True, "database": name, "owner_role": f"{name}_owner", "app_role": f"{name}_app"},
     )
     code, out, err = run(["db", "migrate", "--json"], **env)
-    assert (code, json.loads(out)) == (0, {"ok": True, "revision": "0002_grants"})
+    assert (code, json.loads(out)) == (0, {"ok": True, "revision": "0003_contract_checks"})
     assert json_lines(err)
     code, out, err = run(["db", "migrate", "--json", "--quiet"], **env)
     assert (code, json.loads(out)["ok"], err) == (0, True, "")
@@ -362,7 +362,7 @@ def test_migrate_writes_one_record_per_applied_revision(run: Run, provisioned_da
     assert code == 0
     lines = json_lines(err)
     applied = [line for line in lines if line["event"] == "schema_migration_applied"]
-    assert [line["revision"] for line in applied] == ["0001_schema", "0002_grants"]
+    assert [line["revision"] for line in applied] == ["0001_schema", "0002_grants", "0003_contract_checks"]
     assert not [line for line in lines if line["event"] == "library_log"]
     assert all(set(line) <= {"ts", "level", "event", "service", "revision", "logger"} for line in lines)
     code, _, err = run(["db", "migrate"], **provisioned_database.environment(LOG_LEVEL="INFO"))
@@ -510,3 +510,51 @@ def drop_app_role(database: Database) -> None:
     with psycopg.connect(database.admin_url, autocommit=True) as connection:
         connection.execute(sql.SQL("DROP OWNED BY {}").format(role))
         connection.execute(sql.SQL("DROP ROLE {}").format(role))
+
+
+# SPEC_DECISIONS 109: seed checks every cell before the first write; a refused seed changes nothing.
+def _lookups(call: Callable[..., httpx.Response], key: str, vin: str) -> list[tuple[int, bytes]]:
+    paths = (f"/v1/titles/{vin}", f"/v1/payments?vin={vin}&limit=200", f"/v1/contracts/{vin}")
+    answers = [call("GET", path, headers={"X-API-Key": key}) for path in paths]
+    return [(answer.status_code, answer.content) for answer in answers]
+
+
+@pytest.fixture
+def bad_bank_codes(copy_records: Callable[[Path], Path], tmp_path: Path) -> tuple[Path, str]:
+    """The example records with 25 payments whose bank code breaks the contract; and their VIN."""
+    directory = copy_records(tmp_path)
+    payments = directory / "outside_records" / "payments.csv"
+    lines = payments.read_text(encoding="utf-8").splitlines()
+    for index in range(1, 26):
+        cells = lines[index].split(",")
+        lines[index] = ",".join([*cells[:4], "harbor bank 1"])
+    payments.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return directory, lines[1].split(",")[1]
+
+
+def test_a_refused_seed_names_twenty_problems_and_the_rest_and_changes_no_lookup(
+    run: Run,
+    database: Database,
+    call: Callable[..., httpx.Response],
+    api_key: str,
+    bad_bank_codes: tuple[Path, str],
+) -> None:
+    directory, vin = bad_bank_codes
+    before = _lookups(call, api_key, vin)
+    code, out, err = run(["seed", "--data-dir", str(directory)], **database.environment())
+    assert (code, out) == (1, "")
+    assert err.splitlines() == [
+        "The outside records hold 25 problems; nothing was loaded.",
+        *(
+            f"  payments.csv line {n}, column deposit_bank_code: must be 3 to 12 upper case letters"
+            for n in range(2, 22)
+        ),
+        "  and 5 more",
+    ]
+    assert "constraint failed" not in err
+    code, out, _ = run(["seed", "--data-dir", str(directory), "--json"], **database.environment())
+    document = json.loads(out)
+    assert (code, document["ok"], document["error"]["code"]) == (1, False, "INVALID_INPUT")
+    assert document["problems_total"] == 25
+    assert document["problems"] == [line.strip() for line in err.splitlines()[1:21]]
+    assert _lookups(call, api_key, vin) == before

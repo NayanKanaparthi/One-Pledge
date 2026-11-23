@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,10 +15,11 @@ from alembic.migration import MigrationContext
 from psycopg import errors as pg_errors
 from psycopg import sql
 from sqlalchemy import Engine, inspect, text
+from sqlalchemy.exc import IntegrityError
 
 from onepledge_outside_records.application.administration import RegisterClient, SeedRecords
 from onepledge_outside_records.application.lookups import AuthenticateClient
-from onepledge_outside_records.domain.errors import OperatorError, UnauthenticatedError
+from onepledge_outside_records.domain.errors import OperatorError, RecordsRefusedError, UnauthenticatedError
 from onepledge_outside_records.infrastructure.csv_source import CsvRecordsSource
 from onepledge_outside_records.infrastructure.db.engines import make_engine
 from onepledge_outside_records.infrastructure.db.migrations import MigrationRunner
@@ -90,7 +92,7 @@ def test_migrations_go_up_down_and_up_again(provisioned_database: Database) -> N
         assert set(TABLES) <= table_names(engine)
         with engine.connect() as connection:
             version: str = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert version == "0002_grants"
+        assert version == runner.head_revision() == "0003_contract_checks"
     finally:
         engine.dispose()
 
@@ -185,15 +187,18 @@ def test_a_failed_seed_changes_nothing(
 ) -> None:
     before = contents(owner_engine)
     directory = copy_records(tmp_path)
-    # A title status outside the CHECK constraint: the file is well formed, the database refuses it.
+    # A title status outside the contract: the file is well formed, the record rules refuse it.
     titles = directory / "outside_records" / "titles.csv"
     lines = titles.read_text().splitlines()
     cells = lines[1].split(",")
     cells[2] = "WRECKED"
     titles.write_text("\n".join([lines[0], ",".join(cells), *lines[2:]]) + "\n")
-    with pytest.raises(OperatorError, match="nothing was changed") as raised:
+    with pytest.raises(RecordsRefusedError) as raised:
         SeedRecords(CsvRecordsSource(), SqlRecordsWriter(owner_engine)).run(directory)
-    assert cells[0] not in raised.value.sentence and "WRECKED" not in raised.value.sentence
+    assert raised.value.sentence == "The outside records hold 1 problem; nothing was loaded."
+    assert raised.value.problems == (
+        "titles.csv line 2, column title_status: must be one of CLEAN, SALVAGE, JUNK",
+    )
     assert contents(owner_engine) == before
 
 
@@ -263,3 +268,59 @@ def test_an_unknown_revision_is_one_plain_sentence(provisioned_database: Databas
         runner.upgrade("9999_unknown")
     assert raised.value.sentence.startswith("Alembic could not run the migrations")
     assert not any(mark in raised.value.sentence for mark in ("'", "[", "("))
+
+
+# SPEC_DECISIONS 109.5: the database holds the contract's rules too, whoever writes the row.
+VIN = "1HGCM82633A004352"
+UUID = "0b7c2c1e-4f7d-4c1e-9a52-6a1f2d3c4b5a"
+DAY = date(2026, 1, 1)
+INSERTS = {
+    "title_records": text("INSERT INTO title_records VALUES (:vin, :state, :status, :name, :day)"),
+    "payments": text("INSERT INTO payments VALUES (:id, :vin, :day, :cents, :bank)"),
+    "contracts": text("INSERT INTO contracts VALUES (:id, :vin, :name, :cents, :day, :sha)"),
+}
+TITLE = {"vin": VIN, "state": "NJ", "status": "CLEAN", "name": None, "day": None}
+PAYMENT = {"id": UUID, "vin": VIN, "day": DAY, "cents": 1, "bank": "HARBOR"}
+CONTRACT = {"id": UUID, "vin": VIN, "name": "Summit", "cents": 1, "day": DAY, "sha": "a" * 64}
+FORBIDDEN_ROWS: dict[str, tuple[str, dict[str, object]]] = {
+    "title state": ("title_records", {**TITLE, "state": "nj"}),
+    "title vin": ("title_records", {**TITLE, "vin": VIN.lower()}),
+    "lienholder length": ("title_records", {**TITLE, "name": "B" * 201}),
+    "lienholder control": ("title_records", {**TITLE, "name": "Harbor\x07"}),
+    "lien date": ("title_records", {**TITLE, "day": date(1999, 12, 31)}),
+    "payment vin": ("payments", {**PAYMENT, "vin": "SHORT"}),
+    "payment date": ("payments", {**PAYMENT, "day": date(2100, 1, 1)}),
+    "bank code": ("payments", {**PAYMENT, "bank": "harbor bank 1"}),
+    "contract vin": ("contracts", {**CONTRACT, "vin": "SHORT"}),
+    "lender length": ("contracts", {**CONTRACT, "name": "A" * 201}),
+    "lender control": ("contracts", {**CONTRACT, "name": "A\x01"}),
+    "contract date": ("contracts", {**CONTRACT, "day": date(1999, 1, 1)}),
+}
+
+
+@pytest.mark.parametrize(("table", "values"), FORBIDDEN_ROWS.values(), ids=list(FORBIDDEN_ROWS))
+def test_the_database_refuses_a_row_the_contract_forbids(
+    owner_engine: Engine, table: str, values: dict[str, object]
+) -> None:
+    with owner_engine.connect() as connection, pytest.raises(IntegrityError) as raised:
+        connection.execute(INSERTS[table], values)
+    assert isinstance(raised.value.orig, pg_errors.CheckViolation)
+
+
+def test_the_valid_rows_of_those_cases_are_accepted(owner_engine: Engine) -> None:
+    with owner_engine.connect() as connection:
+        for table, values in (("title_records", TITLE), ("payments", PAYMENT), ("contracts", CONTRACT)):
+            connection.execute(INSERTS[table], values)
+        connection.rollback()
+
+
+def test_a_key_another_client_already_has_is_refused_by_name(
+    owner_engine: Engine, make_key: Callable[[], str]
+) -> None:
+    """Review 4 quality 10: this said a constraint failed."""
+    registry, key = SqlClientRegistry(owner_engine), make_key()
+    RegisterClient(registry).run("calder-test", key)
+    with pytest.raises(OperatorError) as raised:
+        RegisterClient(registry).run("lakeside-test", key)
+    assert raised.value.sentence == "Another client already has this key; generate a new key for this client."
+    assert raised.value.code == "INVALID_INPUT"

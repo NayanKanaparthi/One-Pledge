@@ -6,14 +6,15 @@ import csv
 import io
 import os
 import stat
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import date
 from pathlib import Path
 from types import MappingProxyType
 
 from onepledge_outside_records.application.ports import RecordSet
-from onepledge_outside_records.domain.errors import OperatorError
-from onepledge_outside_records.domain.records import VIN_PATTERN, Contract, Payment, TitleRecord
+from onepledge_outside_records.domain.errors import OperatorError, RecordsRefusedError
+from onepledge_outside_records.domain.record_rules import record_problems
+from onepledge_outside_records.domain.records import Contract, Payment, TitleRecord
 from onepledge_outside_records.domain.text_values import (
     MAX_INTEGER,
     IntegerIssue,
@@ -102,70 +103,116 @@ def _rows(directory: Path, name: str) -> list[list[str]]:
         raise OperatorError(
             f"{path} does not start with the header {', '.join(HEADERS[name])}.", "INVALID_INPUT"
         )
-    for line, row in enumerate(rows[1:], start=2):
-        if len(row) != len(HEADERS[name]):
-            raise OperatorError(
-                f"{path} line {line} has {len(row)} cells instead of {len(HEADERS[name])}.", "INVALID_INPUT"
-            )
     return rows[1:]
 
 
-class _Cells:
-    """The cells of one CSV row, each parsed with an error naming the file, line and column."""
-
-    def __init__(self, name: str, line: int, row: list[str]) -> None:
-        self._name, self._line, self._row = name, line, row
-
-    def _refuse(self, column: int, problem: str) -> OperatorError:
-        column_name = HEADERS[self._name][column]
-        return OperatorError(
-            f"{self._name} line {self._line} column {column_name} {problem}.", "INVALID_INPUT"
-        )
-
-    def text(self, column: int) -> str:
-        return self._row[column]
-
-    def vin(self, column: int) -> str:
-        value = self._row[column]
-        if not VIN_PATTERN.fullmatch(value):
-            raise self._refuse(column, "does not match the VIN pattern of the contract")
-        return value
-
-    def day(self, column: int) -> date:
-        value = parse_iso_date(self._row[column])
-        if value is None:
-            raise self._refuse(column, "is not a YYYY-MM-DD date")
-        return value
-
-    def optional_day(self, column: int) -> date | None:
-        return self.day(column) if self._row[column] else None
-
-    def cents(self, column: int) -> int:
-        value = parse_integer_text(self._row[column], 1, MAX_INTEGER)
-        if isinstance(value, IntegerIssue):
-            raise self._refuse(column, "is not a positive whole number of cents")
-        return value
+# The key that must not repeat inside each file, and the contract schema of its rows.
+_KEYS: Mapping[str, str] = MappingProxyType(
+    {"titles.csv": "vin", "payments.csv": "payment_id", "contracts.csv": "contract_id"}
+)
+_RECORDS: Mapping[str, str] = MappingProxyType(
+    {"titles.csv": "TitleRecord", "payments.csv": "Payment", "contracts.csv": "Contract"}
+)
+_OPTIONAL = frozenset({"lienholder_name", "lien_recorded_on"})
 
 
-def _cells(directory: Path, name: str) -> list[_Cells]:
-    return [_Cells(name, line, row) for line, row in enumerate(_rows(directory, name), start=2)]
+def _document(name: str, row: list[str]) -> dict[str, object]:
+    """The row as the API would return it: an empty optional cell is null, an amount a number."""
+    document: dict[str, object] = dict(zip(HEADERS[name], row, strict=True))
+    for column in _OPTIONAL & set(document):
+        if document[column] == "":
+            document[column] = None
+    if "amount_cents" in document:
+        amount = parse_integer_text(str(document["amount_cents"]), 1, MAX_INTEGER)
+        document["amount_cents"] = None if isinstance(amount, IntegerIssue) else amount
+    return document
+
+
+def _day(document: Mapping[str, object], column: str) -> date | None:
+    value = document[column]
+    return parse_iso_date(value) if isinstance(value, str) else None
+
+
+def _cents(document: Mapping[str, object]) -> int | None:
+    value = document["amount_cents"]
+    return value if isinstance(value, int) else None
+
+
+def _title(d: Mapping[str, object]) -> TitleRecord:
+    name = d["lienholder_name"]
+    return TitleRecord(
+        str(d["vin"]),
+        str(d["state"]),
+        str(d["title_status"]),
+        name if isinstance(name, str) else None,
+        _day(d, "lien_recorded_on"),
+    )
+
+
+def _payment(d: Mapping[str, object]) -> Payment | None:
+    paid_on, cents = _day(d, "paid_on"), _cents(d)
+    if paid_on is None or cents is None:
+        return None
+    return Payment(str(d["payment_id"]), str(d["vin"]), paid_on, cents, str(d["deposit_bank_code"]))
+
+
+def _contract(d: Mapping[str, object]) -> Contract | None:
+    signed_on, cents = _day(d, "signed_on"), _cents(d)
+    if signed_on is None or cents is None:
+        return None
+    return Contract(
+        str(d["contract_id"]),
+        str(d["vin"]),
+        str(d["lender_name"]),
+        cents,
+        signed_on,
+        str(d["document_sha256"]),
+    )
+
+
+def _checked[R](
+    directory: Path, name: str, build: Callable[[Mapping[str, object]], R | None], problems: list[str]
+) -> tuple[R, ...]:
+    """The records of one file; every problem of every row is added to `problems`.
+
+    A row is built into its record only when the record rules found nothing wrong with it,
+    so a value the rules accepted is the value stored.
+    """
+    records: list[R] = []
+    first_line: dict[object, int] = {}
+    key = _KEYS[name]
+    for line, row in enumerate(_rows(directory, name), start=2):
+        if len(row) != len(HEADERS[name]):
+            problems.append(f"{name} line {line}: has {len(row)} cells instead of {len(HEADERS[name])}")
+            continue
+        document = _document(name, row)
+        found = [
+            f"{name} line {line}, column {field}: {problem}"
+            for field, problem in record_problems(_RECORDS[name], document)
+        ]
+        earlier = first_line.setdefault(document[key], line)
+        if earlier != line:
+            found.append(f"{name} line {line}, column {key}: repeats the {key} of line {earlier}")
+        record = None if found else build(document)
+        if record is not None:
+            records.append(record)
+        problems.extend(found)
+    return tuple(records)
 
 
 class CsvRecordsSource:
     """The three CSV files of a data directory."""
 
     def load(self, data_dir: Path) -> RecordSet:
-        """Parse and validate every row; a bad cell stops the load naming its file, line and column."""
-        titles = tuple(
-            TitleRecord(c.vin(0), c.text(1), c.text(2), c.text(3) or None, c.optional_day(4))
-            for c in _cells(data_dir, "titles.csv")
-        )
-        payments = tuple(
-            Payment(c.text(0), c.vin(1), c.day(2), c.cents(3), c.text(4))
-            for c in _cells(data_dir, "payments.csv")
-        )
-        contracts = tuple(
-            Contract(c.text(0), c.vin(1), c.text(2), c.cents(3), c.day(4), c.text(5))
-            for c in _cells(data_dir, "contracts.csv")
-        )
+        """Every row of the three files, checked against the contract before anything is returned.
+
+        A problem anywhere refuses the whole data set with every problem named
+        (SPEC_DECISIONS 109): nothing is written unless everything is valid.
+        """
+        problems: list[str] = []
+        titles = _checked(data_dir, "titles.csv", _title, problems)
+        payments = _checked(data_dir, "payments.csv", _payment, problems)
+        contracts = _checked(data_dir, "contracts.csv", _contract, problems)
+        if problems:
+            raise RecordsRefusedError(tuple(problems))
         return RecordSet(titles, payments, contracts)

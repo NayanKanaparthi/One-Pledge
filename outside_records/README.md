@@ -97,10 +97,12 @@ outside_records/
     versions/
       0001_schema.py    # tables, checks, indexes
       0002_grants.py    # the grant matrix for the app role
+      0003_contract_checks.py  # the contract's rules as check constraints
   src/
     onepledge_outside_records/
       domain/
         records         # VinText, TitleRecord, Payment, Contract, PaymentQuery
+        record_rules    # one validator per record type: every rule of the contract
         errors
         text_values     # the one text to integer and date parser, ASCII digits only
       application/
@@ -134,14 +136,27 @@ onepledge-outside serve                 serve the API on BIND_HOST:PORT as the a
 ```
 
 `seed` runs in one transaction as the owner role, prints the row count per table and is
-idempotent (the same input gives the same table contents). Every command exits 0 on
+idempotent (the same input gives the same table contents). Before anything is written it
+checks every cell of every row of the three files against the contract (SPEC_DECISIONS
+109): one validator per record type (`domain.record_rules`) holds every rule of
+`outside_records.yaml` (patterns, lengths, enums, minimums, formats) and the bounds of
+decision 100 (no control character, dates from 2000-01-01 to 2099-12-31), checked on the
+record as the API would return it, and `payment_id`, `contract_id` and the title VIN may
+not repeat inside their file. On any problem nothing is loaded: the sentence "The outside
+records hold N problems; nothing was loaded." is followed by at most 20 problems, each
+`FILE line N, column NAME: PROBLEM` (`titles.csv line 2, column state: must be two upper
+case letters`), and the count of the rest; `--json` carries the same list as `problems`
+with `problems_total`. Migration 0003 gives the database the same rules as check
+constraints, so no writer can store a row that makes the API break its contract.
+`clients add` with a key another client already has says so.
+
+Every command exits 0 on
 success and 1 with one sentence on stderr when something is wrong (PostgreSQL not
 reachable, a connection refused, tables missing, a privilege missing, port in use, a
 variable missing, malformed or out of range, a `PG_ADMIN_URL` that is not a superuser, a
-data file cell that is not in its format, named by file, line and column; a data file
-that is not a regular file inside the directory, such as a FIFO or a link, refused by
-name before it is opened, `outside_records/payments.csv is not a regular file.`, or one
-over 256 MiB, SPEC_DECISIONS 110), and 2 on a
+data file that is not a regular file inside the directory, such as a FIFO or a link,
+refused by name before it is opened, `outside_records/payments.csv is not a regular
+file.`, or one over 256 MiB, SPEC_DECISIONS 110), and 2 on a
 usage error (an empty `--data-dir` is one). An unexpected error prints `Unexpected error.
 Run with --debug for details.`, after one `error` log record with `exception_type` and
 `stack`; `--debug` adds the exception type and its frames (file, line, function), never

@@ -17,50 +17,16 @@ from onepledge_outside_records.application.lookups import (
 )
 from onepledge_outside_records.application.ports import RecordsReader
 from onepledge_outside_records.domain.errors import ErrorDetail, ValidationFailedError
+from onepledge_outside_records.domain.record_rules import contract_document, payment_document, title_document
 from onepledge_outside_records.domain.records import (
     DEFAULT_LIMIT,
     MAX_LIMIT,
     MIN_LIMIT,
-    Contract,
-    Payment,
     PaymentQuery,
-    TitleRecord,
     VinText,
 )
 from onepledge_outside_records.interface.http.plumbing import header, new_service_app, refuse_repeated_headers
 from onepledge_outside_records.interface.http.query import MAX_OFFSET, QueryParameters
-
-
-def _title_json(record: TitleRecord) -> dict[str, object]:
-    return {
-        "vin": record.vin,
-        "state": record.state,
-        "title_status": record.title_status,
-        "lienholder_name": record.lienholder_name,
-        "lien_recorded_on": record.lien_recorded_on.isoformat() if record.lien_recorded_on else None,
-    }
-
-
-def _payment_json(payment: Payment) -> dict[str, object]:
-    return {
-        "payment_id": payment.payment_id,
-        "vin": payment.vin,
-        "paid_on": payment.paid_on.isoformat(),
-        "amount_cents": payment.amount_cents,
-        "deposit_bank_code": payment.deposit_bank_code,
-    }
-
-
-def _contract_json(contract: Contract) -> dict[str, object]:
-    return {
-        "contract_id": contract.contract_id,
-        "vin": contract.vin,
-        "lender_name": contract.lender_name,
-        "amount_cents": contract.amount_cents,
-        "signed_on": contract.signed_on.isoformat(),
-        "document_sha256": contract.document_sha256,
-    }
-
 
 PAYMENT_PARAMETERS = ("vin", "from", "to", "limit", "offset")
 
@@ -107,14 +73,14 @@ def create_app(reader: RecordsReader) -> FastAPI:
     def title(vin: str, request: Request) -> JSONResponse:
         client(request)
         no_parameters(request)
-        return JSONResponse(_title_json(get_title.run(VinText.parse(vin))))
+        return JSONResponse(title_document(get_title.run(VinText.parse(vin))))
 
     @app.get("/v1/payments")
     def payments(request: Request) -> JSONResponse:
         client(request)
         page = list_payments.run(payment_query(request))
         body = {
-            "items": [_payment_json(p) for p in page.items],
+            "items": [payment_document(p) for p in page.items],
             "total": page.total,
             "limit": page.limit,
             "offset": page.offset,
@@ -126,7 +92,7 @@ def create_app(reader: RecordsReader) -> FastAPI:
         client(request)
         no_parameters(request)
         found = get_contracts.run(VinText.parse(vin))
-        return JSONResponse({"vin": found[0].vin, "contracts": [_contract_json(c) for c in found]})
+        return JSONResponse({"vin": found[0].vin, "contracts": [contract_document(c) for c in found]})
 
     @app.get("/healthz")
     def healthz() -> JSONResponse:

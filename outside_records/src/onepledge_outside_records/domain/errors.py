@@ -120,3 +120,17 @@ class OperatorError(Exception):
         self.code = code
         # The exception behind the sentence, kept (not chained) so `--debug` can show its frames.
         self.cause = cause
+
+
+class RecordsRefusedError(OperatorError):
+    """Cells of the seed files break the contract: nothing is loaded (SPEC_DECISIONS 109).
+
+    `problems` holds every problem, each `FILE line N, column NAME: PROBLEM`, in file, line
+    and column order; the command prints at most 20 and the count of the rest.
+    """
+
+    def __init__(self, problems: tuple[str, ...]) -> None:
+        count = len(problems)
+        noun = "problem" if count == 1 else "problems"
+        super().__init__(f"The outside records hold {count:,} {noun}; nothing was loaded.", "INVALID_INPUT")
+        self.problems = problems

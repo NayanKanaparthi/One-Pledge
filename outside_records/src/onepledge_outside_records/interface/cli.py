@@ -13,7 +13,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI
 
-from onepledge_outside_records.domain.errors import OperatorError
+from onepledge_outside_records.domain.errors import OperatorError, RecordsRefusedError
 from onepledge_outside_records.infrastructure.logging_setup import LogEvent, configure_logging, get_logger
 from onepledge_outside_records.infrastructure.settings import (
     AdminSettings,
@@ -23,6 +23,7 @@ from onepledge_outside_records.infrastructure.settings import (
 from onepledge_outside_records.interface.composition import Composition
 from onepledge_outside_records.interface.output import (
     Console,
+    Json,
     ProductParser,
     common_options,
     parse_arguments,
@@ -34,6 +35,7 @@ from onepledge_outside_records.interface.startup import start
 # The `service` value in log lines is the contract's health value (SPEC_DECISIONS 22.6).
 SERVICE_NAME = "outside_records"
 QUIET_LEVEL = "WARNING"
+MAX_LISTED_PROBLEMS = 20
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -221,6 +223,16 @@ def main(argv: Sequence[str] | None = None, console: Console | None = None) -> i
 def _run_reporting(arguments: argparse.Namespace, console: Console) -> int:
     try:
         return run(arguments, console)
+    except RecordsRefusedError as error:
+        # SPEC_DECISIONS 109.4: at most 20 problems, then the count of the rest; JSON the same.
+        shown = error.problems[:MAX_LISTED_PROBLEMS]
+        extra: dict[str, Json] = {"problems": list(shown), "problems_total": len(error.problems)}
+        console.failure(error.code, error.sentence, extra)
+        for problem in shown:
+            console.error(f"  {problem}")
+        if len(error.problems) > MAX_LISTED_PROBLEMS:
+            console.error(f"  and {len(error.problems) - MAX_LISTED_PROBLEMS:,} more")
+        return 1
     except OperatorError as error:
         if arguments.debug and error.cause is not None:
             console.traceback(error.cause)
