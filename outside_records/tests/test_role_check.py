@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 import psycopg
 import pytest
 from psycopg import sql
+from sqlalchemy.engine import make_url
 
 from onepledge_outside_records.infrastructure.db.engines import make_engine
 from onepledge_outside_records.infrastructure.db.migrations import MigrationRunner
@@ -68,6 +69,7 @@ ADVICE = {
     Violation.ROLE_HAS_SETTING: SETTINGS,
     Violation.PARAMETER_PRIVILEGE: SETTINGS,
     Violation.TRIGGERS_DISABLED_FOR_SESSION: SETTINGS,
+    Violation.DATABASE_HAS_SETTING: "remove the database setting",
 }
 
 
@@ -334,8 +336,14 @@ CASES = (
     Case(
         "replica_for_the_database",
         ("ALTER DATABASE {db} SET session_replication_role = replica",),
-        Violation.TRIGGERS_DISABLED_FOR_SESSION,
-        "database {db_name}",
+        Violation.DATABASE_HAS_SETTING,
+        "database {db_name}: session_replication_role",
+    ),
+    Case(
+        "replica_for_every_role_in_the_database",
+        ("ALTER ROLE ALL IN DATABASE {db} SET session_replication_role = local",),
+        Violation.DATABASE_HAS_SETTING,
+        "database {db_name}: session_replication_role",
     ),
     # 8. Functions.
     Case(
@@ -405,11 +413,28 @@ def test_every_code_has_its_advice() -> None:
     assert set(ADVICE) == set(Violation)
 
 
-def test_a_role_setting_also_disables_triggers_in_the_session_when_it_is_replica(
-    migrated: Database, admin: psycopg.Connection[Any]
+@pytest.mark.parametrize("name", ["replica_in_database", "replica_for_the_database"])
+def test_a_setting_that_explains_the_replica_session_is_the_only_code(
+    migrated: Database, admin: psycopg.Connection[Any], name: str
 ) -> None:
-    apply(admin, migrated, next(case for case in CASES if case.name == "replica_in_database"))
-    assert RoleViolation(Violation.TRIGGERS_DISABLED_FOR_SESSION, "session") in violations(migrated)
+    """SPEC_DECISIONS 128: the session code is only for a replica session no setting explains."""
+    apply(admin, migrated, next(case for case in CASES if case.name == name))
+    codes = {violation.code for violation in violations(migrated)}
+    assert Violation.TRIGGERS_DISABLED_FOR_SESSION not in codes
+
+
+def test_a_replica_session_no_setting_explains_is_the_session_code(migrated: Database) -> None:
+    # Only a superuser may set the parameter in its own session; that is the unexplained case.
+    url = str(make_url(migrated.admin_url).set(database=migrated.target.database))
+    engine = make_engine(url, service=True)
+    try:
+        with engine.connect() as connection:
+            connection.exec_driver_sql("SET session_replication_role = replica")
+            found = inspect_role(connection)
+    finally:
+        engine.dispose()
+    assert RoleViolation(Violation.TRIGGERS_DISABLED_FOR_SESSION, "session") in found
+    assert not {Violation.DATABASE_HAS_SETTING, Violation.ROLE_HAS_SETTING} & {v.code for v in found}
 
 
 def test_a_column_grant_on_one_table_is_reported_on_that_table_only(

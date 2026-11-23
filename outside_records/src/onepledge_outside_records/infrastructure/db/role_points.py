@@ -25,13 +25,26 @@ FROM pg_db_role_setting AS s LEFT JOIN pg_database AS d ON d.oid = s.setdatabase
 WHERE s.setrole = current_user::regrole
 ORDER BY 1
 """)
+# A setting of session_replication_role for every role, in this database or in every one.
 _DATABASE_REPLICA = text("""
 SELECT CASE WHEN s.setdatabase = 0 THEN 'every database' ELSE 'database ' || d.datname END
+    || ': session_replication_role'
 FROM pg_db_role_setting AS s LEFT JOIN pg_database AS d ON d.oid = s.setdatabase
 WHERE s.setrole = 0
     AND (s.setdatabase = 0 OR d.datname = current_database())
     AND EXISTS (SELECT 1 FROM unnest(s.setconfig) AS c(item) WHERE c.item LIKE 'session_replication_role=%')
 ORDER BY 1
+""")
+# Whether a setting of the role itself sets session_replication_role for this database.
+_ROLE_REPLICA = text("""
+SELECT EXISTS (
+    SELECT 1 FROM pg_db_role_setting AS s LEFT JOIN pg_database AS d ON d.oid = s.setdatabase
+    WHERE s.setrole = current_user::regrole
+        AND (s.setdatabase = 0 OR d.datname = current_database())
+        AND EXISTS (
+            SELECT 1 FROM unnest(s.setconfig) AS c(item) WHERE c.item LIKE 'session_replication_role=%'
+        )
+)
 """)
 _PARAMETERS = text("""
 SELECT p.parname FROM pg_parameter_acl AS p CROSS JOIN LATERAL aclexplode(p.paracl) AS x
@@ -105,13 +118,16 @@ def column_privileges(connection: Connection) -> Found:
 
 
 def settings(connection: Connection) -> Found:
-    """7. Role settings, a database-wide `session_replication_role`, parameter privileges, and a
-    session that would not fire triggers."""
+    """7. Role settings, a database setting of `session_replication_role`, parameter privileges,
+    and a session that would not fire triggers for a reason neither setting explains
+    (SPEC_DECISIONS 103, 128)."""
     found = [("ROLE_HAS_SETTING", row[0]) for row in connection.execute(_ROLE_SETTINGS)]
-    found.extend(("TRIGGERS_DISABLED_FOR_SESSION", row[0]) for row in connection.execute(_DATABASE_REPLICA))
+    database = [("DATABASE_HAS_SETTING", row[0]) for row in connection.execute(_DATABASE_REPLICA)]
+    found.extend(database)
     found.extend(("PARAMETER_PRIVILEGE", row[0]) for row in connection.execute(_PARAMETERS))
     replica: bool = connection.execute(_SESSION_REPLICA).scalar_one()
-    if replica:
+    explained: bool = bool(database) or connection.execute(_ROLE_REPLICA).scalar_one()
+    if replica and not explained:
         found.append(("TRIGGERS_DISABLED_FOR_SESSION", "session"))
     return found
 

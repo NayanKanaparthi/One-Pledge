@@ -18,16 +18,19 @@ synthetic and comes from `onepledge-datagen`.
   `public` no column-level privilege at all (`COLUMN_PRIVILEGE`) and, compared at table
   level, exactly the privileges of the grant matrix, counting grants to the role and to
   `PUBLIC`, with no table outside the matrix; no privilege on any sequence; no role
-  setting (`ROLE_HAS_SETTING`), no database-wide `session_replication_role`, no privilege
-  on a configuration parameter (`PARAMETER_PRIVILEGE`) and a session that fires triggers
-  (`TRIGGERS_DISABLED_FOR_SESSION`); no `SECURITY DEFINER` function and no `EXECUTE` on any
+  setting (`ROLE_HAS_SETTING`), no database setting of `session_replication_role` for
+  every role (`DATABASE_HAS_SETTING`, object `database X: session_replication_role`), no
+  privilege on a configuration parameter (`PARAMETER_PRIVILEGE`) and a session that fires
+  triggers (`TRIGGERS_DISABLED_FOR_SESSION`, only when neither setting explains a session in
+  `replica` or `local`); no `SECURITY DEFINER` function and no `EXECUTE` on any
   function outside the system schemas (`SECURITY_DEFINER_FUNCTION`, `FUNCTION_PRIVILEGE`);
   no default privilege for the role or `PUBLIC` (`DEFAULT_PRIVILEGE`); and nothing held
   `WITH GRANT OPTION` (`GRANT_OPTION`). The advice comes from one table: "use the app role
   as provisioned" for an attribute, membership, ownership or extra privilege; "the database
   was not provisioned or migrated correctly; run db migrate as the owner" for a missing
-  privilege or a table outside the matrix; "remove the role's settings" for a setting or
-  parameter. The grant matrix (`role_check.GRANT_MATRIX`) is the one table the grants
+  privilege or a table outside the matrix; "remove the role's settings" for a role setting,
+  a parameter privilege or the session; "remove the database setting" for
+  `DATABASE_HAS_SETTING`. The grant matrix (`role_check.GRANT_MATRIX`) is the one table the grants
   migration and the check both read. The check reads the role's attributes and
   privileges, never the URL, and does not depend on the search path.
 - `serve` sets its own session parameters on every connection, as connection options that
@@ -241,7 +244,8 @@ The integration tests need the PostgreSQL server at `PG_ADMIN_URL` (default
 `postgresql://postgres@localhost:55432/postgres`). Each test session provisions a
 uniquely named database and role pair through the same provisioning code, migrates it and
 drops it afterwards. The names have the form `optest_<UTC time>_<pid>_<8 hex>_outside`; a
-run stopped by SIGTERM still tears its fixtures down, every session first drops `optest_`
+run stopped by SIGTERM starts no further test, tears its fixtures down, exits non-zero and
+says so on its last line (SPEC_DECISIONS 126), every session first drops `optest_`
 databases and roles more than two hours old, and `make test-sweep` drops all of them. Every
 test stops after 120 seconds, and the tests that expect `serve` to refuse after 60.
 
