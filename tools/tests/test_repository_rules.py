@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from onepledge_testtools.declarations import undeclared_source_imports, undeclared_test_requirements
 from onepledge_testtools.repository_rules import (
     VIN_SHAPED,
     markdown_files,
@@ -97,7 +98,7 @@ def test_an_unescaped_pipe_in_a_code_span_splits_the_cell_as_github_renders_it()
 
 @pytest.mark.unit
 def test_the_tooling_keeps_the_size_limits_and_its_documents_render() -> None:
-    assert source_tree_problems(TOOLS / "onepledge_testtools") == []
+    assert source_tree_problems(TOOLS / "src" / "onepledge_testtools") == []
     assert markdown_problems(markdown_files(TOOLS), REPOSITORY) == []
 
 
@@ -106,3 +107,9 @@ def test_the_vin_shaped_pattern_is_the_reviewers_grep() -> None:
     assert VIN_SHAPED.search("ORDER = 2**252 + 27742317777372353535851937790883648493")
     assert not VIN_SHAPED.search("ORDER = 2**252 + 27_742_317_777_372_353_535_851_937_790_883_648_493")
     assert not VIN_SHAPED.search("1HGCM82633A00435")
+
+
+@pytest.mark.unit
+def test_the_tools_tests_need_nothing_the_tools_do_not_declare() -> None:
+    assert undeclared_test_requirements(TOOLS, TOOLS / "tests") == []
+    assert undeclared_source_imports(TOOLS, TOOLS / "src" / "onepledge_testtools") == []

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "onepledge-testtools"
+version = "1.0.0"
+description = "Test tooling of OnePledge layer 1: scratch database names, the sweep, unit isolation, the pytest plugin."
+requires-python = ">=3.12"
+dependencies = [
+  "pytest>=8",
+  "pytest-timeout>=2.3",
+  "psycopg[binary]>=3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest-cov>=5",
+  "ruff>=0.5",
+  "mypy>=1.10",
+]
+
+[project.scripts]
+onepledge-test-sweep = "onepledge_testtools.scratch_databases:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+onepledge_testtools = ["py.typed"]

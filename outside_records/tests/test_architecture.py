@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from onepledge_outside_records.infrastructure.db.role_check import GRANT_MATRIX
+from onepledge_testtools.declarations import undeclared_test_requirements
 from onepledge_testtools.repository_rules import (
     markdown_files,
     markdown_problems,
@@ -21,6 +22,7 @@ pytestmark = pytest.mark.unit
 PACKAGE = Path(__file__).resolve().parents[1]
 SOURCE = PACKAGE / "src" / "onepledge_outside_records"
 REPOSITORY = PACKAGE.parent
+PACKAGE_DIR = PACKAGE
 OWNED_MARKDOWN = markdown_files(PACKAGE)
 MIGRATIONS = PACKAGE / "migrations"
 OTHER_PACKAGES = frozenset(
@@ -219,3 +221,8 @@ def test_the_grant_matrix_is_spec_6_1_select_on_the_four_tables_and_nothing_else
         "api_clients": select,
         "alembic_version": frozenset(),
     }
+
+
+def test_the_tests_need_nothing_the_package_does_not_declare() -> None:
+    """The root plugins and every third party import of the tests are declared (SPEC_DECISIONS 117)."""
+    assert undeclared_test_requirements(PACKAGE_DIR, PACKAGE_DIR / "tests") == []

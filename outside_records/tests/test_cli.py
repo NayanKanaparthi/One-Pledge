@@ -8,7 +8,6 @@ import os
 import select
 import socket
 import subprocess
-import sys
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -23,6 +22,8 @@ from onepledge_outside_records.infrastructure.db.migrations import MigrationRunn
 from onepledge_outside_records.infrastructure.logging_setup import configure_logging
 from onepledge_outside_records.interface.cli import main
 from onepledge_outside_records.interface.output import Console
+from onepledge_testtools import processes
+from onepledge_testtools.network import LOOPBACK_IPV4, WILDCARD_IPV4
 
 if TYPE_CHECKING:
     from conftest import Database
@@ -363,7 +364,7 @@ def get(url: str, key: str | None = None) -> tuple[int, dict[str, object]]:
 
 
 @pytest.fixture
-def served(database: Database, api_key: str) -> Iterator[tuple[str, subprocess.Popen[bytes]]]:
+def served(database: Database, api_key: str) -> Iterator[tuple[str, subprocess.Popen[str]]]:
     """`onepledge-outside serve` as a child process on a free port; yields its base URL."""
     port = free_port()
     env = {
@@ -373,9 +374,7 @@ def served(database: Database, api_key: str) -> Iterator[tuple[str, subprocess.P
         "LOG_LEVEL": "INFO",
     }
     script = "from onepledge_outside_records.interface.cli import main; raise SystemExit(main(['serve']))"
-    process = subprocess.Popen(  # noqa: S603 - fixed interpreter and arguments
-        [sys.executable, "-c", script], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
+    process = processes.start([processes.PYTHON, "-c", script], env)
     base = f"http://127.0.0.1:{port}"
     for _ in range(100):
         try:
@@ -384,13 +383,11 @@ def served(database: Database, api_key: str) -> Iterator[tuple[str, subprocess.P
         except httpx.TransportError:
             time.sleep(0.1)
     yield base, process
-    if process.poll() is None:
-        process.terminate()
-        process.communicate(timeout=10)
+    processes.stop(process)
 
 
 def test_the_served_api_answers_and_logs_no_vin(
-    served: tuple[str, subprocess.Popen[bytes]], api_key: str, example_records: Path
+    served: tuple[str, subprocess.Popen[str]], api_key: str, example_records: Path
 ) -> None:
     base, process = served
     seeded = (example_records / "titles.csv").read_text().splitlines()[1].split(",")[0]
@@ -400,9 +397,8 @@ def test_the_served_api_answers_and_logs_no_vin(
     assert get(f"{base}/v1/titles/{UNSEEDED_VIN}", api_key)[0] == 404
     assert get(f"{base}/v1/titles/{seeded}")[0] == 401
     assert get(f"{base}/v1/payments?vin={seeded}", api_key)[0] == 200
-    process.terminate()
-    stdout, stderr = process.communicate(timeout=10)
-    lines = [json.loads(line) for line in stdout.decode().splitlines() if line.strip()]
+    stdout, stderr = processes.stop(process)
+    lines = [json.loads(line) for line in stdout.splitlines() if line.strip()]
     assert lines[0]["event"] == "service_started"
     assert {line["service"] for line in lines} == {"outside_records"}
     access = [line for line in lines if line["event"] == "http_request"]
@@ -415,7 +411,7 @@ def test_the_served_api_answers_and_logs_no_vin(
         "/v1/payments",
     ]
     assert [line["client"] for line in access] == [None, None, "harbor", "harbor", None, "harbor"]
-    text = stdout.decode() + stderr.decode()
+    text = stdout + stderr
     for forbidden in (seeded, UNSEEDED_VIN, seeded.lower(), api_key, "?vin="):
         assert forbidden not in text
 
@@ -461,9 +457,7 @@ NOT_LOCAL_SENTENCE = "BIND_HOST is not an address of this machine. Set BIND_HOST
 def serve_outcome(env: dict[str, str]) -> tuple[str, str]:
     """Start serve as a process: ("started", "") once it logs service_started, else its stderr."""
     script = "from onepledge_outside_records.interface.cli import main; raise SystemExit(main(['serve']))"
-    process = subprocess.Popen(  # noqa: S603 - fixed interpreter and arguments
-        [sys.executable, "-c", script], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    )
+    process = processes.start([processes.PYTHON, "-c", script], env)
     deadline = time.monotonic() + 20
     try:
         assert process.stdout is not None
@@ -474,13 +468,11 @@ def serve_outcome(env: dict[str, str]) -> tuple[str, str]:
         _, err = process.communicate(timeout=10)
         return "refused", err
     finally:
-        if process.poll() is None:
-            process.terminate()
-            process.communicate(timeout=10)
+        processes.stop(process)
 
 
 @pytest.mark.timeout(120)
-@pytest.mark.parametrize("host", ["127.0.0.1", "0.0.0.0", "8.8.8.8", "::", "::1"])  # noqa: S104 - decision 73.6
+@pytest.mark.parametrize("host", [LOOPBACK_IPV4, WILDCARD_IPV4, "8.8.8.8", "::", "::1"])
 def test_the_real_probe_on_each_bind_host(database: Database, host: str) -> None:
     env = {
         **{k: v for k, v in os.environ.items() if k not in VARIABLES},

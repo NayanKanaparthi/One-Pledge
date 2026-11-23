@@ -9,8 +9,6 @@ import json
 import os
 import select
 import socket
-import subprocess
-import sys
 import time
 import urllib.request
 from collections.abc import Callable
@@ -22,6 +20,8 @@ from onepledge_contract_fakes.key_holder import cli as key_holder_cli
 from onepledge_contract_fakes.members import api_key_sha256
 from onepledge_contract_fakes.registry import cli as registry_cli
 from onepledge_contract_fakes.testing import new_api_key, new_members, new_scalar
+from onepledge_testtools import processes
+from onepledge_testtools.network import LOOPBACK_IPV4, WILDCARD_IPV4
 
 # A serve call that refuses in process would serve forever if the refusal were missing, so each one
 # has a short limit of its own (SPEC_DECISIONS 76).
@@ -163,9 +163,7 @@ def test_the_registry_serves_health_as_a_process() -> None:
     port = free_port()
     env = {**{k: v for k, v in os.environ.items() if not k.startswith(ENV_PREFIXES)}, **registry_env(port)}
     script = "from onepledge_contract_fakes.registry.cli import main; raise SystemExit(main(['serve']))"
-    process = subprocess.Popen(  # noqa: S603 - fixed interpreter and arguments
-        [sys.executable, "-c", script], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
+    process = processes.start([processes.PYTHON, "-c", script], env)
     try:
         body = None
         for _ in range(100):
@@ -177,9 +175,8 @@ def test_the_registry_serves_health_as_a_process() -> None:
                 time.sleep(0.1)
         assert body == {"status": "ok", "service": "registry", "test_double": True}
     finally:
-        process.terminate()
-        stdout, _ = process.communicate(timeout=10)
-    lines = [json.loads(line) for line in stdout.decode().splitlines() if line.strip()]
+        stdout, _ = processes.stop(process)
+    lines = [json.loads(line) for line in stdout.splitlines() if line.strip()]
     assert lines and lines[0]["event"] == "service_started" and lines[0]["service"] == "registry"
 
 
@@ -194,9 +191,7 @@ NOT_LOCAL_SENTENCE = "BIND_HOST is not an address of this machine. Set BIND_HOST
 def serve_outcome(cli_module: str, env: dict[str, str]) -> tuple[str, str]:
     """Start a double's serve as a process: ("started", "") once it logs service_started, else its stderr."""
     script = f"from onepledge_contract_fakes.{cli_module}.cli import main; raise SystemExit(main(['serve']))"
-    process = subprocess.Popen(  # noqa: S603 - fixed interpreter and arguments
-        [sys.executable, "-c", script], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    )
+    process = processes.start([processes.PYTHON, "-c", script], env)
     deadline = time.monotonic() + 20
     try:
         assert process.stdout is not None
@@ -207,9 +202,7 @@ def serve_outcome(cli_module: str, env: dict[str, str]) -> tuple[str, str]:
         _, err = process.communicate(timeout=10)
         return "refused", err
     finally:
-        if process.poll() is None:
-            process.terminate()
-            process.communicate(timeout=10)
+        processes.stop(process)
 
 
 KEYS = json.dumps({"1": SCALAR})
@@ -218,7 +211,7 @@ KEYS = json.dumps({"1": SCALAR})
 @pytest.mark.integration
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize("cli_module", ["registry", "key_holder"])
-@pytest.mark.parametrize("host", ["127.0.0.1", "0.0.0.0", "8.8.8.8", "::", "::1"])  # noqa: S104 - decision 73.6
+@pytest.mark.parametrize("host", [LOOPBACK_IPV4, WILDCARD_IPV4, "8.8.8.8", "::", "::1"])
 def test_the_real_probe_on_each_bind_host(cli_module: str, host: str) -> None:
     base = {k: v for k, v in os.environ.items() if not k.startswith(ENV_PREFIXES)}
     with socket.socket() as spare:

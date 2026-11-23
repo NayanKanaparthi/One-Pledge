@@ -6,8 +6,9 @@ SEED ?= 20261117
 PROFILE ?= full
 FORCE ?=
 
-# Installable packages, in dependency order.
-PACKAGES := contracts/fakes datagen outside_records bank_agent
+# Installable packages, in dependency order: the test tools first, since every package's dev extra
+# declares them (SPEC_DECISIONS 117).
+PACKAGES := tools contracts/fakes datagen outside_records bank_agent
 # Import name of each package, used for the per package coverage gates.
 COVERAGE_PACKAGES := onepledge_contract_fakes onepledge_datagen onepledge_outside_records
 # The bank agent gate covers its domain and application layers combined (SPEC 2.2).
@@ -17,7 +18,7 @@ COVERAGE_MIN := 85
 BANK_UNIT_COVERAGE := COVERAGE_FILE=.coverage.bank-unit
 # mypy runs once per package so that test helpers with the same file name do not collide.
 MYPY := $(PYTHON) -m mypy --config-file pyproject.toml
-TEST_PATHS := tools/tests $(foreach p,$(PACKAGES),$(p)/tests)
+TEST_PATHS := $(foreach p,$(PACKAGES),$(p)/tests)
 DATA_DIR := var/data/$(PROFILE)-$(SEED)
 
 .DEFAULT_GOAL := help
@@ -48,15 +49,15 @@ format: ## Format the code and apply safe lint fixes
 
 typecheck: ## Run mypy in strict mode over every source and test tree
 	@echo "typecheck: contracts/fakes"
-	@MYPYPATH=tools $(MYPY) contracts/fakes/src contracts/fakes/tests
+	@$(MYPY) contracts/fakes/src contracts/fakes/tests
 	@echo "typecheck: tools"
-	@MYPYPATH=tools $(MYPY) tools/onepledge_testtools tools/tests
+	@$(MYPY) tools/src tools/tests
 	@echo "typecheck: datagen"
-	@MYPYPATH=tools $(MYPY) datagen/src datagen/tests
+	@$(MYPY) datagen/src datagen/tests
 	@echo "typecheck: outside_records"
-	@MYPYPATH=tools $(MYPY) outside_records/src outside_records/tests outside_records/migrations
+	@$(MYPY) outside_records/src outside_records/tests outside_records/migrations
 	@echo "typecheck: bank_agent"
-	@MYPYPATH=outside_records/src:contracts/fakes/src:tools $(MYPY) bank_agent/src bank_agent/tests bank_agent/migrations
+	@MYPYPATH=outside_records/src:contracts/fakes/src $(MYPY) bank_agent/src bank_agent/tests bank_agent/migrations
 
 contracts-check: ## Validate the contracts, their examples and the test vectors
 	@echo "contracts-check: onepledge-contracts check"
@@ -99,7 +100,7 @@ test-fast: ## Run only the unit and contract tests, and the bank agent's unit-on
 	$(call bank_unit_gate,test-fast)
 
 test-sweep: ## Drop every optest_ scratch database and role on the test server, whatever its age
-	@PYTHONPATH=tools $(PYTHON) -m onepledge_testtools.scratch_databases
+	@$(PYTHON) -m onepledge_testtools.scratch_databases
 
 ci: ## Run lint, typecheck, contracts-check and test, stopping at the first failure
 	@$(MAKE) --no-print-directory lint

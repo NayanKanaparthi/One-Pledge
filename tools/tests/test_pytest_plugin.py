@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import os
 import signal
-import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -13,6 +11,7 @@ import psycopg
 import pytest
 from psycopg import sql
 
+from onepledge_testtools import processes
 from onepledge_testtools.scratch_databases import admin_url
 
 REPOSITORY = Path(__file__).resolve().parents[2]
@@ -125,7 +124,7 @@ def test_integration_may_do_all_of_it(tmp_path):
 
 def _child(tests: Path, *extra: str) -> list[str]:
     return [
-        sys.executable,
+        processes.PYTHON,
         "-m",
         "pytest",
         "-c",
@@ -143,7 +142,7 @@ def _child(tests: Path, *extra: str) -> list[str]:
 
 
 def _environment(**extra: str) -> dict[str, str]:
-    return {**os.environ, "PYTHONPATH": str(REPOSITORY / "tools"), **extra}
+    return {**os.environ, **extra}
 
 
 @pytest.mark.reliability
@@ -152,26 +151,21 @@ def test_sigterm_tears_the_fixtures_down_so_the_database_is_dropped(tmp_path: Pa
     tests = tmp_path / "test_killed.py"
     tests.write_text(SIGTERM_TESTS)
     ready = tmp_path / "ready"
-    child = subprocess.Popen(  # noqa: S603 - the interpreter and arguments are fixed above
-        _child(tests),
-        env=_environment(READY_FILE=str(ready)),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+    child = processes.start(_child(tests), _environment(READY_FILE=str(ready)), merge_stderr=True)
     deadline = time.monotonic() + 60
     while not ready.exists() and child.poll() is None and time.monotonic() < deadline:
         time.sleep(0.1)
     name = ready.read_text() if ready.exists() else ""
     child.send_signal(signal.SIGTERM)
     output, _ = child.communicate(timeout=60)
-    assert name, output.decode()
+    assert name, output
     with psycopg.connect(admin_url(), autocommit=True) as admin:
         left = admin.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone()
         if left is not None:
             admin.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
-    assert left is None, output.decode()
-    assert child.returncode == pytest.ExitCode.INTERRUPTED, output.decode()
-    assert "received signal SIGTERM" in output.decode()
+    assert left is None, output
+    assert child.returncode == pytest.ExitCode.INTERRUPTED, output
+    assert "received signal SIGTERM" in output
 
 
 @pytest.mark.reliability
@@ -180,9 +174,7 @@ def test_every_test_has_a_time_limit_and_e2e_tests_a_longer_one(tmp_path: Path) 
     tests = tmp_path / "test_limits.py"
     tests.write_text(LIMIT_TESTS)
     started = time.monotonic()
-    result = subprocess.run(  # noqa: S603 - the interpreter and arguments are fixed above
-        _child(tests), env=_environment(), capture_output=True, text=True, timeout=60, check=False
-    )
+    result = processes.run(_child(tests), _environment())
     assert time.monotonic() - started < 30
     assert "3 passed" in result.stdout, result.stdout
     assert "1 failed" in result.stdout, result.stdout
@@ -193,9 +185,7 @@ def test_every_test_has_a_time_limit_and_e2e_tests_a_longer_one(tmp_path: Path) 
 def test_a_unit_test_that_does_io_fails_and_reading_a_committed_file_does_not(tmp_path: Path) -> None:
     tests = tmp_path / "test_isolation.py"
     tests.write_text(ISOLATION_TESTS)
-    result = subprocess.run(  # noqa: S603 - the interpreter and arguments are fixed above
-        _child(tests, "-rA"), env=_environment(), capture_output=True, text=True, timeout=60, check=False
-    )
+    result = processes.run(_child(tests, "-rA"), _environment())
     out = result.stdout
     assert "3 failed, 2 passed, 1 error" in out, out
     for test, what in (

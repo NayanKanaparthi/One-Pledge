@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from onepledge_testtools.declarations import undeclared_test_requirements
 from onepledge_testtools.repository_rules import (
     markdown_files,
     markdown_problems,
@@ -19,6 +20,7 @@ pytestmark = pytest.mark.unit
 SOURCE = Path(__file__).resolve().parents[1] / "src" / "onepledge_contract_fakes"
 REPOSITORY = SOURCE.parents[3]
 # This package owns contracts/ and the root tooling, so their documents are checked here.
+PACKAGE_DIR = SOURCE.parents[1]
 OWNED_MARKDOWN = markdown_files(REPOSITORY / "contracts") + sorted(REPOSITORY.glob("*.md"))
 OTHER_PACKAGES = (
     "onepledge_bank_agent",
@@ -183,3 +185,8 @@ def test_every_markdown_file_of_the_package_renders_its_tables_whole() -> None:
 def test_no_source_line_is_vin_shaped() -> None:
     """CODE-03 is literal: the reviewers' grep for 17 VIN alphabet characters prints nothing."""
     assert vin_shaped_lines(SOURCE) == []
+
+
+def test_the_tests_need_nothing_the_package_does_not_declare() -> None:
+    """The root plugins and every third party import of the tests are declared (SPEC_DECISIONS 117)."""
+    assert undeclared_test_requirements(PACKAGE_DIR, PACKAGE_DIR / "tests") == []
