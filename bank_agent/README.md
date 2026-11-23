@@ -514,7 +514,10 @@ With outside records, the registry double and the two key holder doubles running
 READMEs) and the variables above set, `onepledge-bank worker --once` advances every
 uploaded tape to COMPLETED, then `onepledge-bank integrity verify` shows what the bank
 verified. Uploads arrive through the HTTP API of WP4; the tests upload through
-`IngestTape`.
+`IngestTape`. Users are created by WP4 too, with a `USER_CREATED` audit entry; a user row
+inserted by hand has none, so deep verification lists it under `evidence` as
+`STATE_MISMATCH` in `users` (SPEC_DECISIONS 107). The test kit's `insert_user` writes the
+row and its entry together, as WP4 will.
 
 ## Tests
 
