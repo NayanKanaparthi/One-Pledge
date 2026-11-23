@@ -111,7 +111,8 @@ bank_agent/
                        (failed certificates kept beside verified ones),
                        0008_outbox_poison.py (registry_outbox_attempts, the 20th table),
                        0009_grant_matrix.py (the grant matrix), 0010_column_guards.py
-                       (status and case status pairs, column by column guards)
+                       (status and case status pairs, column by column guards),
+                       0011_withheld_payload.py (a quarantined payload kept as its hash)
   src/onepledge_bank_agent/
     domain/            values (Vin, Money, Lei, ...), enums, errors (one DomainError tree and
                        the fixed message table), tape and loan state machines, alert,
@@ -213,8 +214,9 @@ abbreviated, so `--json` is always spelled in full.
   facilities were inserted, updated or unchanged, with the SHA-256 of `reference.json`;
   its closing line gives the same counts, and a run that changes nothing says so and is
   audited too. `reference.json` is read as hostile input (SPEC_DECISIONS 74): at most 5
-  MiB, at most 32 levels deep, no key twice, and each problem is one sentence that starts
-  with the file's path.
+  MiB, at most 32 levels deep, no key twice, no text the database cannot store (U+0000, a
+  surrogate code point), numbers as JSON integers only and ids in their canonical
+  spelling, and each problem is one sentence that starts with the file's path.
 - `worker` writes `HALT_RULE_DISABLED` at every start while
   `HALT_ON_REGISTRY_INTEGRITY_FAILURE` is false.
 - `registry sync` prints the messages processed, alerts created, case updates applied
@@ -232,7 +234,9 @@ abbreviated, so `--json` is always spelled in full.
   `bank_agent.yaml` plus `"ok": true`. Both exit 0 when the status is OK and 1 when it is
   BROKEN, after printing the whole report. `integrity report` skips the schema and role
   checks, so it can show `SCHEMA_AT_MIGRATION_HEAD` or a role control false; a section
-  whose query the database refuses is `NOT_VERIFIED` with the SQLSTATE. `integrity
+  whose query the database refuses is `NOT_VERIFIED` with the SQLSTATE, and a role that
+  cannot read `alembic_version` shows `SCHEMA_AT_MIGRATION_HEAD` false beside the missing
+  grant. `integrity
   verify` needs the registry: when it cannot be reached it prints
   `DEPENDENCY_UNAVAILABLE` and stores nothing.
 - A transient dependency failure prints `DEPENDENCY_UNAVAILABLE`; a refusal or an
@@ -335,9 +339,15 @@ WP4 (SPEC_DECISIONS 73): no other command parses them, so a wrong value cannot s
 worker or a one-shot command. `BIND_HOST` is an IPv4 or IPv6 literal, or the wildcard
 `0.0.0.0` or `::`; a name such as `localhost` is refused with "Configuration error:
 BIND_HOST must be an IPv4 or IPv6 address; set it to 127.0.0.1 or 0.0.0.0.", the sentence
-of the other services. The loader checks the format now (`ServeSettings`); the probe that
-the address belongs to this machine comes with `serve` (WP4), with the sentences of
-SPEC_DECISIONS 73.
+of the other services. The loader checks the format (`ServeSettings`). The probe of
+SPEC_DECISIONS 73 is `ServeSettings.check_binding()` (`infrastructure/binding.py`), which
+`serve` (WP4) calls before it opens anything: it binds a socket of the literal's family to
+`(BIND_HOST, 0)` and then to `(BIND_HOST, PORT)`, every socket call guarded, and refuses
+with the sentences of outside records and the doubles, word for word: "BIND_HOST is an
+IPv6 address and this machine has no IPv6. Set BIND_HOST to 127.0.0.1 or 0.0.0.0.",
+"BIND_HOST is not an address of this machine. Set BIND_HOST to 127.0.0.1 or 0.0.0.0.",
+"BIND_HOST cannot be bound. Set BIND_HOST to 127.0.0.1 or 0.0.0.0." and "PORT is already
+in use or not permitted on BIND_HOST; set another PORT."
 Every value is trimmed of ASCII space, tab, CR and LF at both ends; a value that still
 holds a control character or whitespace other than the ASCII space names its variable,
 secrets included. A database URL must be `postgresql://USER:PASSWORD@HOST:PORT/DATABASE`
@@ -496,7 +506,7 @@ action and object type checks.
 | alerts | `ix_alerts_loan_id` | Lineage and loan pages list a loan's alerts (SPEC 14). |
 | checkpoints_seen | `body jsonb NOT NULL` with `ck_checkpoints_seen_body` (an object), migration 0004 | The signed body exactly as received. SPEC 12.1 stores `signed_at` as a timestamp, but the signature covers its text; deep verification (SPEC 15.6 step 4) re-verifies every stored signature, which needs the exact signed bytes (SPEC_DECISIONS 54). |
 | certificates | migration 0007 (SPEC_DECISIONS 61, 64): primary key `certificate_row_id`; `delivered_body_sha256 char(64) NOT NULL` with `ck_certificates_delivered_body_sha256` (a hex digest); `uq_certificates_verified_certificate_id` and `uq_certificates_verified_request_id` (partial, `WHERE verified`); `uq_certificates_delivery` on `(certificate_id, delivered_body_sha256, signature)`; `ix_certificates_request_id` | A failed certificate is kept beside the verified one a retry stores. `delivered_body_sha256` is the SHA-256 of the canonical JSON of the body as it arrived, computed by the bank, never taken from the registry; `body_hash` keeps the registry's claim, so the two differ exactly in a row whose body was altered. `VerifyCertificate` compares the stored column with the claim, and deep verification recomputes it from the stored body, so an edit of both `body` and `body_hash` is still found. The claim is not in the delivery key because CERTIFICATE_BODY changes only the body. |
-| registry_messages_quarantined | the 19th table, migration 0006 (SPEC_DECISIONS 57), amended by 0008 (SPEC_DECISIONS 85): `uq_registry_messages_quarantined_message_id`; value list on `reason` (the eight reasons of decision 85); `payload_sha256` a hex digest; `position` null or `>= 1`; `message_type` 1 to 64 characters; `(reason = 'OVERSIZED') = (payload IS NULL)` | One row per message however often it is delivered, and an oversized payload is the only one kept as its hash alone. A position too large to store is kept as unknown. `REGISTRY_MESSAGE_QUARANTINED` joins the audit action list. |
+| registry_messages_quarantined | the 19th table, migration 0006 (SPEC_DECISIONS 57), amended by 0008 (SPEC_DECISIONS 85): `uq_registry_messages_quarantined_message_id`; value list on `reason` (the eight reasons of decision 85); `payload_sha256` a hex digest; `position` null or `>= 1`; `message_type` 1 to 64 characters; `reason <> 'OVERSIZED' OR payload IS NULL` (migration 0011; 0006 had `(reason = 'OVERSIZED') = (payload IS NULL)`) | One row per message however often it is delivered. An oversized payload is always kept as its hash alone, and so is one holding text the bank cannot store (U+0000, which `jsonb` refuses, or a surrogate code point, which UTF-8 cannot carry), so that such a message can still be quarantined and acknowledged. A position too large to store is kept as unknown. `REGISTRY_MESSAGE_QUARANTINED` joins the audit action list. |
 | registry_outbox_attempts | the 20th table, migration 0008 (SPEC_DECISIONS 85 rule 4): `message_id` primary key; `ck_registry_outbox_attempts_attempts`: `>= 1`; `ck_registry_outbox_attempts_last_reason`: a code | The deferrals of one message are counted in their own transaction; the fifth makes it poison. The app role may update it; rows are never removed. |
 | alerts | `ck_alerts_status_case_status`, migration 0010 (SPEC_DECISIONS 86): NEW and REVIEWING only with an OPEN case, CLEARED only with `CLEARED_DATA_ERROR` or `CLEARED_LATE_RELEASE`, ESCALATED only with CONFIRMED | Only the registry's case outcome closes an alert; no statement can store one without the other. |
 | loans, tape_submissions, alerts | insert guards `loans_insert_guard`, `tape_submissions_insert_guard`; `alerts_guard` on insert and update, migration 0005 (SPEC_DECISIONS 46, 47) | Creation in the one state SPEC allows, and the tape and alert machines as the only path. |
@@ -518,8 +528,13 @@ action and object type checks.
   (SPEC_DECISIONS 85); a number with a fraction or an exponent, or an integer literal of
   more than 4,000 digits, in an outbox page is kept as its text so it fails that
   message's schema instead of the whole page, and an object that gives a key twice makes
-  only its message poison. An unknown type is acknowledged and audited as
-  `REGISTRY_MESSAGE_IGNORED`. Only a message without a parseable id or a type, or a page
+  only its message poison. A message of a known type holding text the bank cannot store
+  (U+0000 or a surrogate code point, anywhere in it) is poison as `SCHEMA_MISMATCH`, and
+  its payload is kept as the SHA-256 of its canonical JSON with every non-ASCII character
+  escaped; any answer of a shared service holding such text is `MALFORMED_RESPONSE`,
+  outside records included, which are read with the same bounds as every other answer. An
+  unknown type is acknowledged and audited as `REGISTRY_MESSAGE_IGNORED`. Only a message
+  without a parseable id or a usable type (a type holding such text is none), or a page
   that is not one bounded JSON document (deeper than 32 levels, a key twice at page
   level), makes the page malformed: the sync then fails with `DEPENDENCY_REJECTED`, the
   stages still run, and the page is read again on the next sync.
