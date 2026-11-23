@@ -4,12 +4,14 @@
 not declare: the pytest plugins the root configuration relies on (`pytest-timeout` for the
 `timeout` setting, `onepledge-testtools` for the root `conftest.py`, `pytest-cov` for the
 coverage gates of `make test`) and the distribution of every third party module its tests
-import. `undeclared_source_imports` does the same for the runtime dependencies of `src/`.
+import. `undeclared_source_imports` does the same for the runtime dependencies of `src/`, and
+`pydantic_core_problems` holds the pydantic-core rule of SPEC_DECISIONS 128.
 """
 
 from __future__ import annotations
 
 import ast
+import importlib
 import re
 import sys
 import tomllib
@@ -98,3 +100,27 @@ def undeclared_source_imports(package: Path, source: Path) -> list[str]:
     """What the package's `src/` imports and its runtime dependencies do not name."""
     modules = imported_modules(source.rglob("*.py"))
     return _missing(_distributions_of(modules, _local_modules(source)), runtime_declared(package))
+
+
+def _names_from(files: Iterable[Path], module: str) -> set[str]:
+    names: set[str] = set()
+    for path in files:
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom) and node.module == module and node.level == 0:
+                names.update(alias.name for alias in node.names)
+    return names
+
+
+def pydantic_core_problems(package: Path, source: Path) -> list[str]:
+    """SPEC_DECISIONS 128: a name `pydantic` exports is imported from `pydantic`, and the package
+    declares `pydantic-core` only when its source imports a name that exists nowhere else."""
+    files = sorted(source.rglob("*.py"))
+    pydantic = importlib.import_module("pydantic")
+    problems = [
+        f"imports {name} from pydantic_core, but pydantic exports it"
+        for name in sorted(_names_from(files, "pydantic_core"))
+        if hasattr(pydantic, name)
+    ]
+    if "pydantic-core" in runtime_declared(package) and "pydantic_core" not in imported_modules(files):
+        problems.append("declares pydantic-core, but nothing imports pydantic_core")
+    return problems

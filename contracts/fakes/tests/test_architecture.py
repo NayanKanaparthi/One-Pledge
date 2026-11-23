@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from onepledge_testtools.declarations import (
+    pydantic_core_problems,
     undeclared_source_imports,
     undeclared_test_requirements,
 )
@@ -199,6 +200,11 @@ def test_the_tests_need_nothing_the_package_does_not_declare() -> None:
 def test_every_import_of_the_source_is_declared() -> None:
     """SPEC 2.1 and SPEC_DECISIONS 120: a runtime import is declared by the package that makes it."""
     assert undeclared_source_imports(PACKAGE_DIR, SOURCE) == []
+
+
+def test_pydantic_core_is_imported_and_declared_only_where_pydantic_lacks_the_name() -> None:
+    """SPEC_DECISIONS 128: import from pydantic where it exports the name."""
+    assert pydantic_core_problems(PACKAGE_DIR, SOURCE) == []
 
 
 def test_the_readme_layout_names_what_exists_and_every_module() -> None:

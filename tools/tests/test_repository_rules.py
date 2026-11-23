@@ -15,7 +15,11 @@ from onepledge_testtools.command_lines import (
     malformed,
     usage_problems,
 )
-from onepledge_testtools.declarations import undeclared_source_imports, undeclared_test_requirements
+from onepledge_testtools.declarations import (
+    pydantic_core_problems,
+    undeclared_source_imports,
+    undeclared_test_requirements,
+)
 from onepledge_testtools.processes import run
 from onepledge_testtools.repository_rules import (
     VIN_SHAPED,
@@ -190,3 +194,38 @@ def test_an_unwrapping_stream_joins_only_the_continuations_of_one_write() -> Non
     assert (
         stream.getvalue() == "verify: 1 problem in /a/very/long/path that continues.\n  an item continued\n"
     )
+
+
+# SPEC_DECISIONS 128: import from pydantic where it exports the name; declare pydantic-core only
+# where a name exists nowhere else.
+def _package(tmp_path: Path, dependencies: list[str], source: str) -> tuple[Path, Path]:
+    quoted = ", ".join(f'"{d}"' for d in dependencies)
+    (tmp_path / "pyproject.toml").write_text(f'[project]\nname = "demo"\ndependencies = [{quoted}]\n')
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "module.py").write_text(source)
+    return tmp_path, tmp_path / "src"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("dependencies", "source", "problems"),
+    [
+        (["pydantic", "pydantic-core"], "from pydantic_core import PydanticCustomError\n", []),
+        (["pydantic"], "from pydantic import ValidationError\n", []),
+        (
+            ["pydantic", "pydantic-core"],
+            "from pydantic_core import ValidationError\n",
+            ["imports ValidationError from pydantic_core, but pydantic exports it"],
+        ),
+        (
+            ["pydantic", "pydantic-core"],
+            "import pydantic\n",
+            ["declares pydantic-core, but nothing imports pydantic_core"],
+        ),
+    ],
+)
+def test_pydantic_core_is_used_only_for_names_pydantic_does_not_export(
+    tmp_path: Path, dependencies: list[str], source: str, problems: list[str]
+) -> None:
+    package, src = _package(tmp_path, dependencies, source)
+    assert pydantic_core_problems(package, src) == problems
