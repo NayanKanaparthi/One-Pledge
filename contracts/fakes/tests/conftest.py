@@ -21,13 +21,18 @@ def contracts_dir() -> Path:
 @pytest.fixture(scope="session")
 def key_holder_schemas() -> ContractSchemas:
     """Schemas of contracts/key_holder.yaml."""
-    return ContractSchemas(load_yaml_mapping(CONTRACTS_DIR / "key_holder.yaml"), "key_holder.yaml")
+    return ContractSchemas(
+        load_yaml_mapping(CONTRACTS_DIR, CONTRACTS_DIR / "key_holder.yaml", "key_holder.yaml"),
+        "key_holder.yaml",
+    )
 
 
 @pytest.fixture(scope="session")
 def registry_schemas() -> ContractSchemas:
     """Schemas of contracts/registry.yaml."""
-    return ContractSchemas(load_yaml_mapping(CONTRACTS_DIR / "registry.yaml"), "registry.yaml")
+    return ContractSchemas(
+        load_yaml_mapping(CONTRACTS_DIR, CONTRACTS_DIR / "registry.yaml", "registry.yaml"), "registry.yaml"
+    )
 
 
 @pytest.fixture(autouse=True)

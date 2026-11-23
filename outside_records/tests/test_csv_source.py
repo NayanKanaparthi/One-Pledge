@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
@@ -142,4 +144,56 @@ def test_a_file_that_links_out_of_the_data_directory_is_refused_unread(
     titles.symlink_to(outside)
     with pytest.raises(OperatorError) as raised:
         CsvRecordsSource().load(directory)
-    assert raised.value.sentence == "outside_records/titles.csv links to a path outside the directory."
+    assert raised.value.sentence == "outside_records/titles.csv is a link out of the directory."
+
+
+# SPEC_DECISIONS 110: each CSV is a regular file inside the directory with no link on the way,
+# refused by name before it is opened; review 4 quality 6 (seed read a FIFO forever).
+def _fifo(directory: Path) -> None:
+    payments = directory / "outside_records" / "payments.csv"
+    payments.unlink()
+    os.mkfifo(payments)
+
+
+def _folder_linked_out(directory: Path) -> None:
+    folder = directory / "outside_records"
+    shutil.move(folder, directory.parent / "elsewhere")
+    folder.symlink_to(directory.parent / "elsewhere")
+
+
+def _linked_inside(directory: Path) -> None:
+    contracts = directory / "outside_records" / "contracts.csv"
+    contracts.rename(directory / "contracts_copy.csv")
+    contracts.symlink_to(directory / "contracts_copy.csv")
+
+
+def _a_directory(directory: Path) -> None:
+    titles = directory / "outside_records" / "titles.csv"
+    titles.unlink()
+    titles.mkdir()
+
+
+def _too_large(directory: Path) -> None:
+    os.truncate(directory / "outside_records" / "payments.csv", 256 * 1024 * 1024 + 1)
+
+
+NOT_REGULAR: dict[str, tuple[Callable[[Path], None], str]] = {
+    "fifo": (_fifo, "outside_records/payments.csv is not a regular file."),
+    "folder linked out": (_folder_linked_out, "outside_records is a link out of the directory."),
+    "linked inside": (_linked_inside, "outside_records/contracts.csv is not a regular file."),
+    "a directory": (_a_directory, "outside_records/titles.csv is a directory where a file is expected."),
+    "too large": (_too_large, "outside_records/payments.csv is larger than 256 MiB."),
+}
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.parametrize("variant", sorted(NOT_REGULAR))
+def test_a_path_that_is_not_a_regular_file_inside_is_refused_by_name(
+    tmp_path: Path, copy_records: Callable[[Path], Path], variant: str
+) -> None:
+    change, sentence = NOT_REGULAR[variant]
+    directory = copy_records(tmp_path / "data")
+    change(directory)
+    with pytest.raises(OperatorError) as raised:
+        CsvRecordsSource().load(directory)
+    assert raised.value.sentence == sentence

@@ -114,9 +114,10 @@ def vector_dependencies(name: str, vector: Mapping[str, Any]) -> list[str]:
     return files
 
 
-def check_key_holder_examples(vector: Mapping[str, Any], examples_dir: Path) -> list[str]:
+def check_key_holder_examples(vector: Mapping[str, Any], root: Path) -> list[str]:
     """The key holder examples must carry the vector's blinded and holder 1 values."""
-    request, response = (load_json(examples_dir / name, f"examples/{name}") for name in KEY_HOLDER_EXAMPLES)
+    examples = root / "examples"
+    request, response = (load_json(root, examples / name, f"examples/{name}") for name in KEY_HOLDER_EXAMPLES)
     blinded = [entry["blinded"] for entry in vector["tokens"]]
     after_1 = [entry["after_holder_1"] for entry in vector["tokens"]]
     problems = []
@@ -131,24 +132,24 @@ def check_key_holder_examples(vector: Mapping[str, Any], examples_dir: Path) -> 
     return problems
 
 
-def check_signatures(vector: Mapping[str, Any], examples_dir: Path) -> list[str]:
+def check_signatures(vector: Mapping[str, Any], root: Path) -> list[str]:
     """Problems found when recomputing every value of `signatures.json`."""
     problems: list[str] = []
     key = Ed25519PrivateKey.from_private_bytes(base64.b64decode(vector["signing_seed_b64"]))
     public = _b64(key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
     if public != vector["public_key_b64"]:
         problems.append("public_key_b64 does not belong to signing_seed_b64")
-    problems.extend(_check_signed(key, vector["certificate"], examples_dir, with_body_hash=True))
-    problems.extend(_check_signed(key, vector["checkpoint"], examples_dir, with_body_hash=False))
-    problems.extend(_check_ledger_event(vector["ledger_event"], examples_dir))
+    problems.extend(_check_signed(key, vector["certificate"], root, with_body_hash=True))
+    problems.extend(_check_signed(key, vector["checkpoint"], root, with_body_hash=False))
+    problems.extend(_check_ledger_event(vector["ledger_event"], root))
     return problems
 
 
 def _check_signed(
-    key: Ed25519PrivateKey, entry: Mapping[str, Any], examples_dir: Path, with_body_hash: bool
+    key: Ed25519PrivateKey, entry: Mapping[str, Any], root: Path, with_body_hash: bool
 ) -> list[str]:
     name = entry["file"]
-    example = load_json(confined(examples_dir, name, SIGNATURES), f"examples/{name}")
+    example = load_json(root, confined(root / "examples", name, SIGNATURES), f"examples/{name}")
     if not isinstance(example, dict):
         return [f"{name} is not a JSON object"]
     canonical = canonical_json(example["body"])
@@ -165,9 +166,9 @@ def _check_signed(
     return problems
 
 
-def _check_ledger_event(entry: Mapping[str, Any], examples_dir: Path) -> list[str]:
+def _check_ledger_event(entry: Mapping[str, Any], root: Path) -> list[str]:
     name = entry["file"]
-    page = load_json(confined(examples_dir, name, SIGNATURES), f"examples/{name}")
+    page = load_json(root, confined(root / "examples", name, SIGNATURES), f"examples/{name}")
     if not isinstance(page, dict):
         return [f"{name} is not a JSON object"]
     problems = []

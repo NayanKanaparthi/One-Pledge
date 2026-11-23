@@ -49,3 +49,11 @@ class DataSetModel:
     titles: tuple[TitleRecord, ...]
     payments: tuple[PaymentRecord, ...]
     contracts: tuple[ContractRecord, ...]
+
+
+@dataclass(frozen=True)
+class DataSetFiles:
+    """What a data directory holds: each regular file's bytes and each directory, by relative path."""
+
+    files: dict[str, bytes]
+    directories: frozenset[str]

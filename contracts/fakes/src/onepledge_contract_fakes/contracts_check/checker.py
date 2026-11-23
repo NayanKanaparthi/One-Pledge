@@ -5,6 +5,7 @@ Part of the contract checker in the TEST DOUBLES package `onepledge_contract_fak
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from functools import partial
@@ -18,6 +19,7 @@ from onepledge_contract_fakes.contracts_check.cleaning_cases import check_cleani
 from onepledge_contract_fakes.contracts_check.documents import (
     DocumentError,
     confined,
+    examine,
     load_json,
     load_yaml_mapping,
 )
@@ -126,7 +128,7 @@ class ContractsChecker:
             outcome = CheckOutcome(f"openapi {name}", "valid OpenAPI 3.1")
             outcomes.append(outcome)
             try:
-                spec = load_yaml_mapping(self._dir / name, name)
+                spec = load_yaml_mapping(self._dir, self._dir / name, name)
             except DocumentError as error:
                 outcome.problems.append(error.message)
                 continue
@@ -146,7 +148,7 @@ class ContractsChecker:
 
     def _load_index(self, outcomes: list[CheckOutcome]) -> list[Mapping[str, Any]]:
         try:
-            document = load_json(self._examples / "index.json", INDEX)
+            document = load_json(self._dir, self._examples / "index.json", INDEX)
         except DocumentError as error:
             outcomes.append(CheckOutcome("index", INDEX, [error.message]))
             return []
@@ -177,7 +179,7 @@ class ContractsChecker:
                 continue
             try:
                 path = confined(self._examples, file_name, INDEX)
-                instance = load_json(path, f"examples/{file_name}")
+                instance = load_json(self._dir, path, f"examples/{file_name}")
             except DocumentError as error:
                 outcome.problems.append(error.message)
                 invalid.add(str(file_name))
@@ -207,7 +209,7 @@ class ContractsChecker:
                 outcome.problems.append(f"{name}: {example.where} names {example.file} but no schema")
                 continue
             try:
-                instance = load_json(confined(self._dir, example.file, name), example.file)
+                instance = load_json(self._dir, confined(self._dir, example.file, name), example.file)
             except DocumentError:
                 # The references check reports an example file that cannot be read, once.
                 continue
@@ -226,33 +228,71 @@ class ContractsChecker:
         for name, reference in references:
             try:
                 target = confined(self._dir, reference, name)
+                present = examine(self._dir, target) is not None
             except DocumentError as error:
                 outcome.problems.append(error.message)
                 continue
-            if not target.is_file():
+            if not present:
                 outcome.problems.append(f"{name}: externalValue {reference} does not resolve to a file")
+        outcome.problems.extend(self._unindexed(index))
+        outcome.problems.extend(self._indexed_but_absent(index))
+        return outcome
+
+    def _unindexed(self, index: list[Mapping[str, Any]]) -> list[str]:
+        """Every entry of an example folder the index does not list, or that is not a regular file."""
+        problems: list[str] = []
         indexed = {str(entry.get("file")) for entry in index}
         for folder in EXAMPLE_FOLDERS:
-            for path in sorted((self._examples / folder).glob("*")):
-                relative = f"{folder}/{path.name}"
-                if path.is_file() and relative not in indexed:
-                    outcome.problems.append(f"examples/{relative} is not listed in examples/index.json")
+            for relative in self._listing(folder, problems):
+                if relative in indexed:
+                    continue
+                try:
+                    examine(self._dir, self._examples / relative)
+                except DocumentError as error:
+                    problems.append(error.message)
+                    continue
+                problems.append(f"examples/{relative} is not listed in examples/index.json")
+        return problems
+
+    def _indexed_but_absent(self, index: list[Mapping[str, Any]]) -> list[str]:
+        problems: list[str] = []
         for entry in index:
             try:
                 listed = confined(self._examples, entry.get("file"), INDEX)
+                present = examine(self._dir, listed) is not None
             except DocumentError:
                 continue  # Reported once, by the examples check.
-            if not listed.is_file():
-                outcome.problems.append(
+            if not present:
+                problems.append(
                     f"examples/index.json lists examples/{entry.get('file')}, which does not exist"
                 )
-        return outcome
+        return problems
+
+    def _listing(self, folder: str, problems: list[str]) -> list[str]:
+        """The names in one example folder that are not directories, relative to `examples/`.
+
+        The folder must be a real directory inside the contracts directory; nothing is followed.
+        """
+        directory = self._examples / folder
+        try:
+            if examine(self._dir, directory, directory=True) is None:
+                return []
+            entries = sorted(os.scandir(directory), key=lambda entry: entry.name)
+        except DocumentError as error:
+            problems.append(error.message)
+            return []
+        except OSError:
+            problems.append(f"examples/{folder} cannot be read")
+            return []
+        return [f"{folder}/{entry.name}" for entry in entries if not entry.is_dir(follow_symlinks=False)]
 
     def _check_cleaning_cases(self) -> CheckOutcome:
         """The neutral cleaning table exists and every case has the documented shape."""
         outcome = CheckOutcome("cleaning cases", "cleaning_cases.json")
         try:
-            document = load_json(self._examples / "cleaning_cases.json", "examples/cleaning_cases.json")
+            document = load_json(
+                self._dir, self._examples / "cleaning_cases.json", "examples/cleaning_cases.json"
+            )
         except DocumentError as error:
             outcome.problems.append(error.message)
             return outcome
@@ -276,7 +316,7 @@ class ContractsChecker:
         outcome = CheckOutcome(f"vectors {name}", summary)
         shown = f"examples/vectors/{name}"
         try:
-            vector = load_json(self._examples / "vectors" / name, shown)
+            vector = load_json(self._dir, self._examples / "vectors" / name, shown)
             if not isinstance(vector, dict):
                 raise DocumentError(shown, "not a JSON object")
             broken = sorted(set(vector_dependencies(name, vector)) & invalid_examples)
@@ -287,9 +327,9 @@ class ContractsChecker:
                 return outcome
             if name == "tokenization.json":
                 outcome.problems.extend(check_tokenization(vector))
-                outcome.problems.extend(check_key_holder_examples(vector, self._examples))
+                outcome.problems.extend(check_key_holder_examples(vector, self._dir))
             else:
-                outcome.problems.extend(check_signatures(vector, self._examples))
+                outcome.problems.extend(check_signatures(vector, self._dir))
         except DocumentError as error:
             outcome.problems.append(error.message)
         except KeyError:

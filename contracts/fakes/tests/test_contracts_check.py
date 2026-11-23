@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -242,7 +243,7 @@ def test_a_missing_cleaning_table_is_one_problem(contracts_dir: Path, tmp_path: 
     broken = copy_contracts(contracts_dir, tmp_path)
     (broken / "examples" / "cleaning_cases.json").unlink()
     code, text = run(broken)
-    assert code == 1 and "examples/cleaning_cases.json: cannot be read" in text
+    assert code == 1 and "examples/cleaning_cases.json is missing" in text.splitlines()[-2]
     assert text.splitlines()[-1] == "contracts-check: FAILED, 1 problem"
 
 
@@ -425,7 +426,7 @@ HOSTILE: dict[str, tuple[Callable[[Path], None], str]] = {
         _index_entry_file("/etc/passwd"),
         "examples/index.json names a path outside the directory.",
     ),
-    "index_symlink_out": (_symlink_out, "examples/index.json names a path outside the directory."),
+    "index_symlink_out": (_symlink_out, "examples/registry/escape.json is a link out of the directory"),
     "vector_parent_path": (
         _signatures_file("../../../etc/passwd"),
         "examples/vectors/signatures.json names a path outside the directory.",
@@ -544,3 +545,98 @@ def test_an_operation_pointing_at_the_wrong_schema_fails(contracts_dir: Path, tm
 def test_a_reference_resolves_only_to_an_existing_node(pointer: str, expected: object) -> None:
     document = {"a": [{"b": 1}, {"c": 2}], "x/y": {"~z": 3}}
     assert resolve(document, pointer) == expected
+
+
+# SPEC_DECISIONS 110: every path opened, named in a file or fixed by convention, is a regular file
+# (or a real directory) inside the directory, with no link on the way; review 4 quality 6 and 7.
+def _link_out(relative: str, directory: bool = False) -> Callable[[Path], None]:
+    def change(root: Path) -> None:
+        target = root / relative
+        outside = root.parent / ("outside_dir" if directory else "outside.json")
+        if directory:
+            shutil.copytree(target, outside)
+            shutil.rmtree(target)
+        else:
+            outside.write_bytes(target.read_bytes())
+            target.unlink()
+        target.symlink_to(outside)
+
+    return change
+
+
+def _link_inside(relative: str, to: str) -> Callable[[Path], None]:
+    def change(root: Path) -> None:
+        target = root / relative
+        (root / to).write_bytes(target.read_bytes())
+        target.unlink()
+        target.symlink_to(root / to)
+
+    return change
+
+
+def _fifo(relative: str) -> Callable[[Path], None]:
+    def change(root: Path) -> None:
+        (root / relative).unlink()
+        os.mkfifo(root / relative)
+
+    return change
+
+
+def _directory(relative: str) -> Callable[[Path], None]:
+    def change(root: Path) -> None:
+        (root / relative).unlink()
+        (root / relative).mkdir()
+
+    return change
+
+
+NOT_REGULAR: dict[str, tuple[Callable[[Path], None], str]] = {
+    "index_link_out": (
+        _link_out("examples/index.json"),
+        "examples/index.json is a link out of the directory",
+    ),
+    "vectors_link_out": (
+        _link_out("examples/vectors", directory=True),
+        "examples/vectors is a link out of the directory",
+    ),
+    "yaml_link_out": (_link_out("registry.yaml"), "registry.yaml is a link out of the directory"),
+    "cleaning_link_inside": (
+        _link_inside("examples/cleaning_cases.json", "examples/copy.json"),
+        "examples/cleaning_cases.json is not a regular file",
+    ),
+    "yaml_fifo": (_fifo("registry.yaml"), "registry.yaml is not a regular file"),
+    "index_fifo": (_fifo("examples/index.json"), "examples/index.json is not a regular file"),
+    "example_fifo": (
+        _fifo("examples/key_holder/healthz.response.json"),
+        "examples/key_holder/healthz.response.json is not a regular file",
+    ),
+    "index_directory": (
+        _directory("examples/index.json"),
+        "examples/index.json is a directory where a file is expected",
+    ),
+    "yaml_directory": (
+        _directory("key_holder.yaml"),
+        "key_holder.yaml is a directory where a file is expected",
+    ),
+    "index_too_large": (
+        _write("examples/index.json", b" " * (5 * 1024 * 1024 + 1)),
+        "examples/index.json: larger than 5 MiB",
+    ),
+}
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.parametrize("variant", sorted(NOT_REGULAR))
+def test_a_path_that_is_not_a_regular_file_inside_is_refused_by_name(
+    contracts_dir: Path, tmp_path: Path, variant: str
+) -> None:
+    broken = copy_contracts(contracts_dir, tmp_path)
+    change, problem = NOT_REGULAR[variant]
+    change(broken)
+    out, err = io.StringIO(), io.StringIO()
+    code = main(["check", "--wide", "--contracts-dir", str(broken)], CliOutput(out, err))
+    text = out.getvalue()
+    assert code == 1, text
+    assert f"    {problem}" in text.splitlines(), text
+    assert "Unexpected error" not in text + err.getvalue()
+    assert text.splitlines()[-1].startswith("contracts-check: FAILED, ")

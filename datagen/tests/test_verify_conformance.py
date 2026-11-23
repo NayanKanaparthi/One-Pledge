@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import shutil
 import tempfile
 from collections.abc import Callable
@@ -479,4 +480,93 @@ def test_a_file_that_links_out_of_the_data_set_is_refused_unread(small_dir: Path
         "verify", "--data-dir", str(tampered(small_dir, tmp_path / "copy", link_out, repair=False))
     )
     assert (code, out) == (1, "")
-    assert err == "tapes/stray.csv links to a path outside the directory.\n"
+    assert err == "tapes/stray.csv is a link out of the directory.\n"
+
+
+# SPEC_DECISIONS 110: every path is a regular file (or a real directory) inside the data set with
+# no link on the way, refused by name before it is opened; review 4 quality 6 and 7.
+def _link_out(relative: str) -> Change:
+    def change(directory: Path) -> None:
+        target = directory / relative
+        outside = directory.parent / f"outside_{target.name}"
+        shutil.move(target, outside)
+        target.symlink_to(outside)
+
+    return change
+
+
+def _link_inside(relative: str) -> Change:
+    def change(directory: Path) -> None:
+        target = directory / relative
+        moved = target.with_name(f"moved_{target.name}")
+        target.rename(moved)
+        target.symlink_to(moved)
+
+    return change
+
+
+def _fifo(relative: str) -> Change:
+    def change(directory: Path) -> None:
+        (directory / relative).unlink()
+        os.mkfifo(directory / relative)
+
+    return change
+
+
+def _step_file_is_a_directory(directory: Path) -> None:
+    path = directory / MANIFEST
+    document = json.loads(path.read_text())
+    document["steps"][0]["file"] = "tapes/HARBOR"
+    path.write_text(json.dumps(document, indent=2) + "\n")
+
+
+def _oversized(relative: str, size: int) -> Change:
+    def change(directory: Path) -> None:
+        (directory / relative).write_bytes(b" " * size)
+
+    return change
+
+
+REFUSED: dict[str, tuple[Change, str]] = {
+    "manifest linked out": (_link_out(MANIFEST), "manifest.json is a link out of the directory."),
+    "answer key directory linked out": (
+        _link_out("answer_key"),
+        "answer_key is a link out of the directory.",
+    ),
+    "reference linked inside": (_link_inside(REFERENCE), "reference.json is not a regular file."),
+    "payments a FIFO": (
+        _fifo("outside_records/payments.csv"),
+        "outside_records/payments.csv is not a regular file.",
+    ),
+    "step file a directory": (
+        _step_file_is_a_directory,
+        "tapes/HARBOR is a directory where a file is expected.",
+    ),
+    "answer key over 5 MiB": (
+        _oversized(KEY, 5 * 1024 * 1024 + 1),
+        "answer_key/answer_key.json is larger than 5 MiB.",
+    ),
+}
+
+
+@pytest.mark.timeout(60)
+@pytest.mark.parametrize("name", sorted(REFUSED))
+def test_a_path_that_is_not_a_regular_file_inside_is_refused_by_name(
+    small_dir: Path, tmp_path: Path, name: str
+) -> None:
+    change, sentence = REFUSED[name]
+    code, out, err = run(
+        "verify", "--data-dir", str(tampered(small_dir, tmp_path / "copy", change, repair=False))
+    )
+    assert (code, out) == (1, "")
+    assert err == f"{sentence}\n"
+
+
+def test_an_unexpected_directory_is_reported(small_dir: Path, tmp_path: Path) -> None:
+    code, out, err = run(
+        "verify",
+        "--data-dir",
+        str(tampered(small_dir, tmp_path / "copy", lambda d: (d / "tapes" / "EXTRA").mkdir())),
+    )
+    assert code == 1, out + err
+    assert f"tapes/EXTRA is a directory that {ORIGIN} does not generate" in out + err, out + err

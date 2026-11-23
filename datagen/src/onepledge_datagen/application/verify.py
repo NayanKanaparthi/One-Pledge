@@ -14,7 +14,7 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from onepledge_datagen import GENERATOR_VERSION
 from onepledge_datagen.application.example_contract import expected_document
@@ -126,9 +126,14 @@ def check_generator_version(version: object) -> None:
 
 
 def regeneration_violations(
-    files: Mapping[str, bytes], seed: object, profile: object, regenerate: Regenerate
+    files: Mapping[str, bytes],
+    seed: object,
+    profile: object,
+    regenerate: Regenerate,
+    directories: frozenset[str] = frozenset(),
 ) -> list[str]:
-    """Every file that differs from, is missing from or is extra to what the seed and profile generate."""
+    """Every file that differs from, is missing from or is extra to what the seed and profile generate,
+    and every directory they do not generate."""
     problems = []
     valid_seed = isinstance(seed, int) and not isinstance(seed, bool) and 0 <= seed <= MAX_INTEGER
     if not valid_seed:
@@ -150,6 +155,9 @@ def regeneration_violations(
             problems.append(f"{path} is not part of what {origin} generates")
         elif files[path] != expected[path]:
             problems.append(f"{path} differs from what {origin} generates")
+    generated = {parent.as_posix() for path in expected for parent in PurePosixPath(path).parents}
+    for directory in sorted(directories - generated):
+        problems.append(f"{directory} is a directory that {origin} does not generate")
     return problems
 
 
@@ -170,11 +178,12 @@ class VerifyDataSet:
 
     def run(self, source: Path) -> VerificationReport:
         """All violations found; an unreadable directory raises DataSetUnreadableError."""
-        files = self._directory.read(source)
+        contents = self._directory.read(source)
+        files = contents.files
         version, seed, profile = manifest_origin(files)
         check_generator_version(version)
         failures = [Failure(Stage.CHECKSUM, problem) for problem in checksum_violations(files)]
-        view = self._codec.parse(files)
+        view = self._codec.parse(files, contents.directories)
         report = self._checker.check(view)
         failures.extend(Failure(Stage.INVARIANT, problem) for problem in report.violations)
         # The example comparison needs the oracle's observations of a consistent data set; when
@@ -182,7 +191,7 @@ class VerifyDataSet:
         if EXAMPLE_EXPECTED in files and not report.violations:
             examples = self._example_violations(files, view, report.observations)
             failures.extend(Failure(Stage.INVARIANT, problem) for problem in examples)
-        regeneration = regeneration_violations(files, seed, profile, self._regenerate)
+        regeneration = regeneration_violations(files, seed, profile, self._regenerate, contents.directories)
         failures.extend(Failure(Stage.REGENERATION, problem) for problem in regeneration)
         return VerificationReport(tuple(failures), len(files), report.rows_checked)
 

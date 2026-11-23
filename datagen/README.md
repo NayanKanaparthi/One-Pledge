@@ -29,8 +29,14 @@ data set file, which is named with what is wrong ("outside_records/payments.csv 
 column amount_cents is not a positive whole number of cents."). JSON files are read with
 the bounded parser of SPEC_DECISIONS 74 (`manifest.json: nests too deeply.`,
 `manifest.json: not valid JSON.`); a path read from a file must stay inside the data set
-(`manifest.json names a path outside the directory.`), and a file that is a symbolic link
-out of it is refused unread. An unexpected error
+(`manifest.json names a path outside the directory.`). `verify` reads only regular files
+and real directories inside the data set, with no symbolic link anywhere on the way
+(SPEC_DECISIONS 110): each entry is examined before it is opened and a file is opened
+without following a link or blocking, so a link, FIFO, device or socket is refused unread
+by name (`answer_key is a link out of the directory.`, `outside_records/payments.csv is not
+a regular file.`); a directory where a file is expected is named as such, a directory the
+seed and profile do not generate is a problem, and a JSON file over 5 MiB or a CSV over
+256 MiB is refused. An unexpected error
 prints `Unexpected error. Run with --debug for details.`, after one `error` record on
 stderr with `exception_type` and `stack` (frames only; the generator reads no clock, so
 the record has no `ts`); `--debug` adds the exception type and its frames (file, line,

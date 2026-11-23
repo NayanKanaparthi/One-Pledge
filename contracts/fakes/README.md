@@ -119,7 +119,14 @@ safe loader with the same depth, at most 5 MiB and no alias. A file that fails i
 problem naming it (`examples/vectors/signatures.json: nests too deeply`,
 `registry.yaml: not valid YAML`), and a path read from a file (an index entry, a vector's
 example file, an `externalValue`) must stay inside the directory, or the problem is
-`examples/index.json names a path outside the directory.`
+`examples/index.json names a path outside the directory.` Every path opened, the fixed
+names (`examples/index.json`, `examples/vectors/`, the four YAML files) as much as those
+read from a file, must be a regular file or a real directory inside the contracts directory
+with no symbolic link on the way (SPEC_DECISIONS 110). Each step is examined before
+anything is opened and the file is opened without following a link or blocking, so a FIFO
+is never read: `registry.yaml is not a regular file`, `examples/vectors is a link out of
+the directory`, `examples/index.json is a directory where a file is expected`. JSON files
+are bounded at 5 MiB as well.
 With `--json`, stdout holds exactly one JSON document: `ok`, the file, example and
 problem counts, and one entry per check with its status, summary and problems (a
 `FAILED` check's summary is the count of problems found, never its success sentence); on

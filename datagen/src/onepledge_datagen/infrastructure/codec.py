@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from contextlib import suppress
 
 from onepledge_datagen.application.model import (
     ANSWER_KEY,
@@ -52,8 +53,10 @@ class FileCodec:
         files[CONTRACTS] = render_contracts(model.contracts)
         return files
 
-    def parse(self, files: Mapping[str, bytes]) -> DataSetView:
+    def parse(self, files: Mapping[str, bytes], directories: frozenset[str] = frozenset()) -> DataSetView:
         """The typed view; a missing or malformed file raises DataSetUnreadableError."""
+        for path in sorted(self._needed(files) & directories):
+            raise DataSetUnreadableError(f"{path} is a directory where a file is expected.")
         manifest = self._json(files, MANIFEST)
         reference = self._json(files, REFERENCE)
         answer_key = self._json(files, ANSWER_KEY)
@@ -81,6 +84,14 @@ class FileCodec:
     def _scanned_paths(files: Mapping[str, bytes]) -> list[str]:
         prefixes = ("tapes/", "outside_records/")
         return sorted(p for p in files if p.startswith(prefixes) or p in (MANIFEST, REFERENCE))
+
+    def _needed(self, files: Mapping[str, bytes]) -> set[str]:
+        """The files the view reads: the fixed ones and each step file the manifest names."""
+        needed = {MANIFEST, REFERENCE, ANSWER_KEY, TITLES, PAYMENTS, CONTRACTS}
+        # A manifest that cannot be read is named by the parse that follows.
+        with suppress(DataSetUnreadableError):
+            needed.update(step.file for step in parse_steps(self._json(files, MANIFEST)))
+        return needed
 
     @staticmethod
     def _file(files: Mapping[str, bytes], path: str) -> bytes:

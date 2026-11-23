@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Protocol
 
-from onepledge_datagen.application.model import DataSetModel
+from onepledge_datagen.application.model import DataSetFiles, DataSetModel
 from onepledge_datagen.application.view import DataSetView
 
 
@@ -21,8 +21,12 @@ class DataSetCodec(Protocol):
         """A JSON document in the data set's JSON style."""
         ...
 
-    def parse(self, files: Mapping[str, bytes]) -> DataSetView:
-        """The typed view of a set of files, or DataSetUnreadableError."""
+    def parse(self, files: Mapping[str, bytes], directories: frozenset[str] = frozenset()) -> DataSetView:
+        """The typed view of a set of files, or DataSetUnreadableError.
+
+        `directories` are the data set's directories; a file the view needs that is one of them
+        is named as a directory where a file is expected.
+        """
         ...
 
 
@@ -33,6 +37,6 @@ class DataSetDirectory(Protocol):
         """Write every file below `target`, refusing a non-empty directory unless forced."""
         ...
 
-    def read(self, source: Path) -> dict[str, bytes]:
-        """Every file below `source`, keyed by relative path."""
+    def read(self, source: Path) -> DataSetFiles:
+        """Every regular file and directory below `source`, keyed by relative path."""
         ...

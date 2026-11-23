@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import csv
 import io
+import os
+import stat
 from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
@@ -35,15 +37,59 @@ HEADERS: Mapping[str, tuple[str, ...]] = MappingProxyType(
 )
 
 
+# A seed CSV is bounded at 256 MiB (SPEC_DECISIONS 110).
+MAX_CSV_BYTES = 256 * 1024 * 1024
+_OPEN_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+
+
+def _refused(relative: str, problem: str) -> OperatorError:
+    return OperatorError(f"{relative} {problem}.", "INVALID_INPUT")
+
+
+def _examine(directory: Path, parts: tuple[str, ...]) -> None:
+    """Refuse, by name and before anything is opened, a link anywhere on the way from `directory`
+    to the file, a step that is not a real directory, and a file that is not a regular file."""
+    root = Path(os.path.realpath(directory))
+    step = directory
+    for index, part in enumerate(parts):
+        step = step / part
+        relative = "/".join(parts[: index + 1])
+        try:
+            mode = os.lstat(step).st_mode
+        except FileNotFoundError:
+            return  # Opening it names it as unreadable.
+        last = index == len(parts) - 1
+        if stat.S_ISLNK(mode):
+            inside = Path(os.path.realpath(step)).is_relative_to(root)
+            raise _refused(relative, "is not a regular file" if inside else "is a link out of the directory")
+        if not last and not stat.S_ISDIR(mode):
+            raise _refused(relative, "is not a directory")
+        if last and stat.S_ISDIR(mode):
+            raise _refused(relative, "is a directory where a file is expected")
+        if last and not stat.S_ISREG(mode):
+            raise _refused(relative, "is not a regular file")
+
+
+def _read(directory: Path, name: str) -> bytes:
+    relative = f"outside_records/{name}"
+    _examine(directory, ("outside_records", name))
+    with os.fdopen(os.open(directory / relative, _OPEN_FLAGS), "rb") as handle:
+        status = os.fstat(handle.fileno())
+        # The file may have been replaced between the examination and the open.
+        if not stat.S_ISREG(status.st_mode):
+            raise _refused(relative, "is not a regular file")
+        if status.st_size > MAX_CSV_BYTES:
+            raise _refused(relative, "is larger than 256 MiB")
+        data = handle.read(MAX_CSV_BYTES + 1)
+    if len(data) > MAX_CSV_BYTES:
+        raise _refused(relative, "is larger than 256 MiB")
+    return data
+
+
 def _rows(directory: Path, name: str) -> list[list[str]]:
     path = directory / "outside_records" / name
     try:
-        if path.exists() and not path.resolve().is_relative_to(directory.resolve()):
-            # A symbolic link out of the data directory is never followed (SPEC_DECISIONS 74).
-            raise OperatorError(
-                f"outside_records/{name} links to a path outside the directory.", "INVALID_INPUT"
-            )
-        text = path.read_text(encoding="utf-8")
+        text = _read(directory, name).decode("utf-8")
     except (OSError, UnicodeDecodeError):
         raise OperatorError(
             f"{path} cannot be read; pass the directory written by onepledge-datagen.", "INVALID_INPUT"

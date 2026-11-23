@@ -113,7 +113,10 @@ idempotent (the same input gives the same table contents). Every command exits 0
 success and 1 with one sentence on stderr when something is wrong (PostgreSQL not
 reachable, a connection refused, tables missing, a privilege missing, port in use, a
 variable missing, malformed or out of range, a `PG_ADMIN_URL` that is not a superuser, a
-data file cell that is not in its format, named by file, line and column), and 2 on a
+data file cell that is not in its format, named by file, line and column; a data file
+that is not a regular file inside the directory, such as a FIFO or a link, refused by
+name before it is opened, `outside_records/payments.csv is not a regular file.`, or one
+over 256 MiB, SPEC_DECISIONS 110), and 2 on a
 usage error (an empty `--data-dir` is one). An unexpected error prints `Unexpected error.
 Run with --debug for details.`, after one `error` log record with `exception_type` and
 `stack`; `--debug` adds the exception type and its frames (file, line, function), never

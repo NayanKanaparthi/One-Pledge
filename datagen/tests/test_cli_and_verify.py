@@ -212,14 +212,14 @@ def test_a_file_the_system_refuses_to_read_is_one_sentence(
 ) -> None:
     copy = tmp_path / "copy"
     shutil.copytree(example_dir, copy)
-    original = Path.read_bytes
+    original = os.open
 
-    def refuse(path: Path) -> bytes:
-        if path.name == "manifest.json":
+    def refuse(path: str | os.PathLike[str], flags: int, mode: int = 0o777) -> int:
+        if Path(path).name == "manifest.json":
             raise PermissionError(errno.EACCES, "Permission denied", str(path))
-        return original(path)
+        return original(path, flags, mode)
 
-    monkeypatch.setattr(Path, "read_bytes", refuse)
+    monkeypatch.setattr(os, "open", refuse)
     code, out, err = run("verify", "--data-dir", str(copy))
     assert (code, out, err) == (1, "", f"Cannot read the data set in {copy}: permission denied.\n")
 

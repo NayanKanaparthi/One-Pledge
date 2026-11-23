@@ -9,13 +9,15 @@ arbitrary folder.
 from __future__ import annotations
 
 import errno
+import os
 import shutil
+import stat
 import tempfile
 from collections.abc import Mapping
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 
-from onepledge_datagen.application.model import CHECKSUMS, MANIFEST
+from onepledge_datagen.application.model import CHECKSUMS, MANIFEST, DataSetFiles
 from onepledge_datagen.domain.errors import DataSetUnreadableError, OutputDirectoryError
 
 # What an OSError means, in words an operator can act on (SPEC_DECISIONS 23 d).
@@ -76,23 +78,63 @@ class LocalDataDirectory:
             if staging.exists():
                 shutil.rmtree(staging)
 
-    def read(self, source: Path) -> dict[str, bytes]:
-        """Every regular file below `source`, keyed by its relative POSIX path."""
+    def read(self, source: Path) -> DataSetFiles:
+        """Every regular file and every directory below `source`, keyed by relative POSIX path.
+
+        Nothing is followed (SPEC_DECISIONS 110): each entry is examined with `lstat` before it
+        is opened, a link, FIFO, device or socket is refused by name, and a file is opened
+        without following a link and without blocking.
+        """
         if not source.is_dir():
             raise DataSetUnreadableError(f"{source} is not a directory.")
+        files: dict[str, bytes] = {}
+        directories: set[str] = set()
         try:
-            root = source.resolve()
-            files: dict[str, bytes] = {}
-            for path in sorted(source.rglob("*")):
-                if not path.is_file():
-                    continue
-                relative = path.relative_to(source).as_posix()
-                if not path.resolve().is_relative_to(root):
-                    # A symbolic link out of the data set is never followed (SPEC_DECISIONS 74).
-                    raise DataSetUnreadableError(f"{relative} links to a path outside the directory.")
-                files[relative] = path.read_bytes()
-            return files
+            root = Path(os.path.realpath(source))
+            self._walk(source, root, PurePosixPath(), files, directories)
         except OSError as error:
             raise DataSetUnreadableError(
                 f"Cannot read the data set in {source}: {describe(error)}."
             ) from None
+        return DataSetFiles(files, frozenset(directories))
+
+    def _walk(
+        self, source: Path, root: Path, prefix: PurePosixPath, files: dict[str, bytes], directories: set[str]
+    ) -> None:
+        for entry in sorted(os.scandir(source / prefix), key=lambda item: item.name):
+            relative = (prefix / entry.name).as_posix()
+            mode = entry.stat(follow_symlinks=False).st_mode
+            if stat.S_ISLNK(mode):
+                raise _link(root, Path(entry.path), relative)
+            if stat.S_ISDIR(mode):
+                directories.add(relative)
+                self._walk(source, root, prefix / entry.name, files, directories)
+            elif stat.S_ISREG(mode):
+                files[relative] = _read_regular(Path(entry.path), relative)
+            else:
+                raise DataSetUnreadableError(f"{relative} is not a regular file.")
+
+
+# JSON files are bounded at 5 MiB, every other file (the CSVs) at 256 MiB (SPEC_DECISIONS 110).
+MAX_JSON_BYTES = 5 * 1024 * 1024
+MAX_FILE_BYTES = 256 * 1024 * 1024
+_OPEN_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+
+
+def _link(root: Path, path: Path, relative: str) -> DataSetUnreadableError:
+    inside = Path(os.path.realpath(path)).is_relative_to(root)
+    problem = "is not a regular file" if inside else "is a link out of the directory"
+    return DataSetUnreadableError(f"{relative} {problem}.")
+
+
+def _read_regular(path: Path, relative: str) -> bytes:
+    limit = MAX_JSON_BYTES if relative.endswith(".json") else MAX_FILE_BYTES
+    with os.fdopen(os.open(path, _OPEN_FLAGS), "rb") as handle:
+        # The entry may have been replaced between the examination and the open.
+        status = os.fstat(handle.fileno())
+        if not stat.S_ISREG(status.st_mode):
+            raise DataSetUnreadableError(f"{relative} is not a regular file.")
+        data = b"" if status.st_size > limit else handle.read(limit + 1)
+    if status.st_size > limit or len(data) > limit:
+        raise DataSetUnreadableError(f"{relative} is larger than {limit // (1024 * 1024)} MiB.")
+    return data
