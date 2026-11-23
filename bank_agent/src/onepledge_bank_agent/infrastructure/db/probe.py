@@ -8,14 +8,25 @@ statement the database refuses inside a check reaches the check's boundary
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from sqlalchemy import Connection, Engine, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DBAPIError, OperationalError
 
 from onepledge_bank_agent.infrastructure.db.connection_settings import session_parameter_problems
-from onepledge_bank_agent.infrastructure.db.failures import connection_failed
+from onepledge_bank_agent.infrastructure.db.failures import connection_failed, startup_check_refused
+from onepledge_bank_agent.infrastructure.db.role_guard import RuntimeRoleGuard
 from onepledge_bank_agent.infrastructure.operator_errors import CONFIGURATION_ERROR, OperatorError
 
 VARIABLE = "DATABASE_URL"
+
+
+def startup_check[T](name: str, action: Callable[[], T]) -> T:
+    """Run one named check; a statement the database refuses is that check's failure."""
+    try:
+        return action()
+    except DBAPIError as error:
+        raise startup_check_refused(name, error) from None
 
 
 class DatabaseProbe:
@@ -39,6 +50,10 @@ class DatabaseProbe:
                 f"({', '.join(differing)}); check the database's configuration.",
                 CONFIGURATION_ERROR,
             )
+
+    def ensure_least_privilege(self) -> None:
+        """The role inspection of SPEC_DECISIONS 103 finds nothing (`RuntimeRoleGuard`)."""
+        RuntimeRoleGuard(self._engine).require_least_privilege()
 
     def _open(self) -> Connection:
         try:

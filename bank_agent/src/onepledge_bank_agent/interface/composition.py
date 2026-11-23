@@ -69,7 +69,7 @@ from onepledge_bank_agent.infrastructure.db.locks import SqlOutboxLock, SqlSubmi
 from onepledge_bank_agent.infrastructure.db.migrations import MigrationRunner, SchemaInspector, head_revision
 from onepledge_bank_agent.infrastructure.db.probe import DatabaseProbe
 from onepledge_bank_agent.infrastructure.db.provisioning import DatabaseProvisioner
-from onepledge_bank_agent.infrastructure.db.role_guard import OwnerRoleGuard, RuntimeRoleGuard
+from onepledge_bank_agent.infrastructure.db.role_guard import OwnerRoleGuard
 from onepledge_bank_agent.infrastructure.db.session import SqlUnitOfWorkFactory
 from onepledge_bank_agent.infrastructure.http.base import HttpClientFactory, make_http_client
 from onepledge_bank_agent.infrastructure.http.clients import ClientParts, ServiceClients
@@ -181,12 +181,8 @@ class RuntimeComposition(_Resources):
         return SchemaInspector(self._engines.engine(self._settings.require_database_url()))
 
     def probe(self) -> DatabaseProbe:
-        """The reachability and session checks of startup, on the inspecting engine of DATABASE_URL."""
+        """The reachability, session and role checks of startup, on the inspecting engine of DATABASE_URL."""
         return DatabaseProbe(self._engines.engine(self._settings.require_database_url(), inspecting=True))
-
-    def role_guard(self) -> RuntimeRoleGuard:
-        """The check that the runtime role holds the app role's grants and nothing more."""
-        return RuntimeRoleGuard(self._engines.engine(self._settings.require_database_url(), inspecting=True))
 
     def ingest_tape(self) -> IngestTape:
         """Intake as the app role."""
