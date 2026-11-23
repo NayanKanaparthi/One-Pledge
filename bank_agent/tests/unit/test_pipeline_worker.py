@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import uuid
 from collections.abc import Iterator
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 
 import pytest
@@ -54,6 +54,14 @@ class Stop:
         return self.is_set()
 
 
+@dataclass(frozen=True)
+class Ran:
+    """The result of a periodic run."""
+
+    complete: bool = True
+    reason: str | None = None
+
+
 class Tick:
     """A periodic task counting its runs."""
 
@@ -61,8 +69,19 @@ class Tick:
         self.interval_seconds = interval
         self.runs = 0
 
-    def run(self) -> None:
+    def run(self, wait: bool = False) -> Ran:
         self.runs += 1
+        return Ran()
+
+
+class Halt:
+    """The halt rule as the worker sees it."""
+
+    def __init__(self, active: bool = False) -> None:
+        self.is_active = active
+
+    def active(self) -> bool:
+        return self.is_active
 
 
 def upload(world: World, facility: uuid.UUID, minutes: int) -> uuid.UUID:
@@ -83,10 +102,12 @@ def worker(
     *stages: FakeStage,
     periodic: tuple[Tick, ...] = (),
     stop: StopSignal | None = None,
+    halt: Halt | None = None,
 ) -> RunPipelineWorker:
     runtime = world.runtime if stop is None else replace(world.runtime, stop=stop)
     advance = AdvanceSubmission(world.units, stages, runtime, 3)
-    return RunPipelineWorker(world.units, advance, locks, runtime, WorkerSettings(0.01, periodic))
+    settings = WorkerSettings(0.01, periodic, halt=halt or Halt())
+    return RunPipelineWorker(world.units, advance, locks, runtime, settings)
 
 
 def test_once_processes_until_nothing_is_runnable_keeping_each_facility_in_upload_order() -> None:
@@ -152,7 +173,7 @@ def test_a_failing_periodic_task_is_logged_and_the_stage_still_runs() -> None:
     upload(world, world.facility.facility_id, 0)
 
     class Broken(Tick):
-        def run(self) -> None:
+        def run(self, wait: bool = False) -> Ran:
             raise ConnectionError("database down")
 
     stop = Stop(idle_waits=2)
@@ -174,7 +195,7 @@ def test_once_runs_every_stage_after_a_failing_task_and_reports_the_failure() ->
     upload(world, world.facility.facility_id, 0)
 
     class Refused(Tick):
-        def run(self) -> None:
+        def run(self, wait: bool = False) -> Ran:
             raise RegistryRejectedError(403, FailureReason.FORBIDDEN)
 
     runner = worker(world, Locks(), FakeStage(world, TapeStatus.CLEANED), periodic=(Refused(100),))

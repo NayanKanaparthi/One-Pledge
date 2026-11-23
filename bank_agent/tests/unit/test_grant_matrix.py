@@ -29,7 +29,8 @@ SPEC_12_2 = {
     "registry_request_items": {"SELECT", "INSERT", "UPDATE"},
     "alerts": {"SELECT", "INSERT", "UPDATE"},
     "users": {"SELECT", "INSERT", "UPDATE"},
-    "registry_outbox_attempts": {"SELECT", "INSERT", "UPDATE"},
+    "registry_outbox_messages": {"SELECT", "INSERT", "UPDATE"},
+    "registry_outbox_state": {"SELECT", "INSERT", "UPDATE"},
     # Reference data and the schema revision: read only.
     "lenders": {"SELECT"},
     "facilities": {"SELECT"},

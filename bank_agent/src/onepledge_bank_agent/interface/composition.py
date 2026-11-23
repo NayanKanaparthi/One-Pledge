@@ -14,6 +14,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import timedelta
 from types import TracebackType
 from typing import Self
 
@@ -46,6 +47,7 @@ from onepledge_bank_agent.application.submit_stage import HaltRule, SubmissionUs
 from onepledge_bank_agent.application.sync_registry_outbox import (
     OutboxHandlers,
     OutboxSource,
+    OutboxTiming,
     SyncRegistryOutbox,
 )
 from onepledge_bank_agent.application.tape_requests import SubmitSettings, TapeRequests
@@ -226,7 +228,9 @@ class RuntimeComposition(_Resources):
 
     def worker(self) -> RunPipelineWorker:
         """The pipeline worker on the app role, with the registry outbox sync as its periodic task."""
-        settings = WorkerSettings(self._settings.tunables.pipeline_poll_seconds, (self.outbox_sync(),))
+        settings = WorkerSettings(
+            self._settings.tunables.pipeline_poll_seconds, (self.outbox_sync(),), halt=self._halt_rule()
+        )
         return RunPipelineWorker(
             self._app_units(),
             self.advance_submission(),
@@ -244,10 +248,10 @@ class RuntimeComposition(_Resources):
         )
         source = OutboxSource(
             self._clients.registry(),
-            SqlOutboxLock(self._engines.engine(self._settings.require_database_url())),
+            SqlOutboxLock(self._engines.engine(self._settings.require_database_url()), self._parts.stop),
         )
-        interval = self._settings.tunables.outbox_poll_seconds
-        return SyncRegistryOutbox(units, source, handlers, self._runtime, interval)
+        timing = OutboxTiming(self._settings.tunables.outbox_poll_seconds, self._blind_after())
+        return SyncRegistryOutbox(units, source, handlers, self._runtime, timing)
 
     def review_alert(self) -> ReviewAlert:
         """Start a review or record a position."""
@@ -274,21 +278,27 @@ class RuntimeComposition(_Resources):
 
     def deep_verification(self) -> RunDeepVerification:
         """Recompute every proof and store the report."""
-        sources = VerificationSources(self._headers(), self._verifier(), self._controls())
+        sources = VerificationSources(
+            self._headers(), self._verifier(), self._controls(), self._blind_after()
+        )
         return RunDeepVerification(self._app_units(), sources, self._runtime)
 
     def integrity_report(self) -> GetIntegrityReport:
         """The live integrity report."""
-        return GetIntegrityReport(self._app_units(), self._controls(), self._runtime)
+        return GetIntegrityReport(self._app_units(), self._controls(), self._runtime, self._blind_after())
 
     def startup_record(self) -> RecordStartupConfiguration:
         """The audit of a process starting with the halt rule off."""
         halt = self._settings.tunables.halt_on_registry_integrity_failure
         return RecordStartupConfiguration(self._app_units(), halt, self._runtime)
 
+    def _blind_after(self) -> timedelta:
+        """`OUTBOX_BLIND_HALT_SECONDS` (SPEC_DECISIONS 101)."""
+        return timedelta(seconds=self._settings.tunables.outbox_blind_halt_seconds)
+
     def _halt_rule(self) -> HaltRule:
         enabled = self._settings.tunables.halt_on_registry_integrity_failure
-        return HaltRule(self._app_units(), enabled, self._runtime.log)
+        return HaltRule(self._app_units(), enabled, self._runtime.log, self.outbox_sync())
 
     def _app_units(self) -> SqlUnitOfWorkFactory:
         return self._units(self._settings.require_database_url())

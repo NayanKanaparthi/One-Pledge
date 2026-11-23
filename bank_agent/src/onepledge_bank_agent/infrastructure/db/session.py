@@ -20,7 +20,10 @@ from onepledge_bank_agent.infrastructure.db.repositories.facilities import SqlFa
 from onepledge_bank_agent.infrastructure.db.repositories.history import SqlHistoryReader
 from onepledge_bank_agent.infrastructure.db.repositories.items import SqlSubmissionItemRepository
 from onepledge_bank_agent.infrastructure.db.repositories.loans import SqlLoanRepository
-from onepledge_bank_agent.infrastructure.db.repositories.outbox_attempts import SqlOutboxAttemptRepository
+from onepledge_bank_agent.infrastructure.db.repositories.outbox_ledger import (
+    SqlOutboxLedgerRepository,
+    SqlOutboxStateRepository,
+)
 from onepledge_bank_agent.infrastructure.db.repositories.raw_rows import SqlRawRowRepository
 from onepledge_bank_agent.infrastructure.db.repositories.requests import SqlRegistryRequestRepository
 from onepledge_bank_agent.infrastructure.db.repositories.tapes import SqlTapeRepository
@@ -39,7 +42,8 @@ class SqlUnitOfWork:
     facilities: SqlFacilityRepository
     requests: SqlRegistryRequestRepository
     alerts: SqlAlertRepository
-    outbox_attempts: SqlOutboxAttemptRepository
+    outbox_ledger: SqlOutboxLedgerRepository
+    outbox_state: SqlOutboxStateRepository
     evidence: SqlEvidenceStores
     history: SqlHistoryReader
 
@@ -63,7 +67,8 @@ class SqlUnitOfWork:
         self.facilities = SqlFacilityRepository(session)
         self.requests = SqlRegistryRequestRepository(session)
         self.alerts = SqlAlertRepository(session)
-        self.outbox_attempts = SqlOutboxAttemptRepository(session)
+        self.outbox_ledger = SqlOutboxLedgerRepository(session)
+        self.outbox_state = SqlOutboxStateRepository(session)
         self.evidence = SqlEvidenceStores(session)
         self.history = SqlHistoryReader(session)
         return self

@@ -24,6 +24,7 @@ from onepledge_bank_agent.domain.enums import (
 from onepledge_bank_agent.domain.integrity import (
     CertificateFinding,
     CertificateProblem,
+    OutboxView,
     QuarantineFinding,
     SectionStatus,
     registry_messages_section,
@@ -92,12 +93,28 @@ def test_a_deep_finding_breaks_the_section_and_a_stored_failed_row_is_not_one() 
     ).status is (SectionStatus.OK)
 
 
-@pytest.mark.parametrize(("held", "status"), [(0, SectionStatus.OK), (1, SectionStatus.BROKEN)])
-def test_any_quarantined_message_breaks_the_registry_messages_section(
-    held: int, status: SectionStatus
+SEEING = OutboxView(datetime(2026, 11, 20, tzinfo=UTC), False, None, None)
+
+
+@pytest.mark.parametrize(
+    ("held", "open_row", "outbox", "status"),
+    [
+        (0, True, SEEING, SectionStatus.OK),
+        (1, True, SEEING, SectionStatus.BROKEN),
+        (1, False, SEEING, SectionStatus.OK),
+        (0, True, OutboxView(None, True, None, "UNACKNOWLEDGEABLE"), SectionStatus.BROKEN),
+    ],
+    ids=["nothing held", "an open row", "a row applied late", "blind"],
+)
+def test_an_open_quarantined_message_or_a_blind_bank_breaks_the_registry_messages_section(
+    held: int, open_row: bool, outbox: OutboxView, status: SectionStatus
 ) -> None:
-    messages = [QuarantineFinding(uuid.uuid4(), "ALERT", "SCHEMA_MISMATCH") for _ in range(held)]
-    section = registry_messages_section(messages)
+    received = datetime(2026, 11, 20, tzinfo=UTC)
+    messages = [
+        QuarantineFinding(uuid.uuid4(), uuid.uuid4(), "ALERT", "SCHEMA_MISMATCH", received, False, open_row)
+        for _ in range(held)
+    ]
+    section = registry_messages_section(messages, outbox)
     assert (section.status, section.quarantined, section.messages) == (status, held, tuple(messages))
 
 
@@ -148,12 +165,25 @@ CONDITIONS = [
 ]
 
 
+class Seeing:
+    """An outbox the bank reads completely: never blind."""
+
+    def blind(self) -> bool:
+        return False
+
+    def run(self, wait: bool = False) -> object:
+        raise AssertionError("no catch-up sync while the bank sees the registry")
+
+
 @pytest.mark.parametrize(("name", "setup", "halts"), CONDITIONS, ids=[c[0] for c in CONDITIONS])
 def test_each_of_the_three_conditions_activates_the_halt_rule_unless_it_is_off(
     name: str, setup: object, halts: bool
 ) -> None:
     world = World()
-    rule, off = HaltRule(world.units, True, world.log), HaltRule(world.units, False, world.log)
+    rule, off = (
+        HaltRule(world.units, True, world.log, Seeing()),
+        HaltRule(world.units, False, world.log, Seeing()),
+    )
     assert not rule.active()
     assert callable(setup)
     setup(world)
@@ -170,7 +200,7 @@ def test_each_of_the_three_conditions_activates_the_halt_rule_unless_it_is_off(
 def test_a_verified_certificate_for_the_same_request_releases_the_halt_rule() -> None:
     world = World()
     unproven_certificate(world)
-    rule = HaltRule(world.units, True, world.log)
+    rule = HaltRule(world.units, True, world.log, Seeing())
     assert rule.active()
     with world.units() as unit:
         assert unit.evidence.certificates.add(certificate(FIRST, None))

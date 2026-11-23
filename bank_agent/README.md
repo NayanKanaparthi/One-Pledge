@@ -40,7 +40,8 @@ What a reviewer can check, and where:
   and a test rebuilds every tape of the `full` data set from the database alone.
 - **The program cannot even try.** The API and the worker connect as `{db}_app`, which
   has `SELECT, INSERT` on those tables (and `login_attempts`), `SELECT, INSERT, UPDATE`
-  on seven working tables (`registry_outbox_attempts` among them), `SELECT` on reference
+  on eight working tables (`registry_outbox_messages` and `registry_outbox_state` among
+  them), `SELECT` on reference
   data and `alembic_version`, and nothing else: no `UPDATE`, `DELETE`, `TRUNCATE`, no
   sequence and no DDL. `GRANT_MATRIX` in `infrastructure/db/role_check.py` is the one
   statement of these grants: migration `0009_grant_matrix.py` applies it, and the startup
@@ -102,8 +103,10 @@ What a reviewer can check, and where:
   SPEC_DECISIONS 90). The halt rule
   (`HALT_ON_REGISTRY_INTEGRITY_FAILURE`, SPEC_DECISIONS 56) stops every submission,
   resubmission and case position while a checkpoint failed, a request has a failed
-  certificate and no verified one, or a CHECKPOINT message is quarantined; turning the
-  rule off is audited at every start. Deep verification recomputes the audit chain, every raw row and file
+  certificate and no verified one, a CHECKPOINT message is quarantined, or the bank is
+  blind: its last complete outbox sync is missing or older than `OUTBOX_BLIND_HALT_SECONDS`
+  (SPEC_DECISIONS 101; the only condition that clears by itself, and before refusing for it
+  the rule runs one sync to catch up); turning the rule off is audited at every start. Deep verification recomputes the audit chain, every raw row and file
   hash, every certificate and checkpoint signature and the registry's whole hash chain
   from seq 1, so it finds an edit by a superuser and a history rewrite before the
   latest checkpoint, and says where.
@@ -119,11 +122,14 @@ bank_agent/
                        0005_state_guards.py (tape guard, insert guards, alert guard),
                        0006_quarantine.py (the 19th table), 0007_certificate_evidence.py
                        (failed certificates kept beside verified ones),
-                       0008_outbox_poison.py (registry_outbox_attempts, the 20th table),
+                       0008_outbox_poison.py (registry_outbox_attempts, removed by 0013),
                        0009_grant_matrix.py (the grant matrix), 0010_column_guards.py
                        (status and case status pairs, column by column guards),
                        0011_withheld_payload.py (a quarantined payload kept as its hash),
-                       0012_round_trip.py (range checks on times another party supplied)
+                       0012_round_trip.py (range checks on times another party supplied),
+                       0013_outbox_ledger.py (registry_outbox_messages and
+                       registry_outbox_state replace registry_outbox_attempts: 21
+                       tables, 22 with alembic_version)
   src/onepledge_bank_agent/
     domain/            values (Vin, Money, Lei, ...), enums, errors (one DomainError tree and
                        the fixed message table), tape and loan state machines, alert,
@@ -235,11 +241,15 @@ error, and a flag takes no value.
   `HALT_ON_REGISTRY_INTEGRITY_FAILURE` is false.
 - `registry sync` prints the messages processed, alerts created, case updates applied
   and checkpoints verified or failed, and is audited as `REGISTRY_SYNC_REQUESTED` with
-  `via` cli. When another sync holds the bank's outbox lock it does nothing and says so.
-  It exits 1 only when it could not reach the registry or the database; a message it
-  cannot apply is quarantined and the sync goes on (SPEC_DECISIONS 85).
-- `worker --once` runs every runnable stage even when the outbox sync failed, reports the
-  sync failure in its result, and then exits 1.
+  `via` cli. When another sync holds the bank's outbox lock it waits for it, up to two
+  minutes. It exits 0 only for a complete sync (SPEC_DECISIONS 101): one that read to
+  `has_more: false`, gave every element its outcome and had every acknowledgement taken.
+  A registry it cannot read prints its dependency error; any other incomplete sync prints
+  `OUTBOX_SYNC_INCOMPLETE` with its reason.
+- `worker --once` runs every runnable stage whatever the outbox sync did, and exits 0 and
+  reports `ok: true` only when its last sync was complete, the bank is not halted and no
+  tape ended FAILED during the run; otherwise it lists every problem (`problems`, the first
+  also as `error`) and exits 1.
 - `integrity report` and `integrity verify` print the seven sections with their facts,
   then under "Open failures" every finding that makes a section BROKEN (the thirteen
   database controls and the role violations among them) and under "Recovered (evidence
@@ -274,15 +284,25 @@ error, and a flag takes no value.
 | COMPLETED | `CollectCertificates` | Fetches and verifies the certificate of every answered request that has no verified one (SPEC 15.2) and stores it either way; any failure ends the tape FAILED with `CERTIFICATE_INVALID`, resume status SUBMITTED (loan states are kept as the registry answered). A retry fetches again; the same failed certificate stores nothing new. Then one outbox sync. |
 
 Outside the stages: `SyncRegistryOutbox` processes ALERT, CASE_UPDATE and CHECKPOINT
-messages in position order, one transaction each, then acknowledges (SPEC 14.1). Each
-message has one of three outcomes (SPEC_DECISIONS 85, `application/outbox_outcomes.py`):
-applied; deferred (the bank's database connection lost, a serialisation failure or
-deadlock, or a passing registry outage), counted in `registry_outbox_attempts` and
-poison at the fifth deferral; or poison, which is everything else. A poison message is
+messages in position order, one transaction each, then acknowledges (SPEC 14.1), at three
+levels (SPEC_DECISIONS 101, `application/outbox_outcomes.py`). A page that is not one object
+with a `messages` array and a boolean `has_more` acts on nothing and leaves the sync
+incomplete. An element without an object or a canonical `message_id` cannot be acknowledged:
+it is kept once by its hash as `UNACKNOWLEDGEABLE`, audited, and the sync goes on, incomplete.
+A message with a usable id is applied, ignored (a type of the type pattern the bank does not
+know), deferred, or poison. A deferral (the bank's database connection lost, a serialisation
+failure or deadlock, or a passing registry outage) is never turned into poison, and a
+deferred CHECKPOINT holds back only later checkpoints. Poison is everything else: it is
 quarantined with its reason (`SCHEMA_MISMATCH`, `VALUE_OUT_OF_RANGE`,
-`CONTRADICTS_STORED_STATE`, `REFUSED_BY_DATABASE`, `REJECTED_BY_DEPENDENCY`,
-`REPEATED_FAILURE`, `OVERSIZED`, `UNEXPECTED_ERROR`), audited as
-`REGISTRY_MESSAGE_QUARANTINED`, acknowledged, and the sync goes on, so nothing a
+`CONTRADICTS_STORED_STATE`, `REFUSED_BY_DATABASE` with the SQLSTATE,
+`REJECTED_BY_DEPENDENCY`, `UNMATCHED`, `OVERSIZED`, `UNEXPECTED_ERROR`; a type that is not of
+the pattern is stored as `UNREADABLE`), audited as `REGISTRY_MESSAGE_QUARANTINED`,
+acknowledged, and the sync goes on. A CASE_UPDATE that names no alert is kept `UNMATCHED`
+and applied when its ALERT arrives. Each handled message has its row in
+`registry_outbox_messages` in the handler's transaction (outcome set once, the
+acknowledgement's status), so a redelivery is only acknowledged again; an acknowledgement
+the registry refuses is audited once as `REGISTRY_ACK_REFUSED`. `registry_outbox_state` keeps
+the last complete sync; becoming blind and recovering are each audited once. Nothing a
 registry sends can block the outbox or go unrecorded. Every message is validated against
 its whole schema before a handler runs, every stored number must fit its column, and
 every id and base64 value must be spelled canonically (SPEC_DECISIONS 75), in answers of
@@ -305,7 +325,7 @@ in upload order. Failures (SPEC 13.7, SPEC_DECISIONS 26):
 | The key version pair changed within a submission, or the registry answered 409 `KEY_VERSION_MISMATCH` | FAILED at once, not retryable | `KEY_VERSION_MISMATCH` |
 | The registry unreachable, 429 or 5xx | Stage retried; answered batches keep their results, the rest are sent again with the same key | `REGISTRY_UNAVAILABLE` after `PIPELINE_MAX_ATTEMPTS` |
 | A registry refusal or an answer that does not match what was sent | FAILED at once | `REGISTRY_REJECTED_REQUEST` |
-| The halt rule is on and active (a failed checkpoint, a request with only a failed certificate, or a quarantined CHECKPOINT message) | FAILED before anything is sent | `REGISTRY_INTEGRITY_BROKEN` |
+| The halt rule is on and active (a failed checkpoint, a request with only a failed certificate, a quarantined CHECKPOINT message, or a blind bank after one catch-up sync) | FAILED before anything is sent | `REGISTRY_INTEGRITY_BROKEN` |
 | A certificate failed verification | FAILED; retryable once the registry serves a valid one | `CERTIFICATE_INVALID` |
 | Any other error | FAILED at once | `INTERNAL_ERROR` |
 
@@ -339,6 +359,7 @@ records and the worker output carry the same keys. Every failure code except
 | `KEY_HOLDER_1_URL`, `KEY_HOLDER_1_API_KEY`, `KEY_HOLDER_2_URL`, `KEY_HOLDER_2_API_KEY` | `worker` | The two key holders and this bank's keys. |
 | `HALT_ON_REGISTRY_INTEGRITY_FAILURE` | `worker` | Default true (SPEC 15.4). False is audited as `HALT_RULE_DISABLED` at every start. |
 | `OUTBOX_POLL_SECONDS` | `worker` | Default 2. |
+| `OUTBOX_BLIND_HALT_SECONDS` | `worker`, `registry sync`, `integrity report`, `integrity verify` | Default 300 (0.001 to 3,600): a bank whose last complete outbox sync is older is blind, the fourth condition of the halt rule (SPEC_DECISIONS 101). |
 | `TOKENIZE_CHUNK_LOANS` | `worker` | Default 100 (1 to 125: at most 1,000 elements per key holder request). |
 | `SUBMIT_BATCH_ITEMS` | `worker` | Default 500 (1 to 500, the contract maximum). |
 | `LOG_LEVEL` | `worker` | Default `INFO`. |
@@ -523,7 +544,9 @@ action and object type checks.
 | checkpoints_seen | `body jsonb NOT NULL` with `ck_checkpoints_seen_body` (an object), migration 0004 | The signed body exactly as received. SPEC 12.1 stores `signed_at` as a timestamp, but the signature covers its text; deep verification (SPEC 15.6 step 4) re-verifies every stored signature, which needs the exact signed bytes (SPEC_DECISIONS 54). |
 | certificates | migration 0007 (SPEC_DECISIONS 61, 64): primary key `certificate_row_id`; `delivered_body_sha256 char(64) NOT NULL` with `ck_certificates_delivered_body_sha256` (a hex digest); `uq_certificates_verified_certificate_id` and `uq_certificates_verified_request_id` (partial, `WHERE verified`); `uq_certificates_delivery` on `(certificate_id, delivered_body_sha256, signature)`; `ix_certificates_request_id` | A failed certificate is kept beside the verified one a retry stores. `delivered_body_sha256` is the SHA-256 of the canonical JSON of the body as it arrived, computed by the bank, never taken from the registry; `body_hash` keeps the registry's claim, so the two differ exactly in a row whose body was altered. `VerifyCertificate` compares the stored column with the claim, and deep verification recomputes it from the stored body, so an edit of both `body` and `body_hash` is still found. The claim is not in the delivery key because CERTIFICATE_BODY changes only the body. |
 | registry_messages_quarantined | the 19th table, migration 0006 (SPEC_DECISIONS 57), amended by 0008 (SPEC_DECISIONS 85): `uq_registry_messages_quarantined_message_id`; value list on `reason` (the eight reasons of decision 85); `payload_sha256` a hex digest; `position` null or `>= 1`; `message_type` 1 to 64 characters; `reason <> 'OVERSIZED' OR payload IS NULL` (migration 0011; 0006 had `(reason = 'OVERSIZED') = (payload IS NULL)`) | One row per message however often it is delivered. An oversized payload is always kept as its hash alone, and so is one holding text the bank cannot store (U+0000, which `jsonb` refuses, or a surrogate code point, which UTF-8 cannot carry), so that such a message can still be quarantined and acknowledged. A position too large to store is kept as unknown. `REGISTRY_MESSAGE_QUARANTINED` joins the audit action list. |
-| registry_outbox_attempts | the 20th table, migration 0008 (SPEC_DECISIONS 85 rule 4): `message_id` primary key; `ck_registry_outbox_attempts_attempts`: `>= 1`; `ck_registry_outbox_attempts_last_reason`: a code | The deferrals of one message are counted in their own transaction; the fifth makes it poison. The app role may update it; rows are never removed. |
+| registry_messages_quarantined | migration 0013 (SPEC_DECISIONS 101): `payload_withheld` with `ck_registry_messages_quarantined_payload`: `payload_withheld = (payload IS NULL)` and always for OVERSIZED; `message_id` null exactly for `UNACKNOWLEDGEABLE` (`ck_registry_messages_quarantined_message_id`); `uq_registry_messages_quarantined_element` on `payload_sha256` where `message_id IS NULL`; the nine reasons of decision 101 | An element without a usable id is kept once by its hash however often it is delivered; the report and the audit entry say whether the payload was withheld. |
+| registry_outbox_messages | the 20th table, migration 0013 (SPEC_DECISIONS 101, replacing `registry_outbox_attempts` of 0008): `message_id` primary key; value lists on `outcome` (or null) and `ack_status`; `message_type` of the type pattern or `UNREADABLE`; `(outcome IS NULL) = (handled_at IS NULL)`; `registry_outbox_messages_guard` (`OP009`): `message_id`, `message_type`, `first_seen_at` immutable, `outcome` set once except `QUARANTINED` to `APPLIED_LATE` | One row per message with a usable id, written in the handler's transaction: what makes "handled once" and "nothing unrecorded" checkable. The app role may insert and update; rows are never removed. |
+| registry_outbox_state | the 21st table, migration 0013: one row (`ck_registry_outbox_state_singleton`), with the last complete sync, since when syncs are incomplete and why, and since when the bank is blind | The blind rule of SPEC_DECISIONS 101 reads it; the integrity report shows it. |
 | certificates, checkpoints_seen, tape_submissions, loans, facilities | `ck_certificates_issued_at_range`, `ck_checkpoints_seen_signed_at_range`: from 2000-01-01T00:00:00Z up to, not including, 2100-01-01T00:00:00Z; `ck_tape_submissions_as_of_date_range`, `ck_loans_origination_date_range`, `ck_facilities_opened_on_range`: 2000-01-01 to 2099-12-31 (migration 0012, SPEC_DECISIONS 100) | A time another party supplied is held only inside the range every reader can read back, the range of `domain/storable.py`; a row forced past it by a superuser is reported as an `UNREADABLE` evidence problem, never a failure of the report. |
 | alerts | `ck_alerts_status_case_status`, migration 0010 (SPEC_DECISIONS 86): NEW and REVIEWING only with an OPEN case, CLEARED only with `CLEARED_DATA_ERROR` or `CLEARED_LATE_RELEASE`, ESCALATED only with CONFIRMED | Only the registry's case outcome closes an alert; no statement can store one without the other. |
 | loans, tape_submissions, alerts | insert guards `loans_insert_guard`, `tape_submissions_insert_guard`; `alerts_guard` on insert and update, migration 0005 (SPEC_DECISIONS 46, 47) | Creation in the one state SPEC allows, and the tape and alert machines as the only path. |

@@ -330,19 +330,21 @@ def test_worker_once_json_in_a_child_process_writes_one_document_and_only_log_li
     environment = {**bank_db.environment(), **unreachable_services(doubles), "LOG_LEVEL": "DEBUG",
                    "HTTP_CONNECT_TIMEOUT_SECONDS": "0.2"}  # fmt: skip
     finished = run_program("onepledge-bank", ["worker", "--once", "--json"], environment)
-    assert finished.returncode == 0, finished.stderr
+    assert finished.returncode == 1, "the registry is unreachable: the sync was incomplete (decision 101)"
     document = json.loads(finished.stdout)
-    assert document["ok"] is True and [s["outcome"] for s in document["stages"]] == [
+    assert document["ok"] is False and [s["outcome"] for s in document["stages"]] == [
         "ADVANCED",
         "RETRY_SCHEDULED",
     ]
+    problems = document["problems"]
+    assert [p["code"] for p in problems] == ["OUTBOX_SYNC_INCOMPLETE", "REGISTRY_INTEGRITY_BROKEN"]
     records, sentences = split_stderr(finished.stderr)
-    assert sentences == [] and records
-    assert {record["service"] for record in records} == {"bank_agent"}
+    assert " ".join(" ".join(sentences).split()) == " ".join(p["message"] for p in problems), "only those"
+    assert records and {record["service"] for record in records} == {"bank_agent"}
     assert {"tape_stage_advanced", "tape_stage_attempt_failed"} <= {str(r["event"]) for r in records}
     quiet = run_program("onepledge-bank", ["worker", "--once", "--json", "--quiet"], environment)
     quiet_records, _ = split_stderr(quiet.stderr)
-    assert json.loads(quiet.stdout)["ok"] is True
+    assert json.loads(quiet.stdout)["problems"] == problems
     assert {record["level"] for record in quiet_records} <= {"warning", "error", "critical"}
 
 
@@ -390,12 +392,22 @@ def test_no_runtime_command_reads_bind_host_or_port(bank_db: BankDatabase, doubl
     """SPEC_DECISIONS 73, point 1: values `serve` would refuse stop no worker and no one-shot command."""
     environment = {**bank_db.environment(), **unreachable_services(doubles), "BIND_HOST": "localhost",
                    "PORT": "http"}  # fmt: skip
-    for command in (["worker", "--once"], ["integrity", "report"]):
-        finished = run_program("onepledge-bank", [*command, "--json"], environment)
-        assert (finished.returncode, json.loads(finished.stdout)["ok"]) == (0, True), (
-            command,
-            finished.stderr,
-        )
+    finished = run_program("onepledge-bank", ["integrity", "report", "--json"], environment)
+    report = json.loads(finished.stdout)
+    assert report["ok"] is True, finished.stderr
+    assert finished.returncode == (0 if report["status"] == "OK" else 1), "the report's own exit rule"
+    ran_without_a_registry(run_program("onepledge-bank", ["worker", "--once", "--json"], environment))
+
+
+WITHOUT_A_REGISTRY = ["OUTBOX_SYNC_INCOMPLETE", "REGISTRY_INTEGRITY_BROKEN"]
+"""What `worker --once` reports when the registry cannot be reached and the bank never synced: it
+ran, and exits 1 for that reason alone (SPEC_DECISIONS 101)."""
+
+
+def ran_without_a_registry(finished: subprocess.CompletedProcess[str]) -> None:
+    document = json.loads(finished.stdout)
+    assert finished.returncode == 1 and document["stages"] == [], finished.stderr
+    assert [problem["code"] for problem in document["problems"]] == WITHOUT_A_REGISTRY
 
 
 def test_the_worker_never_needs_an_owner_credential(
@@ -404,8 +416,7 @@ def test_the_worker_never_needs_an_owner_credential(
     """The worker runs from an environment without MIGRATION_DATABASE_URL, PG_ADMIN_URL or DB_APP_ROLE."""
     seed_reference(bank_db, small_data)
     runtime_only = {"DATABASE_URL": bank_db.app_url, **IDENTITY, **unreachable_services(doubles)}
-    finished = run_program("onepledge-bank", ["worker", "--once", "--json"], runtime_only)
-    assert json.loads(finished.stdout) == {"ok": True, "stages": []}
+    ran_without_a_registry(run_program("onepledge-bank", ["worker", "--once", "--json"], runtime_only))
 
 
 def role_sentence(code: str) -> str:

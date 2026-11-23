@@ -41,6 +41,7 @@ from onepledge_bank_agent.domain.enums import (
 from onepledge_bank_agent.domain.errors import ConcurrentUploadError, ReferenceDataError
 from onepledge_bank_agent.domain.integrity import DatabaseControl
 from onepledge_bank_agent.domain.loan import Loan
+from onepledge_bank_agent.domain.outbox import LedgerEntry, OutboxOutcome, OutboxState
 from onepledge_bank_agent.domain.raw_evidence import StoredRow, StoredTape
 from onepledge_bank_agent.domain.registry_records import ItemOutcome, QuarantinedMessage, RegistryAnswer
 from onepledge_bank_agent.domain.registry_results import StoredResult
@@ -73,7 +74,8 @@ class MemoryState:
     facilities: dict[uuid.UUID, Facility] = field(default_factory=dict)
     audit: list[AuditDraft] = field(default_factory=list)
     audit_log: list[AuditEntry] = field(default_factory=list)
-    outbox_attempts: dict[uuid.UUID, tuple[int, str, datetime]] = field(default_factory=dict)
+    outbox_ledger: dict[uuid.UUID, LedgerEntry] = field(default_factory=dict)
+    outbox_state: OutboxState = field(default_factory=OutboxState)
 
 
 class MemoryStore:
@@ -394,7 +396,13 @@ class _Quarantine:
         held_payload = message.quarantined
         if held_payload.reason is QuarantineReason.OVERSIZED and not held_payload.withheld:
             raise StoreRefusedError("23514", "23514", "ck_registry_messages_quarantined_payload")
-        if any(held.message_id == message.message_id for held in self._state.quarantined):
+        if message.message_id is None:
+            key = message.quarantined.payload_sha256
+            if any(
+                h.message_id is None and h.quarantined.payload_sha256 == key for h in self._state.quarantined
+            ):
+                return False
+        elif any(held.message_id == message.message_id for held in self._state.quarantined):
             return False
         self._state.quarantined.append(message)
         return True
@@ -408,19 +416,54 @@ class _Quarantine:
     def all(self) -> list[QuarantinedMessage]:
         return sorted(self._state.quarantined, key=lambda held: (held.received_at, held.quarantine_id))
 
+    def unmatched_case_updates(self, case_id: uuid.UUID, asset_token: str) -> list[QuarantinedMessage]:
+        found = [
+            held
+            for held in self._state.quarantined
+            if held.quarantined.reason is QuarantineReason.UNMATCHED
+            and held.message_type == "CASE_UPDATE"
+            and isinstance(payload := held.quarantined.payload, dict)
+            and payload.get("case_id") == str(case_id)
+            and payload.get("asset_token") == asset_token
+        ]
+        return sorted(found, key=lambda held: (held.received_at, held.quarantine_id), reverse=True)
 
-class _OutboxAttempts:
+
+class _OutboxLedger:
+    """`registry_outbox_messages` with the guard of migration 0013 (SQLSTATE OP009)."""
+
     def __init__(self, state: MemoryState) -> None:
         self._state = state
 
-    def count(self, message_id: uuid.UUID) -> int:
-        held = self._state.outbox_attempts.get(message_id)
-        return held[0] if held is not None else 0
+    def get(self, message_id: uuid.UUID) -> LedgerEntry | None:
+        return self._state.outbox_ledger.get(message_id)
 
-    def defer(self, message_id: uuid.UUID, reason: str, at: datetime) -> int:
-        attempts = self.count(message_id) + 1
-        self._state.outbox_attempts[message_id] = (attempts, reason, at)
-        return attempts
+    def save(self, entry: LedgerEntry) -> None:
+        held = self._state.outbox_ledger.get(entry.message_id)
+        if held is not None:
+            same = (held.message_type, held.first_seen_at) == (entry.message_type, entry.first_seen_at)
+            late = held.outcome is OutboxOutcome.QUARANTINED and entry.outcome is OutboxOutcome.APPLIED_LATE
+            if not same or (held.outcome is not None and entry.outcome is not held.outcome and not late):
+                raise StoreRefusedError("OP009", "OP009", "registry_outbox_messages_guard")
+        self._state.outbox_ledger[entry.message_id] = entry
+
+    def applied_late(self) -> set[uuid.UUID]:
+        return {
+            entry.message_id
+            for entry in self._state.outbox_ledger.values()
+            if entry.outcome is OutboxOutcome.APPLIED_LATE
+        }
+
+
+class _OutboxState:
+    def __init__(self, state: MemoryState) -> None:
+        self._state = state
+
+    def get(self) -> OutboxState:
+        return self._state.outbox_state
+
+    def save(self, state: OutboxState) -> None:
+        self._state.outbox_state = state
 
 
 class _Alerts:
@@ -639,7 +682,7 @@ def _outcome[T](existing: T | None, new: T) -> Upserted:
 
 REPOSITORIES = (
     "tapes", "raw_rows", "items", "loans", "checks", "tokens", "facilities", "requests", "alerts",
-    "outbox_attempts", "evidence", "history",
+    "outbox_ledger", "outbox_state", "evidence", "history",
 )  # fmt: skip
 
 
@@ -661,7 +704,8 @@ class MemoryUnitOfWork:
         self.facilities = _Facilities(self._state)
         self.requests = _Requests(self._state)
         self.alerts = _Alerts(self._state)
-        self.outbox_attempts = _OutboxAttempts(self._state)
+        self.outbox_ledger = _OutboxLedger(self._state)
+        self.outbox_state = _OutboxState(self._state)
         self.evidence = _EvidenceStores(self._state)
         self.history = _History(self._state)
         return self

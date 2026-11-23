@@ -43,6 +43,7 @@ FACILITY, KIND, AS_OF = "HARBOR-SUMMIT", TapeKind.BACK_BOOK, date(2026, 9, 30)
 LENDER = "Summit Auto Finance LLC"
 CALL_ATTEMPTS = 1 + len(RETRY_DELAYS_SECONDS)
 LATER = 3600
+PIPELINE_ATTEMPTS = 3
 type State = dict[str, list[tuple[object, ...]]]
 STATE_QUERIES = {
     "tape": "SELECT status, row_count, coalesce(failure_code, '') FROM tape_submissions",
@@ -428,12 +429,16 @@ def test_the_maximum_number_of_attempts_fails_the_tape_and_a_retry_resumes_it_to
 ) -> None:
     service, code, resume, stage = outage
     bank, clock = lab.bank(), ManualClock()
-    with lab.harness(bank, clock=clock, environment={"PIPELINE_MAX_ATTEMPTS": "3"}) as harness:
+    with lab.harness(
+        bank, clock=clock, environment={"PIPELINE_MAX_ATTEMPTS": str(PIPELINE_ATTEMPTS)}
+    ) as harness:
         submission = lab.upload(harness)
         if service == "outside":
             lab.outside.down = True
+        elif service == "registry":  # the submissions only: a bank whose outbox is unreadable is blind
+            bank.doubles.fail_path("/v1/submissions", 503, PIPELINE_ATTEMPTS * CALL_ATTEMPTS)
         else:
-            bank.doubles.down.add(REGISTRY_URL if service == "registry" else KEY_HOLDER_URLS[service])
+            bank.doubles.down.add(KEY_HOLDER_URLS[service])
         for _ in range(4):
             harness.run_worker()
             clock.advance(LATER)

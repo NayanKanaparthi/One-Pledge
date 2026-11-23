@@ -238,7 +238,7 @@ def test_an_unknown_type_is_ignored_and_a_known_bad_payload_is_quarantined_once(
     (audited,) = bank.world.audit(AuditAction.REGISTRY_MESSAGE_QUARANTINED)
     assert dict(audited.detail) == {
         "message_id": str(message.message_id), "message_type": "ALERT", "reason": "SCHEMA_MISMATCH",
-        "payload_sha256": "b" * 64,
+        "payload_sha256": "b" * 64, "payload_withheld": False,
     }  # fmt: skip
     assert audited.object_id == held.quarantine_id, "the audit entry names the quarantine row"
     assert audited.outcome.value == "FAILURE"
@@ -288,22 +288,27 @@ def test_a_checkpoint_is_not_stored_while_its_headers_cannot_be_read() -> None:
     bank.registry.append_event("E")
     bank.registry.checkpoint()
     bank.registry.fail("event_headers", RegistryUnavailableError(503, FailureReason.SERVER_ERROR))
-    bank.outbox_sync().run()
+    deferred = bank.outbox_sync().run()
+    assert (deferred.complete, deferred.reason) == (False, "REGISTRY_UNAVAILABLE"), "deferred, not poison"
     assert bank.world.store.state.checkpoints == [] and len(bank.registry.pending()) == 1
     events = [event for _, event, _ in bank.world.log.events]
-    assert "outbox_sync_interrupted" in events
+    assert "outbox_message_deferred" in events
     assert bank.outbox_sync().sync().checkpoints_verified == 1
 
 
-def test_an_outbox_outage_ends_the_periodic_sync_quietly_and_an_asked_sync_reports_it() -> None:
+def test_an_outbox_outage_makes_every_sync_incomplete_and_an_asked_sync_audits_that() -> None:
     bank = MemoryBank()
     bank.registry.fail("outbox", RegistryUnavailableError(503, FailureReason.SERVER_ERROR), times=2)
-    bank.outbox_sync().run()
-    with pytest.raises(RegistryUnavailableError):
-        bank.outbox_sync().requested(bank.requester())
-    assert bank.world.audit(AuditAction.REGISTRY_SYNC_REQUESTED) == []
-    assert bank.outbox_sync().requested(bank.requester()).messages_processed == 0
-    assert len(bank.world.audit(AuditAction.REGISTRY_SYNC_REQUESTED)) == 1
+    quiet = bank.outbox_sync().run()
+    asked = bank.outbox_sync().requested(bank.requester())
+    assert {(r.complete, r.reason) for r in (quiet, asked)} == {(False, "SERVER_ERROR")}
+    (failed,) = bank.world.audit(AuditAction.REGISTRY_SYNC_REQUESTED)
+    assert (failed.outcome.value, failed.detail["complete"]) == ("FAILURE", False)
+    assert bank.outbox_sync().requested(bank.requester()).complete
+    assert [d.outcome.value for d in bank.world.audit(AuditAction.REGISTRY_SYNC_REQUESTED)] == [
+        "FAILURE",
+        "SUCCESS",
+    ]
 
 
 def test_a_sync_that_finds_the_outbox_lock_held_does_nothing() -> None:

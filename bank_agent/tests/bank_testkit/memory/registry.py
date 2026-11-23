@@ -64,6 +64,7 @@ from onepledge_bank_agent.domain.registry_records import (
     ItemOutcome,
     MessageEvidence,
     MessagePayload,
+    OutboxElement,
     OutboxMessage,
     OutboxPage,
     QuarantinedPayload,
@@ -74,7 +75,7 @@ from onepledge_bank_agent.domain.registry_records import (
 )
 from onepledge_bank_agent.domain.storable import StorableTimestamp
 from onepledge_bank_agent.domain.values import KeyVersion
-from onepledge_bank_agent.infrastructure.http.registry_client import outbox_message
+from onepledge_bank_agent.infrastructure.http.registry_client import outbox_element
 
 AT = datetime(2026, 11, 20, 12, tzinfo=UTC)
 AT_TEXT = "2026-11-20T12:00:00Z"
@@ -132,7 +133,7 @@ class ScriptedRegistry:
     _certificates: dict[uuid.UUID, SignedCertificate] = field(default_factory=dict)
     _originals: dict[uuid.UUID, SignedCertificate] = field(default_factory=dict)
     _events: list[EventHeader] = field(default_factory=list)
-    _outbox: list[OutboxMessage] = field(default_factory=list)
+    _outbox: list[OutboxElement] = field(default_factory=list)
     _checkpoint_seq: int = 0
     _ids: int = 0
 
@@ -367,16 +368,22 @@ class ScriptedRegistry:
         self._outbox.append(message)
         return message
 
-    def deliver_wire(self, message: Mapping[str, JsonValue]) -> OutboxMessage:
+    def deliver_wire(self, message: Mapping[str, JsonValue]) -> OutboxElement:
         """Queue one message given as the registry would send it, read by the bank's own parser; a
         missing `message_id` or `position` is filled in."""
         document = {"message_id": str(self.new_id()), "position": self._next_position(), **message}
-        parsed = outbox_message(json.loads(json.dumps(document)), 200)
+        return self.deliver_element(document)
+
+    def deliver_element(self, element: JsonValue) -> OutboxElement:
+        """Queue one element of `messages` exactly as given (an id is not filled in), read by the
+        bank's own parser."""
+        parsed = outbox_element(json.loads(json.dumps(element)), 200)
         self._outbox.append(parsed)
         return parsed
 
     def _next_position(self) -> int:
-        return max((message.position or 0 for message in self._outbox), default=0) + 1
+        held = (e.position or 0 for e in self._outbox if isinstance(e, OutboxMessage))
+        return max(held, default=0) + 1
 
     def alert(self, asset_token: str, role: AlertRole = AlertRole.HOLDER) -> uuid.UUID:
         """Deliver an ALERT about one of this bank's asset codes; returns the case id."""
@@ -406,9 +413,17 @@ class ScriptedRegistry:
     def acknowledge(self, message_id: uuid.UUID) -> None:
         """Remove one message (also when it was acknowledged before)."""
         self._before("acknowledge")
-        self._outbox = [message for message in self._outbox if message.message_id != message_id]
+        self._outbox = [
+            element
+            for element in self._outbox
+            if not isinstance(element, OutboxMessage) or element.message_id != message_id
+        ]
 
-    def pending(self) -> list[OutboxMessage]:
+    def drop_unacknowledgeable(self) -> None:
+        """The registry's operator removes every element that had no usable id."""
+        self._outbox = [element for element in self._outbox if isinstance(element, OutboxMessage)]
+
+    def pending(self) -> list[OutboxElement]:
         """The messages not yet acknowledged."""
         return list(self._outbox)
 

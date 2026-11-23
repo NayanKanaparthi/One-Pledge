@@ -21,7 +21,8 @@ from onepledge_bank_agent.application.evidence_ports import (
     AlertRepository,
     EvidenceStores,
     HistoryReader,
-    OutboxAttemptRepository,
+    OutboxLedgerRepository,
+    OutboxStateRepository,
     RegistryRequestRepository,
 )
 from onepledge_bank_agent.domain.audit import AuditDraft
@@ -274,8 +275,13 @@ class UnitOfWork(Protocol):
         ...
 
     @property
-    def outbox_attempts(self) -> OutboxAttemptRepository:
-        """Deferrals of registry outbox messages."""
+    def outbox_ledger(self) -> OutboxLedgerRepository:
+        """Every registry outbox message seen, how it was handled and acknowledged."""
+        ...
+
+    @property
+    def outbox_state(self) -> OutboxStateRepository:
+        """Whether the outbox syncs are complete, and since when the bank is blind."""
         ...
 
     @property

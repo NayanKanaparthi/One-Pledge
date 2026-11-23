@@ -20,6 +20,7 @@ from onepledge_bank_agent.domain.canonical_json import JsonValue
 from onepledge_bank_agent.domain.entities import Certificate, Checkpoint, RegistryRequest
 from onepledge_bank_agent.domain.enums import IntegrityRunStatus, RegistryItemResult, RequestOrigin
 from onepledge_bank_agent.domain.integrity import DatabaseControl
+from onepledge_bank_agent.domain.outbox import LedgerEntry, OutboxState
 from onepledge_bank_agent.domain.raw_evidence import StoredTape
 from onepledge_bank_agent.domain.registry_records import ItemOutcome, QuarantinedMessage, RegistryAnswer
 from onepledge_bank_agent.domain.registry_results import StoredResult
@@ -112,10 +113,11 @@ class CertificateRepository(Protocol):
 
 
 class QuarantineRepository(Protocol):
-    """`registry_messages_quarantined` (insert-only, SPEC_DECISIONS 57)."""
+    """`registry_messages_quarantined` (insert-only, SPEC_DECISIONS 57, 101)."""
 
     def add(self, message: QuarantinedMessage) -> bool:
-        """Store a quarantined message; False, storing nothing, when its message id is already held."""
+        """Store a quarantined message; False, storing nothing, when it is already held: by its message id,
+        or for an element without a usable id by its payload hash."""
         ...
 
     def count(self) -> int:
@@ -130,16 +132,36 @@ class QuarantineRepository(Protocol):
         """Every quarantined message, oldest first."""
         ...
 
-
-class OutboxAttemptRepository(Protocol):
-    """`registry_outbox_attempts` (mutable): how often each outbox message was deferred (decision 85)."""
-
-    def count(self, message_id: uuid.UUID) -> int:
-        """The deferrals recorded for a message (0 when none)."""
+    def unmatched_case_updates(self, case_id: uuid.UUID, asset_token: str) -> list[QuarantinedMessage]:
+        """The CASE_UPDATE messages quarantined UNMATCHED for this case and asset code, newest first."""
         ...
 
-    def defer(self, message_id: uuid.UUID, reason: str, at: datetime) -> int:
-        """Record one more deferral with its reason; returns the new count."""
+
+class OutboxLedgerRepository(Protocol):
+    """`registry_outbox_messages` (SPEC_DECISIONS 101): a row per message with a usable id, never deleted."""
+
+    def get(self, message_id: uuid.UUID) -> LedgerEntry | None:
+        """The message's row, if it was seen."""
+        ...
+
+    def save(self, entry: LedgerEntry) -> None:
+        """Insert or update the row; the guard keeps id, type and first sight, and the outcome set once."""
+        ...
+
+    def applied_late(self) -> set[uuid.UUID]:
+        """The message ids whose quarantined case update was applied late (their rows are not open)."""
+        ...
+
+
+class OutboxStateRepository(Protocol):
+    """`registry_outbox_state`: the single row of completeness and blindness (SPEC_DECISIONS 101)."""
+
+    def get(self) -> OutboxState:
+        """The state; the initial one (never complete) when no sync has ended yet."""
+        ...
+
+    def save(self, state: OutboxState) -> None:
+        """Replace the state."""
         ...
 
 

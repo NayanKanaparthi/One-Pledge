@@ -32,6 +32,7 @@ from onepledge_bank_agent.interface.cli.registry_commands import (
     integrity_report,
     integrity_verify,
     registry_sync,
+    sync_incomplete_sentence,
 )
 from onepledge_bank_agent.interface.composition import AdminComposition, Collaborators, RuntimeComposition
 
@@ -218,17 +219,39 @@ TASK_FAILED = (
     "The registry outbox sync failed; every runnable stage ran. The log names the cause; "
     "run registry sync again."
 )
+SYNC_INCOMPLETE = "OUTBOX_SYNC_INCOMPLETE"
+TAPE_FAILED = "TAPE_FAILED"
+HALTED = "REGISTRY_INTEGRITY_BROKEN"
+
+
+def worker_problems(report: WorkerReport) -> list[dict[str, JsonValue]]:
+    """Every reason `worker --once` exits 1, in the order of SPEC_DECISIONS 101."""
+    problems: list[dict[str, JsonValue]] = []
+    if report.task_failures:
+        problems.append({"code": report.task_failures[0], "message": TASK_FAILED})
+    if report.incomplete is not None:
+        problems.append({"code": SYNC_INCOMPLETE, "message": sync_incomplete_sentence(report.incomplete)})
+    if report.halted:
+        sentence = (
+            "The halt rule is active: nothing is sent to the registry. Run integrity report to see why."
+        )
+        problems.append({"code": HALTED, "message": sentence})
+    if report.failed_tapes:
+        failed = counted(len(report.failed_tapes), "submission", "submissions")
+        sentence = f"{failed} ended FAILED in this run; the stage table names each failure."
+        problems.append({"code": TAPE_FAILED, "message": sentence})
+    return problems
 
 
 def worker_report(report: WorkerReport, output: Output) -> int:
-    """The stage runs; exit 1 after them when a periodic task failed (SPEC_DECISIONS 85, rule 5)."""
-    failed = bool(report.task_failures)
+    """The stage runs; exit 1 after them unless the sync was complete, the bank is not halted and no
+    tape failed (SPEC_DECISIONS 101)."""
+    problems = worker_problems(report)
     stages: list[JsonValue] = [_run_document(run) for run in report.runs]
     if output.as_json:
-        error: dict[str, JsonValue] = (
-            {"code": report.task_failures[0], "message": TASK_FAILED} if failed else {}
-        )
-        output.json({"ok": not failed, "stages": stages, **({"error": error} if failed else {})})
+        listed: list[JsonValue] = list(problems)
+        first: dict[str, JsonValue] = {"error": problems[0], "problems": listed} if problems else {}
+        output.json({"ok": not problems, "stages": stages, **first})
     else:
         output.table(
             "Pipeline worker",
@@ -237,9 +260,9 @@ def worker_report(report: WorkerReport, output: Output) -> int:
             ("stage run", "stages run"),
             "Nothing else is runnable now.",
         )
-    if failed:
-        output.error(TASK_FAILED)
-    return 1 if failed else 0
+    for problem in problems:
+        output.error(str(problem["message"]))
+    return 1 if problems else 0
 
 
 def _worker(arguments: argparse.Namespace, output: Output, collaborators: Collaborators | None) -> int:

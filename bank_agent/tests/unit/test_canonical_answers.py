@@ -19,6 +19,7 @@ import pytest
 
 from bank_testkit.memory.clocks import CountingIds
 from bank_testkit.scripted_http import Handler, caller, registry
+from bank_testkit.scripted_http import messages as page_messages
 from onepledge_bank_agent.domain.dependency_errors import (
     KeyHolderProtocolError,
     KeyHolderRejectedError,
@@ -32,6 +33,7 @@ from onepledge_bank_agent.domain.registry_records import (
     QuarantinedPayload,
     RegistryItem,
     RegistrySubmission,
+    UnacknowledgeableElement,
 )
 from onepledge_bank_agent.domain.vin import Vin
 from onepledge_bank_agent.infrastructure import bounded_json
@@ -121,7 +123,7 @@ def outbox_of(*messages: object, raw: str | None = None) -> list[OutboxMessage]:
     """The messages of one outbox page the scripted registry serves."""
     content = raw if raw is not None else json.dumps({"messages": list(messages), "has_more": False})
     page = registry(lambda r: httpx.Response(200, content=content.encode())).outbox(100)
-    return list(page.messages)
+    return page_messages(page)
 
 
 POISON = [
@@ -132,9 +134,6 @@ POISON = [
     })),
     ("a checkpoint whose signature has padding bits set",
      message("CHECKPOINT", {**SIGNED, "signature": LOOSE_SIGNATURE})),
-    ("an alert whose message id is upper case", {**message("ALERT", ALERT), "message_id": ID.upper()}),
-    ("a message of an unknown type whose id is a urn",
-     {**message("NEWS", {}), "message_id": "urn:uuid:" + ID}),
 ]  # fmt: skip
 
 
@@ -149,6 +148,22 @@ def test_a_message_with_a_non_canonical_id_or_encoding_is_poison_and_keeps_its_i
     assert isinstance(received.payload, QuarantinedPayload)
     assert received.payload.reason.value == "SCHEMA_MISMATCH"
     assert received.message_id == uuid.UUID(str(sent["message_id"]))
+
+
+@pytest.mark.parametrize(
+    "sent",
+    [
+        {**message("ALERT", ALERT), "message_id": ID.upper()},
+        {**message("NEWS", {}), "message_id": "urn:uuid:" + ID},
+    ],
+    ids=["an alert whose message id is upper case", "a message of an unknown type whose id is a urn"],
+)
+def test_a_message_id_not_spelled_canonically_is_no_usable_id(sent: dict[str, object]) -> None:
+    """SPEC_DECISIONS 101 level 2 with 75: such an element cannot be acknowledged; it is kept by its hash
+    and the rest of the page is read."""
+    text = json.dumps({"messages": [sent, message("ALERT", ALERT)], "has_more": False}).encode()
+    first, second = registry(lambda r: httpx.Response(200, content=text)).outbox(100).elements
+    assert isinstance(first, UnacknowledgeableElement) and isinstance(second, OutboxMessage)
 
 
 def test_a_message_that_gives_a_key_twice_is_poison_and_the_rest_of_the_page_is_applied() -> None:

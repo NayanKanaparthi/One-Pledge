@@ -28,6 +28,7 @@ without a parseable id or a usable type, or a page that is not one bounded JSON 
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
@@ -49,12 +50,14 @@ from onepledge_bank_agent.domain.registry_records import (
     EventPage,
     MessageEvidence,
     MessagePayload,
+    OutboxElement,
     OutboxMessage,
     OutboxPage,
     QuarantinedPayload,
     RegistryAnswer,
     RegistrySubmission,
     SignedCertificate,
+    UnacknowledgeableElement,
 )
 from onepledge_bank_agent.domain.storable import storable_json
 from onepledge_bank_agent.domain.values import KeyVersion
@@ -71,7 +74,6 @@ from onepledge_bank_agent.infrastructure.http.registry_wire import (
     CaseViewBody,
     CheckpointMessageBody,
     EventPageBody,
-    MessageEnvelope,
     OutOfStorableRangeError,
     SignedCertificateBody,
     SubmissionResultBody,
@@ -133,6 +135,9 @@ KNOWN_MESSAGES: Mapping[str, type[BaseModel]] = MappingProxyType(
 MAX_QUARANTINED_PAYLOAD_BYTES = 64 * 1024
 OUT_OF_RANGE = frozenset({"less_than_equal"})
 SCHEMA_MISMATCH = QuarantineReason.SCHEMA_MISMATCH
+MESSAGE_TYPE = re.compile(r"^[A-Z][A-Z0-9_]{0,31}$")
+UNREADABLE_TYPE = "UNREADABLE"
+"""The type recorded for a message whose own type is not a string of `MESSAGE_TYPE`."""
 
 
 def _validation_copy(value: object) -> object:
@@ -194,39 +199,54 @@ def _position(value: object) -> int | None:
     return None
 
 
-def message_id_is_canonical(document: Mapping[str, JsonValue]) -> bool:
-    """True when the message id is spelled canonically (SPEC_DECISIONS 75); a message of an unknown type
-    whose id is not is quarantined as SCHEMA_MISMATCH, as a known one is by its model."""
+def _message_id(document: Mapping[str, JsonValue]) -> uuid.UUID | None:
+    """The message id when it is spelled canonically (SPEC_DECISIONS 75); anything else is no usable id."""
     text = document.get("message_id")
-    return isinstance(text, str) and canonical_uuid(text) is not None
+    return canonical_uuid(text) if isinstance(text, str) else None
 
 
-def outbox_message(value: object, status: int) -> OutboxMessage:
-    """One outbox message: its notice, or a `QuarantinedPayload` with the reason it fails rule 1 of
-    SPEC_DECISIONS 85. Only a message without a usable id or type is a protocol error of the page."""
+def _type(document: Mapping[str, JsonValue]) -> str | None:
+    """The message type when it is a string of the type pattern of SPEC_DECISIONS 101."""
+    text = document.get("type")
+    return text if isinstance(text, str) and MESSAGE_TYPE.fullmatch(text) else None
+
+
+def outbox_element(value: JsonValue, status: int) -> OutboxElement:
+    """One element of an outbox page, by the table of SPEC_DECISIONS 101 level 2.
+
+    No object or no canonical id: unacknowledgeable, kept by its hash. A usable id and a type of
+    the pattern that the bank does not know: ignored (payload None). A usable id and anything
+    else wrong (the type, the position, the time, the payload against the contract or against
+    decision 100): poison, with the type recorded as UNREADABLE when it is not of the pattern.
+    """
+    message_id = _message_id(value) if isinstance(value, dict) else None
+    if message_id is None:
+        return UnacknowledgeableElement(_evidence(json_object(value) if isinstance(value, dict) else value))
     document = json_object(value)
-    envelope = _validate(
-        MessageEnvelope, {"message_id": document.get("message_id"), "type": document.get("type")}, status
-    )
     evidence = _evidence(document.get("payload"))
     position = _position(value)
-    model = KNOWN_MESSAGES.get(envelope.type)
-    well_formed = message_id_is_canonical(document) and not bounded_json.holds_duplicate_key(value)
-    if model is None and well_formed:
-        return OutboxMessage(envelope.message_id, position, envelope.type, None, evidence)
-    reason = _rejection(model, value, evidence) if model is not None and well_formed else SCHEMA_MISMATCH
+    message_type = _type(document)
+    model = KNOWN_MESSAGES.get(message_type) if message_type is not None else None
+    if message_type is not None and model is None:
+        return OutboxMessage(message_id, position, message_type, None, evidence)
+    reason = (
+        _rejection(model, value, evidence)
+        if model is not None and not bounded_json.holds_duplicate_key(value)
+        else SCHEMA_MISMATCH
+    )
+    stored_type = message_type or UNREADABLE_TYPE
     if reason is not None:
         quarantined = QuarantinedPayload(reason, evidence.payload, evidence.payload_sha256, evidence.withheld)
-        return OutboxMessage(envelope.message_id, position, envelope.type, quarantined, evidence)
+        return OutboxMessage(message_id, position, stored_type, quarantined, evidence)
     payload: MessagePayload
-    if envelope.type == "ALERT":
+    if stored_type == "ALERT":
         payload = _validate(AlertMessageBody, value, status).payload.notice()
-    elif envelope.type == "CASE_UPDATE":
+    elif stored_type == "CASE_UPDATE":
         payload = _validate(CaseMessageBody, value, status).payload.notice()
     else:
         body = _validate(CheckpointMessageBody, value, status)
         payload = body.payload.record(json_object(document.get("payload")))
-    return OutboxMessage(envelope.message_id, position, envelope.type, payload, evidence)
+    return OutboxMessage(message_id, position, stored_type, payload, evidence)
 
 
 class RegistryHttpClient:
@@ -291,7 +311,7 @@ class RegistryHttpClient:
         messages, more = page.get("messages"), page.get("has_more")  # as read: duplicate keys stay marked
         if not isinstance(messages, list) or not isinstance(more, bool):
             raise RegistryProtocolError(response.status_code)
-        return OutboxPage(tuple(outbox_message(value, response.status_code) for value in messages), more)
+        return OutboxPage(tuple(outbox_element(value, response.status_code) for value in messages), more)
 
     def acknowledge(self, message_id: uuid.UUID) -> None:
         """`POST /v1/outbox/{message_id}/ack` (204, also for a message already acknowledged)."""

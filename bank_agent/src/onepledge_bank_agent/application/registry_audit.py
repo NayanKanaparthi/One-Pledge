@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from onepledge_bank_agent.domain.audit import Actor, AuditDraft
 from onepledge_bank_agent.domain.canonical_json import JsonValue
 from onepledge_bank_agent.domain.entities import Certificate, Checkpoint, RegistryRequest
-from onepledge_bank_agent.domain.enums import AuditAction, AuditObjectType, AuditOutcome
+from onepledge_bank_agent.domain.enums import AuditAction, AuditObjectType, AuditOutcome, QuarantineReason
 from onepledge_bank_agent.domain.registry_records import QuarantinedMessage, RegistryAnswer
 
 SYSTEM = Actor.system()
@@ -141,20 +141,42 @@ def message_ignored(message_id: uuid.UUID, message_type: str) -> AuditDraft:
 
 
 def message_quarantined(row: QuarantinedMessage, sqlstate: str | None = None) -> AuditDraft:
-    """`REGISTRY_MESSAGE_QUARANTINED` (SPEC_DECISIONS 85): the message type, the reason, the payload hash,
-    the SQLSTATE when the store refused it; the object is the quarantine row (decision 89)."""
+    """`REGISTRY_MESSAGE_QUARANTINED`, or `CASE_UPDATE_UNMATCHED` for a case update that matched no alert
+    (SPEC_DECISIONS 101): the message id (null for an element without one), the type, the reason, the
+    payload hash, whether the payload was withheld, and the SQLSTATE when the store refused it; the
+    object is the quarantine row (decision 89)."""
+    held = row.quarantined
     detail: dict[str, JsonValue] = {
-        "message_id": str(row.message_id),
+        "message_id": str(row.message_id) if row.message_id is not None else None,
         "message_type": row.message_type if CODE.fullmatch(row.message_type) else UNREADABLE,
-        "reason": row.quarantined.reason.value,
-        "payload_sha256": row.quarantined.payload_sha256,
+        "reason": held.reason.value,
+        "payload_sha256": held.payload_sha256,
+        "payload_withheld": held.withheld,
     }
     if sqlstate is not None:
         detail["sqlstate"] = sqlstate
+    unmatched = held.reason is QuarantineReason.UNMATCHED
+    action = AuditAction.CASE_UPDATE_UNMATCHED if unmatched else AuditAction.REGISTRY_MESSAGE_QUARANTINED
+    return entry(action, AuditObjectType.REGISTRY_MESSAGE, row.quarantine_id, detail, AuditOutcome.FAILURE)
+
+
+def ack_refused(message_id: uuid.UUID, message_type: str, reason: str) -> AuditDraft:
+    """`REGISTRY_ACK_REFUSED`: the registry refused the acknowledgement of a message it delivered."""
     return entry(
-        AuditAction.REGISTRY_MESSAGE_QUARANTINED,
+        AuditAction.REGISTRY_ACK_REFUSED,
         AuditObjectType.REGISTRY_MESSAGE,
-        row.quarantine_id,
-        detail,
+        message_id,
+        {"message_type": message_type, "reason": reason},
         AuditOutcome.FAILURE,
     )
+
+
+def blind_changed(became_blind: bool, reason: str | None, since: str | None) -> AuditDraft:
+    """`REGISTRY_OUTBOX_BLIND` when the bank stopped seeing the registry's checkpoints, and
+    `REGISTRY_OUTBOX_RECOVERED` when a complete sync ended that (SPEC_DECISIONS 101)."""
+    if became_blind:
+        detail: dict[str, JsonValue] = {"reason": reason, "since": since}
+        return entry(
+            AuditAction.REGISTRY_OUTBOX_BLIND, AuditObjectType.REGISTRY, None, detail, AuditOutcome.FAILURE
+        )
+    return entry(AuditAction.REGISTRY_OUTBOX_RECOVERED, AuditObjectType.REGISTRY, None, {})

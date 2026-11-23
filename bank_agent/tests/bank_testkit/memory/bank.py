@@ -53,6 +53,7 @@ from onepledge_bank_agent.application.submit_stage import HaltRule, SubmissionUs
 from onepledge_bank_agent.application.sync_registry_outbox import (
     OutboxHandlers,
     OutboxSource,
+    OutboxTiming,
     SyncRegistryOutbox,
 )
 from onepledge_bank_agent.application.tape_requests import SubmitSettings, TapeRequests
@@ -114,12 +115,13 @@ class MemoryBank:
         self.officer = Actor.user(uuid.uuid4(), Role.CREDIT_OFFICER)
         self.batch_items, self.chunk_loans = batch_items, chunk_loans
         self.halt_enabled, self.max_attempts = halt, max_attempts
+        self.blind_after_seconds = 300.0  # OUTBOX_BLIND_HALT_SECONDS
 
     # -- wiring, as interface/composition.py ---------------------------------------------------
 
     def halt_rule(self) -> HaltRule:
         """The halt rule of SPEC 15.4 and SPEC_DECISIONS 56."""
-        return HaltRule(self.world.units, self.halt_enabled, self.world.log)
+        return HaltRule(self.world.units, self.halt_enabled, self.world.log, self.outbox_sync())
 
     def authoriser(self) -> Authoriser:
         """The role checks of SPEC 16.3."""
@@ -152,7 +154,8 @@ class MemoryBank:
             AlertMessages(self.alert_maker()), CaseUpdateMessages(self.world.log), self.verify_checkpoint()
         )
         source = OutboxSource(self.registry, self.outbox_lock)
-        return SyncRegistryOutbox(self.world.units, source, handlers, self.world.runtime, 30.0)
+        timing = OutboxTiming(30.0, timedelta(seconds=self.blind_after_seconds))
+        return SyncRegistryOutbox(self.world.units, source, handlers, self.world.runtime, timing)
 
     def stages(self) -> tuple[CleanTape, RunLocalChecks, TokenizeLoans, SubmitStage, CollectCertificates]:
         """The five stages in order."""
@@ -181,7 +184,7 @@ class MemoryBank:
 
     def worker(self) -> RunPipelineWorker:
         """The worker with the outbox sync as its periodic task."""
-        settings = WorkerSettings(0.0, (self.outbox_sync(),))
+        settings = WorkerSettings(0.0, (self.outbox_sync(),), halt=self.halt_rule())
         return RunPipelineWorker(self.world.units, self.advance(), self.locks, self.world.runtime, settings)
 
     # -- actions -------------------------------------------------------------------------------
@@ -275,11 +278,15 @@ class MemoryBank:
 
     def report(self) -> IntegrityReport:
         """`GET /v1/integrity`."""
-        return GetIntegrityReport(self.world.units, self.controls, self.world.runtime).execute()
+        blind_after = timedelta(seconds=self.blind_after_seconds)
+        return GetIntegrityReport(self.world.units, self.controls, self.world.runtime, blind_after).execute()
 
     def verify(self) -> IntegrityReport:
         """`onepledge-bank integrity verify`."""
-        sources = VerificationSources(EventHeaderReader(self.registry), self.signatures, self.controls)
+        blind_after = timedelta(seconds=self.blind_after_seconds)
+        sources = VerificationSources(
+            EventHeaderReader(self.registry), self.signatures, self.controls, blind_after
+        )
         return RunDeepVerification(self.world.units, sources, self.world.runtime).execute(
             Requester.command_line()
         )

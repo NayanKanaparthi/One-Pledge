@@ -24,8 +24,13 @@ from onepledge_bank_agent.interface.composition import RuntimeComposition
 def registry_sync(arguments: argparse.Namespace, composition: RuntimeComposition, output: Output) -> int:
     """Pull and process every pending registry message now."""
     result = composition.outbox_sync().requested(Requester.command_line())
+    if result.failure is not None:  # the registry could not be read: the failure's own sentence and code
+        raise result.failure
     _sync_result(result, output)
-    return 0
+    if result.complete:
+        return 0
+    output.error(_incomplete(result))
+    return 1
 
 
 def integrity_report(arguments: argparse.Namespace, composition: RuntimeComposition, output: Output) -> int:
@@ -40,12 +45,34 @@ def integrity_verify(arguments: argparse.Namespace, composition: RuntimeComposit
     )
 
 
+def sync_incomplete_sentence(reason: str) -> str:
+    """Why an outbox sync did not take in everything, and what to do (SPEC_DECISIONS 101)."""
+    return (
+        f"The registry outbox sync was incomplete (reason {reason}). Run registry sync again; "
+        "integrity report shows what is waiting."
+    )
+
+
+def _incomplete(result: SyncResult) -> str:
+    if result.skipped:
+        return "Another registry sync kept the outbox busy for two minutes; nothing was done. Run it again."
+    return sync_incomplete_sentence(result.reason or "UNKNOWN")
+
+
 def _sync_result(result: SyncResult, output: Output) -> None:
     if output.as_json:
-        output.success({**result.counts(), "skipped": result.skipped})
+        facts: dict[str, JsonValue] = {
+            **result.counts(),
+            "skipped": result.skipped,
+            "complete": result.complete,
+        }
+        if result.complete:
+            output.success(facts)
+        else:
+            code = "OUTBOX_SYNC_INCOMPLETE"
+            output.json({"ok": False, **facts, "error": {"code": code, "message": _incomplete(result)}})
         return
     if result.skipped:
-        output.line("Another registry sync is running for this bank; nothing was done.")
         return
     output.pairs(
         "Registry sync",

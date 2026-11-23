@@ -21,7 +21,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from bank_testkit.memory.clocks import CountingIds
-from bank_testkit.scripted_http import caller, registry
+from bank_testkit.scripted_http import caller, messages, registry
 from onepledge_bank_agent.domain.dependency_errors import KeyHolderRejectedError, RegistryRejectedError
 from onepledge_bank_agent.domain.enums import FailureReason
 from onepledge_bank_agent.domain.errors import InvalidValueError, OutsideRecordsRejectedError
@@ -31,6 +31,7 @@ from onepledge_bank_agent.domain.storable import (
     END_INSTANT,
     StorableDate,
     StorableTimestamp,
+    storable_texts,
 )
 from onepledge_bank_agent.domain.vin import Vin
 from onepledge_bank_agent.infrastructure.http.key_holder_client import KeyHolderHttpClient
@@ -56,7 +57,7 @@ def message(signed_at: str) -> dict[str, object]:
 
 def received(signed_at: str) -> object:
     content = json.dumps({"messages": [message(signed_at)], "has_more": False}).encode()
-    (one,) = registry(lambda r: httpx.Response(200, content=content)).outbox(100).messages
+    (one,) = messages(registry(lambda r: httpx.Response(200, content=content)).outbox(100))
     return one.payload
 
 
@@ -175,3 +176,9 @@ def test_no_repository_takes_a_wire_model_or_a_wire_module() -> None:
             ):
                 found.append(f"{module.name}: {node.module}")
     assert found == []
+
+
+def test_storable_texts_looks_at_every_key_and_string_and_at_no_number() -> None:
+    assert storable_texts({"a": [1.5, 2**80, {"b": "text"}]})
+    assert not storable_texts({"a": [{"b\x00": 1}]})
+    assert not storable_texts(["ok", "\ud800"])

@@ -16,7 +16,7 @@ import httpx
 import pytest
 
 from bank_testkit.memory.clocks import CountingIds
-from bank_testkit.scripted_http import Handler, caller, registry
+from bank_testkit.scripted_http import Handler, caller, messages, registry
 from onepledge_bank_agent.domain.canonical_json import canonical_json
 from onepledge_bank_agent.domain.dependency_errors import (
     CaseAlreadyResolvedError,
@@ -30,7 +30,13 @@ from onepledge_bank_agent.domain.dependency_errors import (
 )
 from onepledge_bank_agent.domain.enums import BankPosition, CaseStatus, FailureReason, TapeKind, TokenKind
 from onepledge_bank_agent.domain.errors import PipelineStageError, PositionAlreadyRecordedError
-from onepledge_bank_agent.domain.registry_records import QuarantinedPayload, RegistryItem, RegistrySubmission
+from onepledge_bank_agent.domain.registry_records import (
+    OutboxMessage,
+    QuarantinedPayload,
+    RegistryItem,
+    RegistrySubmission,
+    UnacknowledgeableElement,
+)
 from onepledge_bank_agent.domain.storable import storable_json
 from onepledge_bank_agent.infrastructure.http.key_holder_client import KeyHolderHttpClient
 
@@ -218,7 +224,7 @@ def test_an_acknowledgement_must_be_204_and_an_outbox_page_must_be_well_formed()
     page = registry(lambda r: httpx.Response(200, json={"messages": [unknown], "has_more": False})).outbox(
         100
     )
-    assert [(m.message_type, m.payload) for m in page.messages] == [("NEWS", None)]
+    assert [(m.message_type, m.payload) for m in messages(page)] == [("NEWS", None)]
 
 
 ALERT = {
@@ -313,7 +319,7 @@ def test_a_known_message_outside_the_contract_is_quarantined_with_its_reason_and
     """SPEC_DECISIONS 85 rule 1: the whole schema and the storable range; the page is never refused."""
     _, sent, reason = case
     body = json.dumps({"messages": [sent], "has_more": False}).replace(f'"{HUGE}"', "9" * 5000).encode()
-    (received,) = registry(lambda r: httpx.Response(200, content=body)).outbox(100).messages
+    (received,) = messages(registry(lambda r: httpx.Response(200, content=body)).outbox(100))
     if reason is None:
         assert not isinstance(received.payload, QuarantinedPayload)
         return
@@ -332,8 +338,22 @@ def test_a_known_message_outside_the_contract_is_quarantined_with_its_reason_and
         assert quarantined.payload_sha256 == hashlib.sha256(canonical_json(sent["payload"])).hexdigest()
 
 
-def test_an_envelope_without_a_message_id_is_still_a_malformed_page() -> None:
+def test_an_envelope_without_a_message_id_is_unacknowledgeable_and_the_page_is_read() -> None:
+    """SPEC_DECISIONS 101 level 2: kept by its hash; the next element of the page is still read."""
     broken = {k: v for k, v in message("ALERT", ALERT).items() if k != "message_id"}
+    page = {"messages": [broken, message("ALERT", ALERT)], "has_more": False}
+    first, second = registry(lambda r: httpx.Response(200, json=page)).outbox(100).elements
+    assert isinstance(first, UnacknowledgeableElement) and isinstance(second, OutboxMessage)
+    assert first.evidence.payload_sha256 == hashlib.sha256(canonical_json(broken)).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "page", [b"[]", b'{"messages": [NaN], "has_more": false}', b'{"messages": {}, "has_more": false}',
+             b'{"messages": [], "has_more": "no"}', b"not json"],
+    ids=["an array", "NaN", "messages not an array", "has_more not a boolean", "not JSON"],
+)  # fmt: skip
+def test_a_page_that_is_not_one_object_of_the_contract_is_refused_whole(page: bytes) -> None:
+    """SPEC_DECISIONS 101 level 1: nothing in it can be acted on."""
     with pytest.raises(RegistryProtocolError) as raised:
-        registry(lambda r: httpx.Response(200, json={"messages": [broken], "has_more": False})).outbox(100)
+        registry(lambda r: httpx.Response(200, content=page)).outbox(100)
     assert raised.value.reason is FailureReason.MALFORMED_RESPONSE

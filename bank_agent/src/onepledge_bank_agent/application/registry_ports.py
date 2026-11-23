@@ -113,6 +113,7 @@ class AlertExplainer(Protocol):
 class OutboxLock(Protocol):
     """The advisory lock `onepledge:outbox`, so only one outbox sync runs per bank (SPEC 14.1)."""
 
-    def hold(self) -> AbstractContextManager[bool]:
-        """Try the lock; the context yields whether it was granted and releases it on exit."""
+    def hold(self, wait: bool = False) -> AbstractContextManager[bool]:
+        """Take the lock, waiting for a sync running elsewhere when `wait`; the context yields whether it
+        was granted and releases it on exit."""
         ...

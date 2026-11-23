@@ -84,7 +84,7 @@ def test_the_quarantine_trigger_refuses_truncate_for_the_owner(bank_db: BankData
     with bank_db.connect("owner") as connection:
         connection.execute(
             "INSERT INTO registry_messages_quarantined VALUES "
-            "(gen_random_uuid(), gen_random_uuid(), 1, 'ALERT', NULL, %s, 'OVERSIZED', now())",
+            "(gen_random_uuid(), gen_random_uuid(), 1, 'ALERT', NULL, %s, 'OVERSIZED', now(), true)",
             ("e" * 64,),
         )
         triggers = connection.execute(

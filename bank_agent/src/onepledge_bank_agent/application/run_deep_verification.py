@@ -19,6 +19,7 @@ the error is raised and nothing is stored. Otherwise the report is stored in
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 
 from onepledge_bank_agent.application.events import LogEvent
 from onepledge_bank_agent.application.evidence_checks import audit_tail, evidence_problems, tail_missing
@@ -27,7 +28,7 @@ from onepledge_bank_agent.application.get_integrity_report import latest_run
 from onepledge_bank_agent.application.integrity_sections import (
     certificates_section,
     deep_checkpoint_problems,
-    quarantine_findings,
+    messages_section,
     registry_chain,
 )
 from onepledge_bank_agent.application.ports import UnitOfWork, UnitOfWorkFactory
@@ -50,10 +51,8 @@ from onepledge_bank_agent.domain.integrity import (
     IntegrityReport,
     RawDataSection,
     RegistryChainSection,
-    RegistryMessagesSection,
     broken_if,
     controls_section,
-    registry_messages_section,
 )
 from onepledge_bank_agent.domain.integrity_document import AuditTail, StoredFindings, stored_document
 from onepledge_bank_agent.domain.raw_evidence import tape_is_intact
@@ -79,6 +78,7 @@ class VerificationSources:
     headers: EventHeaderReader
     verifier: SignatureVerifier
     controls: DatabaseControlInspector
+    blind_after: timedelta  # OUTBOX_BLIND_HALT_SECONDS, for the outbox state the report shows
 
 
 class RunDeepVerification:
@@ -111,7 +111,7 @@ class RunDeepVerification:
             database_controls=controls_section(
                 self._sources.controls.controls(), self._sources.controls.violations()
             ),
-            registry_messages=self._messages(reads),
+            registry_messages=messages_section(reads, now, self._sources.blind_after),
             evidence=reads.evidence(
                 None
                 if entries is None
@@ -163,13 +163,6 @@ class RunDeepVerification:
         if entries is None:
             return None
         return reads.read(("evidence",), lambda unit: evidence_problems(unit, entries))
-
-    @staticmethod
-    def _messages(reads: SectionReads) -> RegistryMessagesSection:
-        held = reads.read(("registry_messages",), lambda unit: unit.evidence.quarantine.all())
-        if held is None:
-            return RegistryMessagesSection(reads.missing("registry_messages"), 0)
-        return registry_messages_section(quarantine_findings(held))
 
     @staticmethod
     def _audit_chain(

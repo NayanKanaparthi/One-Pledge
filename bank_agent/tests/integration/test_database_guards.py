@@ -57,7 +57,8 @@ def filled(
         )
         connection.execute(
             "INSERT INTO registry_messages_quarantined VALUES "
-            "(gen_random_uuid(), gen_random_uuid(), 1, 'ALERT', '{}'::jsonb, %s, 'SCHEMA_MISMATCH', now())",
+            "(gen_random_uuid(), gen_random_uuid(), 1, 'ALERT', '{}'::jsonb, %s, 'SCHEMA_MISMATCH', now(), "
+            "false)",
             ("d" * 64,),
         )
     yield database

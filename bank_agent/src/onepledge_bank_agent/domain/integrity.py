@@ -131,11 +131,28 @@ class EvidenceSection:
 
 @dataclass(frozen=True)
 class QuarantineFinding:
-    """A quarantined registry message: its row, its type and why."""
+    """A quarantined registry message: its row, its id (None when it had no usable one), its type, why,
+    when, whether its payload was withheld, and whether it is open (SPEC_DECISIONS 101, 108). A row
+    is open unless the message was applied late."""
 
     quarantine_id: uuid.UUID
+    message_id: uuid.UUID | None
     message_type: str
     reason: str
+    received_at: datetime
+    payload_withheld: bool
+    open: bool
+
+
+@dataclass(frozen=True)
+class OutboxView:
+    """The outbox as the report shows it: the last complete sync, whether the bank is blind, since
+    when and why (SPEC_DECISIONS 101)."""
+
+    last_complete_sync_at: datetime | None
+    blind: bool
+    blind_since: datetime | None
+    reason: str | None
 
 
 @dataclass(frozen=True)
@@ -195,11 +212,13 @@ class ControlsSection:
 
 @dataclass(frozen=True)
 class RegistryMessagesSection:
-    """Registry outbox messages quarantined as poison (SPEC_DECISIONS 57, 85), each with its reason."""
+    """Registry outbox messages quarantined (SPEC_DECISIONS 57, 101), each with its reason, and the
+    outbox state; None when the section could not be read."""
 
     status: SectionStatus
     quarantined: int
     messages: tuple[QuarantineFinding, ...] = ()
+    outbox: OutboxView | None = None
 
 
 @dataclass(frozen=True)
@@ -298,9 +317,12 @@ def certificate_section(
     return CertificateSection(broken_if(broken), total, verified, failures)
 
 
-def registry_messages_section(messages: Sequence[QuarantineFinding]) -> RegistryMessagesSection:
-    """BROKEN while any quarantined message exists (SPEC_DECISIONS 57, 85)."""
-    return RegistryMessagesSection(broken_if(bool(messages)), len(messages), tuple(messages))
+def registry_messages_section(
+    messages: Sequence[QuarantineFinding], outbox: OutboxView
+) -> RegistryMessagesSection:
+    """BROKEN while a quarantined message is open or the bank is blind (SPEC_DECISIONS 101)."""
+    broken = outbox.blind or any(m.open for m in messages)
+    return RegistryMessagesSection(broken_if(broken), len(messages), tuple(messages), outbox)
 
 
 def evidence_section(problems: Iterable[EvidenceProblem] | None) -> EvidenceSection:

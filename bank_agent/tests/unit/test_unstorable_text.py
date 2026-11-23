@@ -24,6 +24,7 @@ import pytest
 
 from bank_testkit.memory.clocks import CountingIds
 from bank_testkit.scripted_http import caller, registry
+from bank_testkit.scripted_http import messages as page_messages
 from onepledge_bank_agent.domain.dependency_errors import KeyHolderRejectedError, RegistryRejectedError
 from onepledge_bank_agent.domain.enums import FailureReason, TapeKind
 from onepledge_bank_agent.domain.errors import OutsideRecordsRejectedError
@@ -65,7 +66,7 @@ def message(message_type: str, payload: object) -> dict[str, object]:
 
 def outbox_of(*messages: object) -> list[OutboxMessage]:
     content = wire({"messages": list(messages), "has_more": False})
-    return list(registry(lambda r: httpx.Response(200, content=content)).outbox(100).messages)
+    return page_messages(registry(lambda r: httpx.Response(200, content=content)).outbox(100))
 
 
 @pytest.mark.parametrize(
@@ -215,11 +216,12 @@ def test_a_message_of_an_unknown_type_holding_unstorable_text_is_still_ignored(n
 
 
 @pytest.mark.parametrize(("name", "char"), UNSTORABLE)
-def test_a_message_whose_type_holds_unstorable_text_has_no_usable_type(name: str, char: str) -> None:
-    """Like a message without a type: the page is malformed, a named dependency error, never unexpected."""
-    with pytest.raises(RegistryRejectedError) as raised:
-        outbox_of(message("ALE" + char + "RT", ALERT))
-    assert raised.value.reason is FailureReason.MALFORMED_RESPONSE, name
+def test_a_type_holding_unstorable_text_is_poison_recorded_as_unreadable(name: str, char: str) -> None:
+    """SPEC_DECISIONS 101 level 2: a usable id and an unusable type; the type is not stored."""
+    (received,) = outbox_of(message("ALE" + char + "RT", ALERT))
+    assert received.message_type == "UNREADABLE", name
+    assert isinstance(received.payload, QuarantinedPayload)
+    assert received.payload.reason.value == "SCHEMA_MISMATCH"
 
 
 def test_the_window_of_outside_records_is_unchanged_for_a_storable_answer() -> None:

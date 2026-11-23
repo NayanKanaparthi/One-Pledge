@@ -65,6 +65,7 @@ class Tunables(BaseModel):
     pipeline_poll_seconds: float = 1.0
     pipeline_max_attempts: int = 8
     outbox_poll_seconds: float = 2.0
+    outbox_blind_halt_seconds: float = 300.0
     check_chunk_loans: int = 100
     tokenize_chunk_loans: int = 100
     submit_batch_items: int = 500
@@ -85,6 +86,7 @@ def _tunables(read: SettingReader) -> Tunables:
         pipeline_poll_seconds=read.seconds("PIPELINE_POLL_SECONDS", 1.0),
         pipeline_max_attempts=read.integer("PIPELINE_MAX_ATTEMPTS", 8, 1, 100),
         outbox_poll_seconds=read.seconds("OUTBOX_POLL_SECONDS", 2.0),
+        outbox_blind_halt_seconds=read.seconds("OUTBOX_BLIND_HALT_SECONDS", 300.0),
         check_chunk_loans=read.integer("CHECK_CHUNK_LOANS", 100, 1, MAX_CHUNK),
         tokenize_chunk_loans=read.integer("TOKENIZE_CHUNK_LOANS", 100, 1, MAX_TOKENIZE_CHUNK),
         submit_batch_items=read.integer("SUBMIT_BATCH_ITEMS", 500, 1, MAX_SUBMIT_BATCH),

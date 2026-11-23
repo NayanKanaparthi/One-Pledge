@@ -28,6 +28,7 @@ from onepledge_bank_agent.domain.integrity import (
     EvidenceProblemKind,
     EvidenceSection,
     IntegrityReport,
+    OutboxView,
     QuarantineFinding,
     RawDataSection,
     RegistryChainSection,
@@ -67,7 +68,12 @@ def broken_report() -> IntegrityReport:
             tuple((control, control is not ROLE_CONTROL) for control in DatabaseControl),
             ("ROLE_HAS_EXTRA_GRANT on loans_raw",),
         ),
-        RegistryMessagesSection(BROKEN, 1, (QuarantineFinding(QUARANTINE, "ALERT", "SCHEMA_MISMATCH"),)),
+        RegistryMessagesSection(
+            BROKEN,
+            1,
+            (QuarantineFinding(QUARANTINE, QUARANTINE, "ALERT", "SCHEMA_MISMATCH", NOW, False, True),),
+            OutboxView(NOW, False, None, None),
+        ),
         EvidenceSection(BROKEN, (
             EvidenceProblem("certificates", str(ROW), EvidenceProblemKind.ROW_MISSING),
             EvidenceProblem("checkpoints_seen", "9", EvidenceProblemKind.SEQUENCE_GAP),

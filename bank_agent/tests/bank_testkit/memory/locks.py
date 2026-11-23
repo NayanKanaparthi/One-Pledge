@@ -35,8 +35,8 @@ class MemoryOutboxLock:
         self.busy = False
 
     @contextlib.contextmanager
-    def hold(self) -> Iterator[bool]:
-        """Granted unless busy."""
+    def hold(self, wait: bool = False) -> Iterator[bool]:
+        """Granted unless busy; one thread cannot wait for another sync, so `wait` changes nothing."""
         if self.busy:
             yield False
             return

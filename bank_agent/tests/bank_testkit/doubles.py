@@ -117,7 +117,10 @@ class InProcessDoubles:
             url = KEY_HOLDER_URLS[holder]
             self._clients[url] = TestClient(create_key_holder_app(config), base_url=url)
         self.down: set[str] = set()
-        self._forged: dict[str, list[dict[str, Any]]] = {}
+        self._forged: dict[str, list[Any]] = {}
+        self._pages: dict[str, list[bytes]] = {}
+        self._acks: dict[str, list[int]] = {}
+        self._failing: dict[str, list[int]] = {}
         self.sent: list[SentRequest] = []
         self.public_key_b64 = base64.b64encode(
             Ed25519PrivateKey.from_private_bytes(self.signing_seed)
@@ -157,22 +160,48 @@ class InProcessDoubles:
         )
         if base in self.down:
             raise httpx.ConnectError("the service is stopped", request=request)
-        forged = self._forged.get(request.headers.get("X-API-Key", ""), [])
-        if base == REGISTRY_URL and forged and request.url.path.startswith("/v1/outbox/"):
-            message_id = request.url.path.split("/")[3]
-            if any(message["message_id"] == message_id for message in forged):
-                forged[:] = [message for message in forged if message["message_id"] != message_id]
-                return httpx.Response(204)
+        if self._failing.get(request.url.path):
+            status = self._failing[request.url.path].pop(0)
+            return httpx.Response(status, json={"error": {"code": "SCRIPTED", "message": "scripted"}})
+        key = request.headers.get("X-API-Key", "")
+        forged = self._forged.get(key, [])
+        if base == REGISTRY_URL and request.url.path.startswith("/v1/outbox/"):
+            answered = self._acknowledge(forged, request.url.path.split("/")[3])
+            if answered is not None:
+                return answered
+        if base == REGISTRY_URL and request.url.path == "/v1/outbox" and self._pages.get(key):
+            return httpx.Response(200, content=self._pages[key].pop(0), headers={"content-type": JSON_TYPE})
         answer = self._clients[base].request(
             request.method, str(request.url), headers=dict(request.headers), content=request.read()
         )
         if base == REGISTRY_URL and forged and request.url.path == "/v1/outbox" and answer.status_code == 200:
             page = answer.json()
             last = max((message["position"] for message in page["messages"]), default=0)
-            extra = [{**message, "position": last + n} for n, message in enumerate(forged, start=1)]
+            extra = [
+                {**element, "position": last + n}
+                if isinstance(element, dict) and "position" in element
+                else element
+                for n, element in enumerate(forged, start=1)
+            ]
             content = json.dumps({**page, "messages": [*page["messages"], *extra]})  # escapes as the wire may
             return httpx.Response(200, content=content.encode("ascii"), headers={"content-type": JSON_TYPE})
         return httpx.Response(answer.status_code, headers=answer.headers, content=answer.content)
+
+    def _acknowledge(self, forged: list[Any], message_id: str) -> httpx.Response | None:
+        """The answer to the acknowledgement of an injected message, or None for the real registry
+        (which answers 404 for a message it never delivered)."""
+        scripted = self._acks.get(message_id)
+        if scripted:
+            status = scripted.pop(0)
+            if status != httpx.codes.NO_CONTENT:
+                return httpx.Response(status, json={"error": {"code": "SCRIPTED", "message": "scripted"}})
+        elif scripted is not None:
+            return None  # every scripted answer was given and the last one was not a 204: refused for good
+        held = [e for e in forged if isinstance(e, dict) and e.get("message_id") == message_id]
+        if not held:
+            return None
+        forged[:] = [e for e in forged if not (isinstance(e, dict) and e.get("message_id") == message_id)]
+        return httpx.Response(204)
 
     def tamper_certificate(self, certificate_id: str) -> dict[str, Any]:
         """CERTIFICATE_BODY on the registry double."""
@@ -204,6 +233,24 @@ class InProcessDoubles:
             "payload": dict(payload),
         }
         self._forged.setdefault(self.members[bank_code].registry_key, []).append(message)
+
+    def inject_element(self, bank_code: str, element: object) -> None:
+        """Deliver one element of `messages` exactly as given, after the real outbox; an element without
+        the injected id is never removed (the registry delivers it again on every page)."""
+        self._forged.setdefault(self.members[bank_code].registry_key, []).append(element)
+
+    def inject_page(self, bank_code: str, content: bytes, times: int = 1) -> None:
+        """Answer the next `times` outbox reads of one bank with `content` instead of the real page."""
+        self._pages.setdefault(self.members[bank_code].registry_key, []).extend([content] * times)
+
+    def fail_path(self, path: str, status: int, times: int) -> None:
+        """Answer the next `times` requests for `path`, from any bank, with `status`."""
+        self._failing.setdefault(path, []).extend([status] * times)
+
+    def script_ack(self, message_id: str, *statuses: int) -> None:
+        """Answer the acknowledgements of one injected message with `statuses` in order; ending on a
+        status other than 204 refuses every later one with 404, as the registry would."""
+        self._acks[message_id] = list(statuses)
 
     def forged_pending(self, bank_code: str) -> int:
         """How many injected messages the bank has not acknowledged yet."""

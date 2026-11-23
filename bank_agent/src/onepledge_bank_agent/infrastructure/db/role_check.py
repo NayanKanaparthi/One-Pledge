@@ -28,7 +28,7 @@ GRANT_MATRIX: Mapping[str, frozenset[str]] = MappingProxyType(
         "local_checks": APPEND, "loan_tokens": APPEND, "certificates": APPEND, "checkpoints_seen": APPEND,
         "integrity_runs": APPEND, "registry_messages_quarantined": APPEND, "login_attempts": APPEND,
         "tape_submissions": WORK, "loans": WORK, "registry_requests": WORK, "registry_request_items": WORK,
-        "alerts": WORK, "users": WORK, "registry_outbox_attempts": WORK,
+        "alerts": WORK, "users": WORK, "registry_outbox_messages": WORK, "registry_outbox_state": WORK,
         "lenders": READ, "facilities": READ, "alembic_version": READ,
     }
 )  # fmt: skip

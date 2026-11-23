@@ -159,8 +159,8 @@ def test_a_poison_checkpoint_neither_fails_registry_sync_nor_starves_worker_once
     }
     assert doubles.forged_pending("HARBOR") == 0
     worker = cli("worker", "--once", "--json")
-    assert worker.code == 0, worker.err
-    assert worker.json()["ok"] is True
+    assert worker.code == 1, "SPEC_DECISIONS 101: a quarantined CHECKPOINT halts the bank for good"
+    assert [problem["code"] for problem in worker.json()["problems"]] == ["REGISTRY_INTEGRITY_BROKEN"]
 
 
 def section_line(text: str, name: str) -> list[str]:

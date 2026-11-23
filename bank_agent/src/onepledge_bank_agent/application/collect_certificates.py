@@ -30,7 +30,7 @@ from onepledge_bank_agent.domain.enums import RequestOrigin, TapeStatus
 class OutboxSync(Protocol):
     """A quiet registry outbox sync: an outage ends it without raising."""
 
-    def run(self) -> None:
+    def run(self, wait: bool = False) -> object:
         """Sync once."""
         ...
 

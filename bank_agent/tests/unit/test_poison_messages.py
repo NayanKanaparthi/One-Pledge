@@ -16,18 +16,16 @@ import pytest
 from bank_testkit.memory.bank import MemoryBank, vins
 from onepledge_bank_agent.application.faults import FaultPoint
 from onepledge_bank_agent.domain.canonical_json import JsonValue
-from onepledge_bank_agent.domain.dependency_errors import RegistryUnavailableError
 from onepledge_bank_agent.domain.enums import (
     AlertStatus,
     AuditAction,
     CaseStatus,
-    FailureReason,
     QuarantineReason,
     TapeStatus,
     TokenKind,
 )
 from onepledge_bank_agent.domain.integrity import SectionStatus
-from onepledge_bank_agent.domain.registry_records import OutboxMessage
+from onepledge_bank_agent.domain.registry_records import OutboxMessage, UnacknowledgeableElement
 
 pytestmark = pytest.mark.unit
 
@@ -75,6 +73,17 @@ def case_update(case_id: uuid.UUID, token: str, status: str, resolved_seq: int) 
     return {"type": "CASE_UPDATE", "created_at": AT, "payload": payload}
 
 
+def wired(bank: MemoryBank, document: Mapping[str, JsonValue]) -> OutboxMessage:
+    """Deliver one message as the registry would send it; it has a usable id."""
+    element = bank.registry.deliver_wire(document)
+    assert isinstance(element, OutboxMessage)
+    return element
+
+
+def pending(bank: MemoryBank) -> list[OutboxMessage]:
+    return [element for element in bank.registry.pending() if isinstance(element, OutboxMessage)]
+
+
 def contained(bank: MemoryBank, message: OutboxMessage, reason: QuarantineReason) -> None:
     """Quarantined with the reason, audited against the row, acknowledged, and the report BROKEN."""
     state = bank.world.store.state
@@ -87,9 +96,7 @@ def contained(bank: MemoryBank, message: OutboxMessage, reason: QuarantineReason
         if d.object_id == held.quarantine_id
     ]
     assert [entry.detail["reason"] for entry in audited] == [reason.value]
-    assert message.message_id not in {pending.message_id for pending in bank.registry.pending()}, (
-        "acknowledged"
-    )
+    assert message.message_id not in {waiting.message_id for waiting in pending(bank)}, "acknowledged"
     assert bank.report().registry_messages.status is SectionStatus.BROKEN
 
 
@@ -123,7 +130,7 @@ def test_a_checkpoint_with_a_number_too_large_to_store_is_quarantined_and_halts(
 ) -> None:
     bank = MemoryBank()
     _, case_id = pledged(bank)
-    poison = bank.registry.deliver_wire(checkpoint(**body))
+    poison = wired(bank, checkpoint(**body))
     result = bank.outbox_sync().sync()
     assert result.messages_processed == 2, name
     contained(bank, poison, QuarantineReason.VALUE_OUT_OF_RANGE)
@@ -138,8 +145,8 @@ def test_a_case_update_that_contradicts_a_closed_alert_is_quarantined_and_the_al
     token, case_id = pledged(bank)
     bank.registry.case_update(case_id, CaseStatus.CLEARED_DATA_ERROR)
     bank.outbox_sync().sync()
-    poison = bank.registry.deliver_wire(case_update(case_id, token, "CONFIRMED", 600))
-    repeat = bank.registry.deliver_wire(case_update(case_id, token, "CLEARED_DATA_ERROR", 6))
+    poison = wired(bank, case_update(case_id, token, "CONFIRMED", 600))
+    repeat = wired(bank, case_update(case_id, token, "CLEARED_DATA_ERROR", 6))
     other_case = bank.registry.alert(token)
     assert bank.outbox_sync().sync().messages_processed == 3
     contained(bank, poison, QuarantineReason.CONTRADICTS_STORED_STATE)
@@ -165,7 +172,7 @@ def test_an_alert_that_contradicts_or_breaks_the_contract_is_quarantined(
     bank = MemoryBank()
     token, case_id = pledged(bank)
     bank.outbox_sync().sync()
-    poison = bank.registry.deliver_wire(alert(token, case_id, **changes))
+    poison = wired(bank, alert(token, case_id, **changes))
     following = bank.registry.alert(token)
     bank.outbox_sync().sync()
     contained(bank, poison, reason)
@@ -179,7 +186,7 @@ def test_a_handler_raising_an_unexpected_exception_is_quarantined_and_logged_as_
     bank = MemoryBank()
     token, case_id = pledged(bank)
     bank.world.faults.arm(FaultPoint.OUTBOX_HANDLER_BEFORE_COMMIT, error=LookupError("not anticipated"))
-    poison = next(m for m in bank.registry.pending() if m.message_type == "ALERT")
+    poison = next(m for m in pending(bank) if m.message_type == "ALERT")
     following = bank.registry.alert(token)
     bank.outbox_sync().sync()
     contained(bank, poison, QuarantineReason.UNEXPECTED_ERROR)
@@ -188,27 +195,6 @@ def test_a_handler_raising_an_unexpected_exception_is_quarantined_and_logged_as_
     errors = [fields for level, event, fields in bank.world.log.events if level == "error"]
     assert [(f["exception_type"], f["kind"]) for f in errors] == [("LookupError", "ALERT")]
     advances(bank)
-
-
-def test_a_message_deferred_five_times_becomes_poison() -> None:
-    bank = MemoryBank()
-    pledged(bank)
-    bank.outbox_sync().sync()
-    bank.registry.checkpoint()
-    poison = bank.registry.pending()[-1]
-    following = bank.registry.deliver("FUTURE_TYPE", None)
-    outage = RegistryUnavailableError(None, FailureReason.CONNECTION_FAILED)
-    bank.registry.fail("event_headers", outage, times=5)
-    for attempt in range(1, 5):
-        with pytest.raises(RegistryUnavailableError):
-            bank.outbox_sync().sync()
-        assert bank.world.store.state.outbox_attempts[poison.message_id][0] == attempt
-        assert [m.message_id for m in bank.registry.pending()][:1] == [poison.message_id], "not acknowledged"
-        assert bank.world.store.state.quarantined == []
-    assert bank.outbox_sync().sync().messages_processed == 2
-    contained(bank, poison, QuarantineReason.REPEATED_FAILURE)
-    assert following.message_id not in {m.message_id for m in bank.registry.pending()}
-    advances(bank, halted=True)
 
 
 def test_a_sync_that_raises_never_starves_a_waiting_tape() -> None:
@@ -226,29 +212,29 @@ def test_a_sync_that_raises_never_starves_a_waiting_tape() -> None:
     [str.upper, lambda text: "{" + text + "}", lambda text: text.replace("-", "")],
     ids=["upper case", "braces", "no hyphens"],
 )
-def test_a_message_whose_ids_are_not_canonical_is_quarantined_and_acknowledged_by_its_id(
+def test_a_message_id_not_spelled_canonically_is_unacknowledgeable_and_a_case_id_is_poison(
     spelling: object,
 ) -> None:
-    """SPEC_DECISIONS 75 with 85 rule 1 (K18): a message id or case id in another spelling is poison,
-    SCHEMA_MISMATCH; it is acknowledged by the id it carries, and the sync goes on."""
+    """SPEC_DECISIONS 75 with 101: a message id in another spelling is no usable id, so the element is
+    kept once by its hash and the sync is incomplete; a case id in another spelling is poison,
+    SCHEMA_MISMATCH, acknowledged by its message id. The sync goes on after both."""
     assert callable(spelling)
     bank = MemoryBank()
     token, case_id = pledged(bank)
     bank.outbox_sync().sync()
-    message_id = uuid.uuid4()
     bad_id = bank.registry.deliver_wire(
-        {**alert(token, uuid.uuid4()), "message_id": spelling(str(message_id))}
+        {**alert(token, uuid.uuid4()), "message_id": spelling(str(uuid.uuid4()))}
     )
+    assert isinstance(bad_id, UnacknowledgeableElement)
     wire = alert(token, uuid.uuid4())
     payload = wire["payload"]
     assert isinstance(payload, dict)
-    bad_case = bank.registry.deliver_wire(
-        {**wire, "payload": {**payload, "case_id": spelling(str(uuid.uuid4()))}}
-    )
+    bad_case = wired(bank, {**wire, "payload": {**payload, "case_id": spelling(str(uuid.uuid4()))}})
     following = bank.registry.alert(token)
-    assert bank.outbox_sync().sync().messages_processed == 3
-    assert bad_id.message_id == message_id
-    contained(bank, bad_id, QuarantineReason.SCHEMA_MISMATCH)
+    result = bank.outbox_sync().sync()
+    assert (result.complete, result.reason, result.messages_processed) == (False, "UNACKNOWLEDGEABLE", 2)
+    (kept,) = [row for row in bank.world.store.state.quarantined if row.message_id is None]
+    assert kept.quarantined.reason is QuarantineReason.UNACKNOWLEDGEABLE
     contained(bank, bad_case, QuarantineReason.SCHEMA_MISMATCH)
     assert {a.record.registry_case_id for a in bank.alerts()} == {case_id, following}
     advances(bank)

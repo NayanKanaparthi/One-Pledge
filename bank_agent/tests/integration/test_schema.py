@@ -15,6 +15,7 @@ from alembic.migration import MigrationContext
 from bank_testkit.database import BankDatabase, migration_runner, pairs
 from onepledge_bank_agent.domain import enums
 from onepledge_bank_agent.domain.cleaning.rows import FIELD_ORDER
+from onepledge_bank_agent.domain.outbox import AckStatus, OutboxOutcome
 from onepledge_bank_agent.infrastructure.db.engines import make_engine
 from onepledge_bank_agent.infrastructure.db.migrations import SchemaInspector, head_revision
 from onepledge_bank_agent.infrastructure.db.models import Base
@@ -28,7 +29,7 @@ TABLES = {
     "lenders", "facilities", "users", "login_attempts", "tape_submissions", "loans_raw", "cleaning_issues",
     "submission_items", "loans", "local_checks", "loan_tokens", "registry_requests", "registry_request_items",
     "certificates", "alerts", "checkpoints_seen", "audit_log", "integrity_runs",
-    "registry_messages_quarantined", "registry_outbox_attempts",
+    "registry_messages_quarantined", "registry_outbox_messages", "registry_outbox_state",
 }  # fmt: skip
 ENUM_CHECKS: dict[str, type[StrEnum] | tuple[str, ...]] = {
     "ck_facilities_status": enums.FacilityStatus,
@@ -67,6 +68,8 @@ ENUM_CHECKS: dict[str, type[StrEnum] | tuple[str, ...]] = {
     "ck_audit_log_object_type": enums.AuditObjectType,
     "ck_audit_log_outcome": enums.AuditOutcome,
     "ck_integrity_runs_status": enums.IntegrityRunStatus,
+    "ck_registry_outbox_messages_outcome": OutboxOutcome,
+    "ck_registry_outbox_messages_ack_status": AckStatus,
     "ck_registry_request_items_kinds_matched": enums.TokenKind,
     "ck_alerts_kinds_matched": enums.TokenKind,
 }

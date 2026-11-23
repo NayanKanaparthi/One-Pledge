@@ -204,3 +204,39 @@ def test_the_seed_summary_gives_the_audited_counts_with_the_right_noun(
     """SPEC_DECISIONS 23 (e) and 78: real counts, and one row is a row."""
     result = SeedResult(UpsertCounts(*lenders), UpsertCounts(*facilities), "a" * 64)
     assert seed_summary(result) == f"{line} (reference.json aaaaaaaaaaaa...)."
+
+
+WORKER_CASES = [
+    ("clean", WorkerReport([], []), []),
+    ("a sync that raised", WorkerReport([], ["INTERNAL_ERROR"]), ["INTERNAL_ERROR"]),
+    ("an incomplete sync", WorkerReport([], [], "UNACKNOWLEDGEABLE"), ["OUTBOX_SYNC_INCOMPLETE"]),
+    ("halted", WorkerReport([], [], None, True), ["REGISTRY_INTEGRITY_BROKEN"]),
+    (
+        "a tape that failed",
+        WorkerReport(
+            [StageRun(uuid.UUID(int=7), TapeStatus.TOKENIZED, StageOutcome.FAILED, TapeStatus.FAILED, None)],
+            [],
+        ),
+        ["TAPE_FAILED"],
+    ),
+    ("all four", WorkerReport([], ["INTERNAL_ERROR"], "ACK_REFUSED", True), [
+        "INTERNAL_ERROR", "OUTBOX_SYNC_INCOMPLETE", "REGISTRY_INTEGRITY_BROKEN",
+    ]),
+]  # fmt: skip
+
+
+@pytest.mark.parametrize(("name", "report", "codes"), WORKER_CASES, ids=[c[0] for c in WORKER_CASES])
+def test_worker_once_exits_0_only_after_a_complete_sync_with_no_halt_and_no_failed_tape(
+    name: str, report: WorkerReport, codes: list[str]
+) -> None:
+    """SPEC_DECISIONS 101: every problem is reported, in both forms, and each one makes the exit 1."""
+    out, err = io.StringIO(), io.StringIO()
+    assert worker_report(report, Output(out, err)) == (1 if codes else 0), name
+    assert len(err.getvalue().splitlines()) >= len(codes)
+    out = io.StringIO()
+    assert worker_report(report, Output(out, io.StringIO(), as_json=True)) == (1 if codes else 0)
+    document = json.loads(out.getvalue())
+    assert document["ok"] is (not codes)
+    assert [problem["code"] for problem in document.get("problems", [])] == codes
+    if codes:
+        assert document["error"] == document["problems"][0]

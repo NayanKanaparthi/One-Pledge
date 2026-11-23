@@ -281,10 +281,14 @@ def all_findings(report: IntegrityReport) -> tuple[list[Finding], list[Finding]]
         Finding("database_controls", "role", violation.split(" on ", 1)[-1], violation.split(" on ", 1)[0])
         for violation in report.database_controls.violations
     ]
-    open_findings += [
-        Finding("registry_messages", "message", str(m.quarantine_id), m.reason, m.message_type)
-        for m in report.registry_messages.messages
-    ]
+    for m in report.registry_messages.messages:
+        finding = Finding("registry_messages", "message", str(m.quarantine_id), m.reason, m.message_type)
+        (open_findings if m.open else recovered).append(finding)
+    outbox = report.registry_messages.outbox
+    if outbox is not None and outbox.blind:
+        since = render_time(outbox.blind_since) if outbox.blind_since is not None else "the start"
+        where = f"since {since}" + (f", {outbox.reason}" if outbox.reason else "")
+        open_findings.append(Finding("registry_messages", "outbox", "", "OUTBOX_BLIND", where))
     open_findings += [
         Finding("evidence", p.table, p.row_id or "", p.problem.value) for p in report.evidence.problems
     ]

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Sequence, Set
+from datetime import datetime, timedelta
 
+from onepledge_bank_agent.application.section_reads import SectionReads
 from onepledge_bank_agent.domain.checkpoint_rules import DeepFinding
 from onepledge_bank_agent.domain.entities import Certificate, Checkpoint
 from onepledge_bank_agent.domain.integrity import (
@@ -13,12 +15,15 @@ from onepledge_bank_agent.domain.integrity import (
     CertificateSection,
     CheckpointProblem,
     CheckpointRef,
+    OutboxView,
     QuarantineFinding,
     RegistryChainSection,
+    RegistryMessagesSection,
     certificate_section,
     chain_section,
     merge_certificate_problems,
     merge_checkpoint_problems,
+    registry_messages_section,
 )
 from onepledge_bank_agent.domain.registry_records import QuarantinedMessage
 
@@ -118,6 +123,35 @@ def deep_findings_of(
     return [problem for problem in stored if problem not in received]
 
 
-def quarantine_findings(messages: Sequence[QuarantinedMessage]) -> list[QuarantineFinding]:
-    """Each quarantined message as the report lists it: its row, its type, its reason."""
-    return [QuarantineFinding(m.quarantine_id, m.message_type, m.quarantined.reason.value) for m in messages]
+def messages_section(reads: SectionReads, now: datetime, blind_after: timedelta) -> RegistryMessagesSection:
+    """The quarantined messages, open unless applied late, and the outbox state (SPEC_DECISIONS 101)."""
+    found = reads.read(
+        ("registry_messages",),
+        lambda unit: (
+            unit.evidence.quarantine.all(),
+            unit.outbox_ledger.applied_late(),
+            unit.outbox_state.get(),
+        ),
+    )
+    if found is None:
+        return RegistryMessagesSection(reads.missing("registry_messages"), 0)
+    held, late, state = found
+    blind = state.blind(now, blind_after)
+    since = state.blind_since
+    if blind and since is None:  # no sync has run since the limit passed
+        since = state.last_complete_sync_at + blind_after if state.last_complete_sync_at else None
+    view = OutboxView(state.last_complete_sync_at, blind, since if blind else None, state.last_reason)
+    return registry_messages_section(quarantine_findings(held, late), view)
+
+
+def quarantine_findings(
+    messages: Sequence[QuarantinedMessage], late: Set[uuid.UUID]
+) -> list[QuarantineFinding]:
+    """Each quarantined message as the report lists it (SPEC_DECISIONS 108)."""
+    return [
+        QuarantineFinding(
+            m.quarantine_id, m.message_id, m.message_type, m.quarantined.reason.value, m.received_at,
+            m.quarantined.withheld, m.message_id is None or m.message_id not in late,
+        )
+        for m in messages
+    ]  # fmt: skip

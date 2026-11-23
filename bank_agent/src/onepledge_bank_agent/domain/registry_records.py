@@ -159,8 +159,8 @@ class MessageEvidence:
     """An outbox message's payload as received, kept for quarantine, and the SHA-256 of its serialised form.
 
     The payload is withheld (kept as its hash alone, `payload` None) when its serialised
-    form exceeds 64 KiB (`oversized`) or when it holds text the bank cannot store (U+0000
-    or a surrogate code point).
+    form exceeds 64 KiB (`oversized`) or when it holds a value the bank cannot store and read
+    back (SPEC_DECISIONS 100).
     """
 
     payload: JsonValue
@@ -202,10 +202,21 @@ class OutboxMessage:
 
 
 @dataclass(frozen=True)
-class OutboxPage:
-    """Unacknowledged messages in position order, and whether more are waiting."""
+class UnacknowledgeableElement:
+    """An element of an outbox page that is not an object or has no canonical message id, so it cannot
+    be acknowledged (SPEC_DECISIONS 101): kept as its evidence, recorded once by its hash."""
 
-    messages: tuple[OutboxMessage, ...]
+    evidence: MessageEvidence
+
+
+type OutboxElement = OutboxMessage | UnacknowledgeableElement
+
+
+@dataclass(frozen=True)
+class OutboxPage:
+    """Unacknowledged elements in position order, and whether more are waiting."""
+
+    elements: tuple[OutboxElement, ...]
     has_more: bool
 
 
@@ -220,10 +231,11 @@ class CaseOutcome:
 
 @dataclass(frozen=True)
 class QuarantinedMessage:
-    """A row of `registry_messages_quarantined`: the message, why it was quarantined, and when."""
+    """A row of `registry_messages_quarantined`: the message, why it was quarantined, and when. The message
+    id is None for an element that had no usable one (UNACKNOWLEDGEABLE)."""
 
     quarantine_id: uuid.UUID
-    message_id: uuid.UUID
+    message_id: uuid.UUID | None
     position: int | None
     message_type: str
     quarantined: QuarantinedPayload

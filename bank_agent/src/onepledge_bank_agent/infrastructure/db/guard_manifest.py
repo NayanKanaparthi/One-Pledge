@@ -61,6 +61,9 @@ GUARDS: tuple[Guard, ...] = (
           "ca2af4ae85f74f870b0dbfa88aba503c754e40d68f34b834760c4260f4fee649"),
     Guard("tape_submissions_insert_guard", "tape_submissions", ROW_BEFORE_INSERT,
           "onepledge_tape_insert_guard", "b3f1f2b515269457e4ec1b15f35738e86a04255d7d966a897fef530a71f07f03"),
+    Guard("registry_outbox_messages_guard", "registry_outbox_messages", ROW_BEFORE_UPDATE,
+          "onepledge_outbox_ledger_guard",
+          "506bd685c20e6144a6747e791be6e52368c2307925899568d62fdb0ef063f724"),
 )  # fmt: skip
 MANIFEST: Mapping[tuple[str, str], Guard] = MappingProxyType({(g.table, g.trigger): g for g in GUARDS})
 """Each guard by (table, trigger name): a trigger name is unique only within its table."""

@@ -5,17 +5,21 @@ the registry deliver the message again: an ALERT creates the alert of `(case, lo
 once; a CASE_UPDATE whose status equals the stored case status changes nothing; a
 CHECKPOINT already stored is a duplicate. A repeat that differs from what is stored (an
 ALERT with other facts, a CASE_UPDATE with another status for a closed alert) raises
-`ContradictsStoredStateError` and changes nothing (SPEC_DECISIONS 85, rule 3). No
-handler changes a loan's state.
+`ContradictsStoredStateError` and changes nothing (SPEC_DECISIONS 85, rule 3). A CASE_UPDATE
+that names no alert raises `UnmatchedCaseUpdateError`: it is quarantined UNMATCHED, and when
+its ALERT arrives later the newest such update is applied to the new alert in the same
+transaction (SPEC_DECISIONS 101). No handler changes a loan's state.
 """
 
 from __future__ import annotations
+
+from collections.abc import Mapping
 
 from onepledge_bank_agent.application.alert_maker import AlertMaker, AlertSource, CaseOnLoan, ordered_kinds
 from onepledge_bank_agent.application.events import LogEvent
 from onepledge_bank_agent.application.ports import OperationalLog, UnitOfWork
 from onepledge_bank_agent.application.registry_audit import entry
-from onepledge_bank_agent.domain.alert import MatchFacts
+from onepledge_bank_agent.domain.alert import Alert, MatchFacts
 from onepledge_bank_agent.domain.enums import (
     AlertStatus,
     AuditAction,
@@ -25,8 +29,9 @@ from onepledge_bank_agent.domain.enums import (
     LoanState,
 )
 from onepledge_bank_agent.domain.loan import Loan
+from onepledge_bank_agent.domain.outbox import OutboxOutcome
 from onepledge_bank_agent.domain.registry_records import AlertNotice, CaseNotice
-from onepledge_bank_agent.domain.store_errors import ContradictsStoredStateError
+from onepledge_bank_agent.domain.store_errors import ContradictsStoredStateError, UnmatchedCaseUpdateError
 
 CLOSED = frozenset({AlertStatus.CLEARED, AlertStatus.ESCALATED})
 
@@ -67,7 +72,48 @@ class AlertMessages:
                 raise ContradictsStoredStateError
             return False
         case = CaseOnLoan(notice.case_id, loan.loan_id, match)
-        return self._alerts.raise_once(unit, case, AlertSource.OUTBOX_MESSAGE) is not None
+        alert = self._alerts.raise_once(unit, case, AlertSource.OUTBOX_MESSAGE)
+        if alert is None:
+            return False
+        self._apply_late(unit, notice, alert)
+        return True
+
+    def _apply_late(self, unit: UnitOfWork, notice: AlertNotice, alert: Alert) -> None:
+        """The newest case update that arrived before its alert, applied now (SPEC_DECISIONS 101): the alert
+        takes its case status, `ALERT_CASE_UPDATED` names the quarantine row, the message becomes
+        APPLIED_LATE."""
+        waiting = unit.evidence.quarantine.unmatched_case_updates(notice.case_id, notice.asset_token)
+        if not waiting:
+            return
+        newest = waiting[0]
+        payload = newest.quarantined.payload
+        status = CaseStatus(str(payload.get("status") if isinstance(payload, Mapping) else None))
+        resolved_seq = payload.get("resolved_seq") if isinstance(payload, Mapping) else None
+        before = alert.status
+        if status is not CaseStatus.OPEN and alert.apply_case_status(status):
+            unit.alerts.save(alert)
+            unit.record(
+                entry(
+                    AuditAction.ALERT_CASE_UPDATED,
+                    AuditObjectType.ALERT,
+                    alert.record.alert_id,
+                    {
+                        "registry_case_id": str(notice.case_id),
+                        "case_status": status.value,
+                        "from": before.value,
+                        "to": alert.status.value,
+                        "resolved_seq": resolved_seq if isinstance(resolved_seq, int) else None,
+                        "from_quarantine_id": str(newest.quarantine_id),
+                    },
+                )
+            )
+        now = alert.record.received_at
+        for held in waiting:
+            if held.message_id is None:
+                continue
+            row = unit.outbox_ledger.get(held.message_id)
+            if row is not None and row.outcome is OutboxOutcome.QUARANTINED:
+                unit.outbox_ledger.save(row.handled_as(OutboxOutcome.APPLIED_LATE, now))
 
 
 class CaseUpdateMessages:
@@ -79,8 +125,11 @@ class CaseUpdateMessages:
     def handle(self, unit: UnitOfWork, notice: CaseNotice) -> int:
         """The number of alerts that changed (0 when the status was already stored)."""
         loan_ids = unit.tokens.loans_with_asset_token(notice.asset_token)
+        alerts = unit.alerts.for_case(notice.case_id, loan_ids)
+        if not alerts:  # kept and applied when the alert arrives (SPEC_DECISIONS 101)
+            raise UnmatchedCaseUpdateError
         changed = 0
-        for alert in unit.alerts.for_case(notice.case_id, loan_ids):
+        for alert in alerts:
             before = alert.status
             if before in CLOSED:
                 if notice.status is not alert.record.case_status:

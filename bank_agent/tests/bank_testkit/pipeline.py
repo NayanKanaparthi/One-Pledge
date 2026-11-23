@@ -24,6 +24,7 @@ from onepledge_bank_agent.application.resubmit_loan import ResubmitCommand
 from onepledge_bank_agent.application.retry_tape import RetryCommand
 from onepledge_bank_agent.application.review_alert import ReviewAction, ReviewCommand
 from onepledge_bank_agent.application.run_pipeline_worker import WorkerReport
+from onepledge_bank_agent.application.sync_registry_outbox import SyncResult
 from onepledge_bank_agent.domain.alert import Alert
 from onepledge_bank_agent.domain.audit import Actor
 from onepledge_bank_agent.domain.enums import BankPosition, Role, TapeKind, TapeStatus
@@ -133,9 +134,9 @@ class BankAgentHarness:
             if run.status is status or run.outcome is not StageOutcome.ADVANCED:
                 return run.status
 
-    def sync(self) -> None:
+    def sync(self) -> SyncResult:
         """One registry outbox sync, as the worker runs it."""
-        self.composition.outbox_sync().run()
+        return self.composition.outbox_sync().run()
 
     def requester(self, role: Role = Role.CREDIT_OFFICER) -> Requester:
         """A signed in user of the role, as the HTTP layer would pass it."""

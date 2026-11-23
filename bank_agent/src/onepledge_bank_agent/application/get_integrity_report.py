@@ -13,7 +13,8 @@
 - raw_data: the last deep verification; BROKEN when it found a submission that does
   not verify.
 - database_controls: live catalogue queries; BROKEN when any control is false.
-- registry_messages: the quarantined outbox messages; BROKEN when any exists.
+- registry_messages: the quarantined outbox messages and the outbox state; BROKEN while a
+  quarantined message is open (not applied late) or the bank is blind (SPEC_DECISIONS 101).
 - evidence: the last deep verification's reconciliation (SPEC_DECISIONS 89 b).
 
 audit_log, raw_data and evidence are NOT_VERIFIED before the first deep verification.
@@ -25,11 +26,13 @@ still built (SPEC_DECISIONS 93, item 8).
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from onepledge_bank_agent.application.evidence_ports import DatabaseControlInspector, IntegrityRun
 from onepledge_bank_agent.application.integrity_sections import (
     certificates_section,
     deep_findings_of,
-    quarantine_findings,
+    messages_section,
     registry_chain,
 )
 from onepledge_bank_agent.application.ports import UnitOfWork, UnitOfWorkFactory
@@ -41,10 +44,8 @@ from onepledge_bank_agent.domain.integrity import (
     IntegrityReport,
     RawDataSection,
     RegistryChainSection,
-    RegistryMessagesSection,
     broken_if,
     controls_section,
-    registry_messages_section,
 )
 from onepledge_bank_agent.domain.integrity_document import StoredFindings, stored_findings
 from onepledge_bank_agent.domain.store_errors import StoreUnreadableError
@@ -56,19 +57,25 @@ class GetIntegrityReport:
     """Builds the live integrity report."""
 
     def __init__(
-        self, units: UnitOfWorkFactory, controls: DatabaseControlInspector, runtime: Runtime
+        self,
+        units: UnitOfWorkFactory,
+        controls: DatabaseControlInspector,
+        runtime: Runtime,
+        blind_after: timedelta,
     ) -> None:
         self._units = units
         self._controls = controls
         self._clock = runtime.clock
+        self._blind_after = blind_after
 
     def execute(self) -> IntegrityReport:
         """The report as of now; no stored row can make it fail as a whole (SPEC_DECISIONS 100)."""
         reads = SectionReads(self._units)
         latest = reads.read(DEEP_SECTIONS, latest_run)
         run, stored = latest if latest is not None else (None, None)
+        now = self._clock.now()
         return IntegrityReport(
-            generated_at=self._clock.now(),
+            generated_at=now,
             last_deep_verification_at=run.ran_at if run is not None else None,
             registry_chain=self._chain(stored, reads),
             certificates=self._certificates(stored, reads),
@@ -77,7 +84,7 @@ class GetIntegrityReport:
             if stored is not None
             else RawDataSection(reads.missing("raw_data"), 0, 0, ()),
             database_controls=controls_section(self._controls.controls(), self._controls.violations()),
-            registry_messages=self._messages(reads),
+            registry_messages=messages_section(reads, now, self._blind_after),
             evidence=reads.evidence(stored.evidence if stored is not None else None),
             unread=tuple(reads.unread),
         )
@@ -121,13 +128,6 @@ class GetIntegrityReport:
     @staticmethod
     def _raw(stored: StoredFindings | None, reads: SectionReads) -> RawDataSection:
         return stored.raw if stored is not None else RawDataSection(reads.missing("raw_data"), 0, 0, ())
-
-    @staticmethod
-    def _messages(reads: SectionReads) -> RegistryMessagesSection:
-        held = reads.read(("registry_messages",), lambda unit: unit.evidence.quarantine.all())
-        if held is None:
-            return RegistryMessagesSection(reads.missing("registry_messages"), 0)
-        return registry_messages_section(quarantine_findings(held))
 
 
 def latest_run(unit: UnitOfWork) -> tuple[IntegrityRun, StoredFindings] | None:

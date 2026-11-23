@@ -1,6 +1,6 @@
 """The database's refusals as the store errors of the ports (SPEC_DECISIONS 85, 92).
 
-A guard's SQLSTATE (`OP001` to `OP006`), a unique key, and every other integrity or data
+A guard's SQLSTATE (`OP001` to `OP006`, `OP009`), a unique key, and every other integrity or data
 rule become `StoreRefusedError`; a lost or timed out connection, a serialisation failure
 and a deadlock become `StoreUnavailableError`; a missing table, column, function or
 privilege (class 42) becomes `StoreMismatchError`, a database that is not migrated or
