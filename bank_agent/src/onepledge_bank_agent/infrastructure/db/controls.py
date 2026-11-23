@@ -6,7 +6,9 @@ trigger it covers is installed exactly as the guard manifest says (`guard_manife
 table, `tgtype`, function and the hash of its source) and enabled (SPEC_DECISIONS 90). The
 five role controls come from the one inspection of
 SPEC_DECISIONS 72 (`role_check.inspect_role`), table and column level, so the report sees
-exactly what the startup guard sees.
+exactly what the startup guard sees. `SCHEMA_MATCHES_MANIFEST` compares the whole catalogue of
+the schema with the schema manifest (`schema_manifest.py`, SPEC_DECISIONS 105); the objects
+that differ are listed with the violations.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from sqlalchemy import Engine, text
 from onepledge_bank_agent.domain.integrity import DatabaseControl
 from onepledge_bank_agent.infrastructure.db.guard_manifest import guards_named, in_force, installed_triggers
 from onepledge_bank_agent.infrastructure.db.role_check import SCHEMA, Violation, inspect_role
+from onepledge_bank_agent.infrastructure.db.schema_manifest import catalogue, differences, digest, expected
 
 INSERT_ONLY_EVIDENCE = (
     "cleaning_issues", "submission_items", "local_checks", "loan_tokens", "certificates", "checkpoints_seen",
@@ -43,7 +46,7 @@ REVISION = text("SELECT version_num FROM alembic_version LIMIT 1")
 
 
 class SqlDatabaseControlInspector:
-    """The thirteen controls of SPEC 15.5 and SPEC_DECISIONS 47 and 72, each true when it holds now."""
+    """The controls of SPEC 15.5 and SPEC_DECISIONS 47, 72 and 105, each true when it holds now."""
 
     def __init__(self, engine: Engine, head_revision: str) -> None:
         self._engine = engine
@@ -55,6 +58,7 @@ class SqlDatabaseControlInspector:
             triggers = installed_triggers(connection)
             violations = inspect_role(connection)
             readable = bool(connection.execute(READABLE_REVISION).scalar_one())
+            live = catalogue(connection)
             revision = connection.execute(REVISION).scalar_one_or_none() if readable else None
 
         def enabled(*names: str) -> bool:
@@ -86,9 +90,22 @@ class SqlDatabaseControlInspector:
             ),
             DatabaseControl.APP_ROLE_GRANTS_EXACT: not violations,
             DatabaseControl.SCHEMA_AT_MIGRATION_HEAD: revision == self._head,
+            DatabaseControl.SCHEMA_MATCHES_MANIFEST: digest(live) == digest(expected()),
         }
 
     def violations(self) -> tuple[str, ...]:
-        """Every way the connected role differs from the grant matrix, as `CODE on object`."""
+        """Every way the connected role differs from the grant matrix, then every object of the schema that
+        differs from the manifest (SPEC_DECISIONS 105), as `CODE on object`."""
         with self._engine.connect() as connection:
-            return tuple(str(violation) for violation in inspect_role(connection))
+            role = tuple(str(violation) for violation in inspect_role(connection))
+            live = catalogue(connection)
+        wanted = expected()
+        schema = tuple(f"{_difference(name, live, wanted)} on {name}" for name in differences(live, wanted))
+        return role + schema
+
+
+def _difference(name: str, live: Mapping[str, str], wanted: Mapping[str, str]) -> str:
+    """SCHEMA_OBJECT_ADDED, SCHEMA_OBJECT_MISSING or SCHEMA_OBJECT_CHANGED."""
+    if name not in wanted:
+        return "SCHEMA_OBJECT_ADDED"
+    return "SCHEMA_OBJECT_MISSING" if name not in live else "SCHEMA_OBJECT_CHANGED"

@@ -70,7 +70,8 @@ def test_disabling_any_evidence_trigger_turns_only_the_evidence_control_false(
         )
     broken = inspector.controls()
     assert [control for control, holds in broken.items() if not holds] == [
-        DatabaseControl.EVIDENCE_TABLES_IMMUTABILITY_TRIGGERS_ENABLED
+        DatabaseControl.EVIDENCE_TABLES_IMMUTABILITY_TRIGGERS_ENABLED,
+        DatabaseControl.SCHEMA_MATCHES_MANIFEST,  # a disabled trigger differs from the manifest too
     ]
     with bank_db.connect("owner") as connection:
         connection.execute(sql.SQL("ALTER TABLE {} ENABLE TRIGGER {}").format(sql.Identifier(table), trigger))

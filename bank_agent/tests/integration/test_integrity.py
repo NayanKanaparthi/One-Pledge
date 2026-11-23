@@ -128,7 +128,8 @@ def test_a_control_switched_off_is_shown_live_and_back_on_when_restored(bank: Ba
     assert report.database_controls.status is SectionStatus.BROKEN
     assert controls[DatabaseControl.LOANS_RAW_IMMUTABILITY_TRIGGER_ENABLED] is False
     assert [name for name, ok in controls.items() if not ok] == [
-        DatabaseControl.LOANS_RAW_IMMUTABILITY_TRIGGER_ENABLED
+        DatabaseControl.LOANS_RAW_IMMUTABILITY_TRIGGER_ENABLED,
+        DatabaseControl.SCHEMA_MATCHES_MANIFEST,  # the trigger's state is part of the schema manifest
     ]
     assert bank.agent.report().database_controls.status is SectionStatus.OK
     bank.run("UPDATE alembic_version SET version_num = '0003_grants'")

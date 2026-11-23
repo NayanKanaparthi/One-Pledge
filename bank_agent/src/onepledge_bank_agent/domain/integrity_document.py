@@ -277,10 +277,10 @@ def all_findings(report: IntegrityReport) -> tuple[list[Finding], list[Finding]]
         for name, ok in report.database_controls.controls
         if not ok
     ]
-    open_findings += [
-        Finding("database_controls", "role", violation.split(" on ", 1)[-1], violation.split(" on ", 1)[0])
-        for violation in report.database_controls.violations
-    ]
+    for violation in report.database_controls.violations:
+        code, _, name = violation.partition(" on ")
+        subject = "schema" if code.startswith("SCHEMA_OBJECT_") else "role"
+        open_findings.append(Finding("database_controls", subject, name, code))
     for m in report.registry_messages.messages:
         finding = Finding("registry_messages", "message", str(m.quarantine_id), m.reason, m.message_type)
         (open_findings if m.open else recovered).append(finding)

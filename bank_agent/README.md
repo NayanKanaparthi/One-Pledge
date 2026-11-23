@@ -104,7 +104,10 @@ What a reviewer can check, and where:
   the audit log still ends where the last verification saw it (SPEC_DECISIONS 89). The
   database controls compare every trigger with a guard manifest of its table, events,
   function and function source hash (`infrastructure/db/guard_manifest.py`,
-  SPEC_DECISIONS 90). The halt rule
+  SPEC_DECISIONS 90), and `SCHEMA_MATCHES_MANIFEST` compares the whole schema (tables,
+  columns, constraints, indexes, triggers, functions, rules, policies and every other object)
+  with `infrastructure/db/schema_manifest.json`, naming every object that differs
+  (SPEC_DECISIONS 105); a test keeps the file equal to a database migrated to head. The halt rule
   (`HALT_ON_REGISTRY_INTEGRITY_FAILURE`, SPEC_DECISIONS 56) stops every submission,
   resubmission and case position while a checkpoint failed, a request has a failed
   certificate and no verified one, a CHECKPOINT message is quarantined, or the bank is

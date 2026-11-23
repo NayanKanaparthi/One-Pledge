@@ -64,4 +64,5 @@ packages = [
 
 [tool.setuptools.package-data]
 onepledge_bank_agent = ["py.typed"]
+"onepledge_bank_agent.infrastructure.db" = ["schema_manifest.json"]
 onepledge_bank_agent_migrations = ["script.py.mako"]

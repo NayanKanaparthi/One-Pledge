@@ -85,4 +85,6 @@ def test_a_replaced_or_narrowed_guard_turns_only_its_controls_false(
     assert false_controls(inspector) == set(), "every control holds on a fresh database"
     with bank_db.connect("admin") as connection:
         connection.execute(statement)
-    assert false_controls(inspector) == expected
+    assert false_controls(inspector) == {*expected, DatabaseControl.SCHEMA_MATCHES_MANIFEST}, (
+        "its own controls, and the schema manifest (SPEC_DECISIONS 105)"
+    )
