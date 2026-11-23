@@ -18,6 +18,7 @@ from sqlalchemy import Connection, text
 
 from onepledge_outside_records.domain.errors import OperatorError
 from onepledge_outside_records.infrastructure.db import role_points
+from onepledge_outside_records.infrastructure.db.role_points import ordered
 
 SCHEMA = "public"
 # Table of the schema to the privileges the app role holds on it (SPEC 6.1 as amended by
@@ -130,7 +131,6 @@ UNION ALL SELECT 'schema ' || n.nspname FROM pg_namespace AS n
     WHERE n.nspowner = current_user::regrole
 UNION ALL SELECT 'database ' || d.datname FROM pg_database AS d
     WHERE d.datname = current_database() AND d.datdba = current_user::regrole
-ORDER BY 1
 """)
 _DATABASE = text(
     "SELECT has_database_privilege(current_user, current_database(), 'CREATE'), "
@@ -162,7 +162,6 @@ WHERE c.relkind = 'S' AND n.nspname !~ '^pg_' AND n.nspname <> 'information_sche
     AND (has_sequence_privilege(current_user, c.oid, 'USAGE')
         OR has_sequence_privilege(current_user, c.oid, 'SELECT')
         OR has_sequence_privilege(current_user, c.oid, 'UPDATE'))
-ORDER BY 1
 """)
 
 
@@ -178,12 +177,12 @@ def inspect_role(connection: Connection) -> tuple[RoleViolation, ...]:
         for name, held in zip(ATTRIBUTES, attributes, strict=True)
         if held
     )
-    found.extend(RoleViolation(Violation.ROLE_HAS_MEMBERSHIP, r[0]) for r in connection.execute(_MEMBERSHIPS))
-    found.extend(RoleViolation(Violation.ROLE_OWNS_OBJECT, r[0]) for r in connection.execute(_OWNED))
+    found.extend(RoleViolation(Violation.ROLE_HAS_MEMBERSHIP, n) for n in ordered(connection, _MEMBERSHIPS))
+    found.extend(RoleViolation(Violation.ROLE_OWNS_OBJECT, n) for n in ordered(connection, _OWNED))
     found.extend(_database_and_schemas(connection))
     found.extend(_coded(role_points.column_privileges(connection)))
     found.extend(_tables(connection))
-    found.extend(RoleViolation(Violation.SEQUENCE_PRIVILEGE, r[0]) for r in connection.execute(_SEQUENCES))
+    found.extend(RoleViolation(Violation.SEQUENCE_PRIVILEGE, n) for n in ordered(connection, _SEQUENCES))
     for point in (
         role_points.settings,
         role_points.functions,
@@ -254,7 +253,6 @@ def refusal(violations: tuple[RoleViolation, ...]) -> OperatorError:
 _FOREIGN_TABLES = text("""
 SELECT c.relname FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace
 WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND c.relowner <> current_user::regrole
-ORDER BY 1
 """)
 _OWNS_DATABASE = text("""
 SELECT EXISTS (

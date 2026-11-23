@@ -169,7 +169,11 @@ Text is compared and ordered by code point whatever the database's default colla
 (SPEC_DECISIONS 133): migration 0005 declares every text-typed column `COLLATE "C"` (the
 models say the same, and a test reads the catalogue for any other collation), which under
 UTF8 is the code point order Python uses and is deterministic, so VIN lookups, the unique
-client names and key hashes, and the pattern checks behave the same on any server.
+client names and key hashes, and the pattern checks behave the same on any server. No
+query orders or compares a text expression under a default collation: the role inspection
+sorts its findings in Python by code point, a comparison of a function result states
+`COLLATE "C"`, and no SQL maps case; `tests/test_sql_collation.py` reads every SQL text of
+the package and its migrations and fails on any other use.
 
 Every command exits 0 on
 success and 1 with one sentence on stderr when something is wrong (PostgreSQL not

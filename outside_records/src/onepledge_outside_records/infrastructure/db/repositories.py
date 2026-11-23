@@ -96,7 +96,9 @@ _MISSING_TABLES = text(
 )
 
 
-_ENCODING = text("SELECT current_setting('server_encoding') = 'UTF8', current_setting('server_encoding')")
+_ENCODING = text(
+    "SELECT current_setting('server_encoding') COLLATE \"C\" = 'UTF8', current_setting('server_encoding')"
+)
 _REVISION_READABLE = text("SELECT has_table_privilege(current_user, 'public.alembic_version', 'SELECT')")
 _REVISION = text("SELECT (SELECT version_num FROM alembic_version LIMIT 1), current_database()")
 
