@@ -100,7 +100,9 @@ def _migrate(
     arguments: argparse.Namespace, settings: AdminSettings, composition: AdminComposition, output: Output
 ) -> None:
     runner = composition.migrations()
-    runner.precondition(composition.owner_guard().require_owner)
+    guard = composition.owner_guard()
+    runner.precondition(lambda: guard.require_app_role(settings.require_app_role()))
+    runner.precondition(guard.require_owner)
     before = runner.current_revision()
     applied = runner.upgrade()
     after = runner.current_revision()

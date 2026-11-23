@@ -38,6 +38,7 @@ from bank_testkit.programs import run_program, split_stderr, unwrap
 from onepledge_bank_agent.domain.enums import TapeKind
 from onepledge_bank_agent.infrastructure.db.migrations import head_revision
 from onepledge_bank_agent.infrastructure.db.provisioning import DatabaseProvisioner
+from onepledge_bank_agent.infrastructure.db.role_check import ADVICE, Violation
 from onepledge_bank_agent.infrastructure.http.base import HttpTimeouts
 from onepledge_bank_agent.interface.cli.main import main
 from onepledge_bank_agent.interface.cli.output import Output
@@ -433,7 +434,7 @@ def test_the_worker_never_needs_an_owner_credential(
 
 def role_sentence(code: str) -> str:
     """The refusal of SPEC_DECISIONS 72: the variable and the first violation code."""
-    return f"The role of DATABASE_URL is not least-privilege ({code}); use the app role."
+    return f"The role of DATABASE_URL is not least-privilege ({code}); {ADVICE[Violation(code)]}."
 
 
 def test_the_worker_refuses_to_start_as_the_owner_role(
@@ -460,7 +461,7 @@ def test_the_worker_refuses_to_start_as_the_owner_role(
         ("GRANT CREATE ON SCHEMA public TO {role}", "ROLE_HAS_SCHEMA_PRIVILEGE"),
         ("GRANT UPDATE ON registry_messages_quarantined TO {role}", "TABLE_PRIVILEGE_EXTRA"),
         ("GRANT UPDATE ON certificates TO {role}", "TABLE_PRIVILEGE_EXTRA"),
-        ("GRANT UPDATE (detail) ON audit_log TO {role}", "TABLE_PRIVILEGE_EXTRA"),
+        ("GRANT UPDATE (detail) ON audit_log TO {role}", "COLUMN_PRIVILEGE"),
         ("GRANT {owner} TO {role}", "ROLE_HAS_MEMBERSHIP"),
     ],
 )

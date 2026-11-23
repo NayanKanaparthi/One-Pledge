@@ -181,12 +181,21 @@ def test_the_worker_table_fits_names_the_six_failure_facts_and_shows_full_ids_wi
     assert str(submission) in wide.getvalue() and str(submission) not in narrow.getvalue()
 
 
-def test_the_least_privilege_refusal_is_one_line_for_every_violation_code() -> None:
-    """SPEC_DECISIONS 72: "refuse with one line naming DATABASE_URL and the first violation code"."""
+def test_the_least_privilege_refusal_is_one_sentence_with_the_advice_for_every_violation_code() -> None:
+    """SPEC_DECISIONS 72 and 103: DATABASE_URL, the first violation code and the advice that fits it, from one
+    table; at most 100 columns a line once wrapped."""
+    advice = {
+        Violation.TABLE_PRIVILEGE_MISSING: "run db migrate as the owner",
+        Violation.TABLE_NOT_IN_MATRIX: "run db migrate as the owner",
+        Violation.ROLE_HAS_SETTING: "remove the role's settings",
+        Violation.PARAMETER_PRIVILEGE: "remove the role's settings",
+        Violation.TRIGGERS_DISABLED_FOR_SESSION: "remove the role's settings",
+    }
     for code in Violation:
         sentence = refusal_sentence(RoleViolation(code, "public.audit_log"))
-        assert len(sentence) <= WIDTH and fit(sentence) == sentence, code
+        assert all(len(line) <= WIDTH for line in fit(sentence).splitlines()), code
         assert "DATABASE_URL" in sentence and code.value in sentence and "public.audit_log" not in sentence
+        assert sentence.endswith(f"{advice.get(code, 'use the app role as provisioned')}."), code
 
 
 @pytest.mark.parametrize(

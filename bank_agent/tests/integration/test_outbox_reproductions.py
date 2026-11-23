@@ -304,6 +304,9 @@ def test_y15_a_handler_write_refused_by_a_trigger_is_poison_refused_by_database_
             "CREATE TRIGGER optest_refuse_alert BEFORE INSERT ON alerts "
             "FOR EACH ROW EXECUTE FUNCTION optest_refuse_alert()"
         )
+        connection.execute(
+            "REVOKE EXECUTE ON FUNCTION optest_refuse_alert() FROM PUBLIC"
+        )  # as a migration would
     try:
         refused = alert(str(uuid.uuid4()), bank.asset_token())
         bank.doubles.inject_message("HARBOR", "ALERT", refused)

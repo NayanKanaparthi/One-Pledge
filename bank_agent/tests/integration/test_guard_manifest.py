@@ -72,7 +72,8 @@ REPLACEMENTS = {
         "LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$; DROP TRIGGER alerts_guard ON alerts; "
         "CREATE TRIGGER alerts_guard BEFORE INSERT OR UPDATE ON alerts FOR EACH ROW "
         "EXECUTE FUNCTION shadow.onepledge_alerts_guard()",
-        {DatabaseControl.ALERT_STATE_GUARD_TRIGGER_ENABLED},
+        # the new function is executable by PUBLIC, which decision 103 point 8 refuses as well
+        {DatabaseControl.ALERT_STATE_GUARD_TRIGGER_ENABLED, DatabaseControl.APP_ROLE_GRANTS_EXACT},
     ),
 }
 

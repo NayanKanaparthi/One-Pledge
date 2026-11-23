@@ -10,6 +10,7 @@ from __future__ import annotations
 from alembic import context
 from sqlalchemy import create_engine
 
+from onepledge_bank_agent.infrastructure.db.connection_settings import connect_options
 from onepledge_bank_agent.infrastructure.db.engines import sqlalchemy_url
 from onepledge_bank_agent.infrastructure.db.models import Base
 from onepledge_bank_agent.infrastructure.settings import load_admin_settings
@@ -23,7 +24,7 @@ def run_migrations() -> None:
         settings = load_admin_settings()
         url = sqlalchemy_url(settings.require_migration_url())
         config.attributes["app_role"] = settings.require_app_role()
-    engine = create_engine(url, hide_parameters=True)
+    engine = create_engine(url, hide_parameters=True, connect_args={"options": connect_options()})
     try:
         with engine.connect() as connection:
             context.configure(

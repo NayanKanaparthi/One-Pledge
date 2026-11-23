@@ -181,7 +181,7 @@ class RuntimeComposition(_Resources):
 
     def role_guard(self) -> RuntimeRoleGuard:
         """The check that the runtime role holds the app role's grants and nothing more."""
-        return RuntimeRoleGuard(self._engines.engine(self._settings.require_database_url()))
+        return RuntimeRoleGuard(self._engines.engine(self._settings.require_database_url(), inspecting=True))
 
     def ingest_tape(self) -> IngestTape:
         """Intake as the app role."""
@@ -331,5 +331,5 @@ class RuntimeComposition(_Resources):
 
     def _controls(self) -> SqlDatabaseControlInspector:
         return SqlDatabaseControlInspector(
-            self._engines.engine(self._settings.require_database_url()), head_revision()
+            self._engines.engine(self._settings.require_database_url(), inspecting=True), head_revision()
         )

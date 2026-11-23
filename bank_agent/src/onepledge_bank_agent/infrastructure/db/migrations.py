@@ -24,6 +24,7 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 
 from onepledge_bank_agent.application.events import LogEvent
 from onepledge_bank_agent.application.ports import OperationalLog
+from onepledge_bank_agent.infrastructure.db.connection_settings import connect_options
 from onepledge_bank_agent.infrastructure.db.engines import sqlalchemy_url
 from onepledge_bank_agent.infrastructure.db.failures import (
     connection_failed,
@@ -74,7 +75,7 @@ class MigrationRunner:
 
     def current_revision(self) -> str | None:
         """The revision the database is at, read as the owner role; None before the first migration."""
-        engine = create_engine(self._url, hide_parameters=True)
+        engine = create_engine(self._url, hide_parameters=True, connect_args={"options": connect_options()})
         try:
             with engine.connect() as connection:
                 return MigrationContext.configure(connection).get_current_revision()

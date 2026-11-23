@@ -225,6 +225,12 @@ SHARED = {
     ("PORT", "70000"): "Configuration error: PORT is out of range (1 to 65,535).",
     ("LOG_LEVEL", "LOUD"): "Configuration error: LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR or CRITICAL.",
     ("BIND_HOST", "localhost"): BIND_SENTENCE,
+    ("DATABASE_URL", APP_URL + "?options=-c%20session_replication_role%3Dreplica"): (
+        "Configuration error: DATABASE_URL must not carry query parameters; remove the part from ? on."
+    ),
+    ("DATABASE_URL", APP_URL + "?"): (
+        "Configuration error: DATABASE_URL must not carry query parameters; remove the part from ? on."
+    ),
 }
 """The sentences every service words the same way (SPEC_DECISIONS 78), as outside records and the doubles."""
 
@@ -324,3 +330,13 @@ def test_two_outbound_api_keys_that_are_equal_are_refused(first: str, second: st
     assert raised.value.sentence == f"Configuration error: {second} must differ from {first}."
     assert keys[first] not in raised.value.sentence
     assert RuntimeSettings.from_env({**IDENTITY, **{n: f"key-{i}" for i, n in enumerate(OUTBOUND_KEYS)}})
+
+
+def test_the_owner_url_may_not_carry_query_parameters_either() -> None:
+    """SPEC_DECISIONS 103: the bank agent sets its own session parameters; a URL cannot change them."""
+    with pytest.raises(OperatorError) as raised:
+        AdminSettings.from_env({**IDENTITY, "MIGRATION_DATABASE_URL": OWNER_URL + "?sslmode=disable"})
+    assert raised.value.sentence == (
+        "Configuration error: MIGRATION_DATABASE_URL must not carry query parameters; "
+        "remove the part from ? on."
+    )

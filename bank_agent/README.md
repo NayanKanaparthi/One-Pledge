@@ -75,14 +75,24 @@ What a reviewer can check, and where:
 - **The process refuses more power than it needs.** Every command that connects with
   `DATABASE_URL` except `integrity report` (`worker`, `registry sync`, `integrity verify`)
   inspects the connected role at startup with `inspect_role()` and exits 1 with one line
-  naming the variable and the first violation unless the role is least-privilege by the
-  six points of SPEC_DECISIONS 72: no superuser and no `CREATEDB`, `CREATEROLE`,
-  `REPLICATION` or `BYPASSRLS`; a member of no role; owner of nothing; `CONNECT` and
-  schema `USAGE` only; on every table exactly the privileges of the grant matrix, counting
-  grants to `PUBLIC` and column level grants; no sequence privilege. `integrity report`
-  shows the same violations under the control `APP_ROLE_GRANTS_EXACT` instead. `db
-  migrate` and `seed-reference` refuse a `MIGRATION_DATABASE_URL` role that does not own
-  the tables.
+  naming the variable, the first violation and the advice for it unless the role is
+  least-privilege by the ten points of SPEC_DECISIONS 72 and 103: no superuser and no
+  `CREATEDB`, `CREATEROLE`, `REPLICATION` or `BYPASSRLS`; a member of no role; owner of
+  nothing; `CONNECT` and schema `USAGE` only; no column privilege, and on every table exactly
+  the privileges of the grant matrix at table level, counting grants to `PUBLIC`; no sequence
+  privilege; no role setting, no parameter privilege, no database-wide
+  `session_replication_role`, and a session that fires triggers; no `SECURITY DEFINER`
+  function and `EXECUTE` on no function of a user schema (migration 0015 takes it from
+  `PUBLIC`); no default privilege; nothing `WITH GRANT OPTION`. `integrity report` shows the
+  same violations under `TRIGGERS_FIRE_FOR_APP_ROLE` (point 7) and `APP_ROLE_GRANTS_EXACT`
+  (every other point) instead. Every connection is opened with the bank agent's own
+  `search_path`, `statement_timeout`, `lock_timeout` and `idle_in_transaction_session_timeout`
+  (`infrastructure/db/connection_settings.py`), and a new pooled connection whose session would
+  not fire triggers is refused; `DATABASE_URL` and `MIGRATION_DATABASE_URL` may not carry query
+  parameters. `db migrate` and `seed-reference` refuse a `MIGRATION_DATABASE_URL` role that does
+  not own the database ("... is not the owner of the database; use the owner role.") or a
+  schema with a table another role owns ("... the schema was changed outside db migrate.");
+  `db migrate` also refuses a `DB_APP_ROLE` that is not `{database}_app` of that database.
 - **Nothing is stored that cannot be read back.** A value another party supplies is checked
   against one range before it is stored (SPEC_DECISIONS 100, `domain/storable.py`): a
   timestamp from 2000-01-01T00:00:00Z up to 2100, a date from 2000 to 2099, an integer inside
@@ -153,7 +163,8 @@ bank_agent/
                        0013_outbox_ledger.py (registry_outbox_messages and
                        registry_outbox_state replace registry_outbox_attempts: 21
                        tables, 22 with alembic_version), 0014_no_delete.py (no row is
-                       deleted; answered requests are frozen)
+                       deleted; answered requests are frozen), 0015_function_privileges.py
+                       (no function executable by PUBLIC)
   src/onepledge_bank_agent/
     domain/            values (Vin, Money, Lei, ...), enums, errors (one DomainError tree and
                        the fixed message table), tape and loan state machines, alert,
@@ -275,7 +286,7 @@ error, and a flag takes no value.
   tape ended FAILED during the run; otherwise it lists every problem (`problems`, the first
   also as `error`) and exits 1.
 - `integrity report` and `integrity verify` print the seven sections with their facts,
-  then under "Open failures" every finding that makes a section BROKEN (the thirteen
+  then under "Open failures" every finding that makes a section BROKEN (the fifteen
   database controls and the role violations among them) and under "Recovered (evidence
   kept)" the failures a later proof recovered; the text and the JSON form walk the same
   lists (SPEC_DECISIONS 88). With `--json` the document is the `IntegrityReport` of
@@ -375,7 +386,7 @@ records and the worker output carry the same keys. Every failure code except
 | `BANK_NAME` | `worker`, `registry sync`, `integrity report`, `integrity verify` | The bank's display name, 1 to 100 printable ASCII characters. Required by every runtime command. |
 | `DATABASE_URL` | `db provision`, `db status`, `worker`, `registry sync`, `integrity report`, `integrity verify` | `postgresql://{db}_app:PASSWORD@HOST:PORT/{db}`, the app role. |
 | `MIGRATION_DATABASE_URL` | `db provision`, `db migrate`, `seed-reference` | `postgresql://{db}_owner:PASSWORD@HOST:PORT/{db}`, the owner role. Never read by the worker. |
-| `DB_APP_ROLE` | `db migrate` | The role that receives the grants (`{db}_app`). |
+| `DB_APP_ROLE` | `db migrate` | The role that receives the grants: exactly `{db}_app` of the database of `MIGRATION_DATABASE_URL`, never its owner (SPEC_DECISIONS 103). |
 | `PG_ADMIN_URL` | `db provision` | Superuser URL. Provisioning only. |
 | `OUTSIDE_RECORDS_URL`, `OUTSIDE_RECORDS_API_KEY` | `worker` | The outside records service and this bank's key. |
 | `REGISTRY_URL`, `REGISTRY_API_KEY`, `REGISTRY_MEMBER_ID` | `worker`, `registry sync`, `integrity verify` | The registry, this bank's key and its member id. |

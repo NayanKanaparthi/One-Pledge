@@ -4,11 +4,12 @@ Reads `pg_trigger`, `pg_proc` and `alembic_version` as the role this process con
 which for every runtime process is the app role. A trigger control is true only when each
 trigger it covers is installed exactly as the guard manifest says (`guard_manifest.py`:
 table, `tgtype`, function and the hash of its source) and enabled (SPEC_DECISIONS 90). The
-five role controls come from the one inspection of
-SPEC_DECISIONS 72 (`role_check.inspect_role`), table and column level, so the report sees
-exactly what the startup guard sees. `SCHEMA_MATCHES_MANIFEST` compares the whole catalogue of
-the schema with the schema manifest (`schema_manifest.py`, SPEC_DECISIONS 105); the objects
-that differ are listed with the violations.
+six role controls come from the one inspection of SPEC_DECISIONS 72 and 103
+(`role_check.inspect_role`), so the report sees exactly what the startup guard sees:
+`TRIGGERS_FIRE_FOR_APP_ROLE` is point 7 (no role setting, no parameter privilege, a session that
+fires triggers), `APP_ROLE_GRANTS_EXACT` every other point. `SCHEMA_MATCHES_MANIFEST` compares
+the whole catalogue of the schema with the schema manifest (`schema_manifest.py`,
+SPEC_DECISIONS 105); the objects that differ are listed with the violations.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from sqlalchemy import Engine, text
 
 from onepledge_bank_agent.domain.integrity import DatabaseControl
 from onepledge_bank_agent.infrastructure.db.guard_manifest import guards_named, in_force, installed_triggers
-from onepledge_bank_agent.infrastructure.db.role_check import SCHEMA, Violation, inspect_role
+from onepledge_bank_agent.infrastructure.db.role_check import SCHEMA, SETTING_CODES, Violation, inspect_role
 from onepledge_bank_agent.infrastructure.db.schema_manifest import catalogue, differences, digest, expected
 
 INSERT_ONLY_EVIDENCE = (
@@ -65,9 +66,16 @@ class SqlDatabaseControlInspector:
             return in_force(triggers, guards_named(*names))
 
         def holds(table: str, privilege: str) -> bool:
-            extra = f"{SCHEMA}.{table} {privilege}"
+            """The role holds the privilege on the table neither at table level nor on any column."""
+            extra, column = f"{SCHEMA}.{table} {privilege}", f"{SCHEMA}.{table}."
             return not any(
-                v.code is Violation.TABLE_PRIVILEGE_EXTRA and v.object_name == extra for v in violations
+                (v.code is Violation.TABLE_PRIVILEGE_EXTRA and v.object_name == extra)
+                or (
+                    v.code is Violation.COLUMN_PRIVILEGE
+                    and v.object_name.startswith(column)
+                    and v.object_name.endswith(f" {privilege}")
+                )
+                for v in violations
             )
 
         return {
@@ -88,7 +96,8 @@ class SqlDatabaseControlInspector:
             DatabaseControl.APP_ROLE_IS_NOT_OWNER_OR_SUPERUSER: not any(
                 v.code in IDENTITY for v in violations
             ),
-            DatabaseControl.APP_ROLE_GRANTS_EXACT: not violations,
+            DatabaseControl.APP_ROLE_GRANTS_EXACT: not any(v.code not in SETTING_CODES for v in violations),
+            DatabaseControl.TRIGGERS_FIRE_FOR_APP_ROLE: not any(v.code in SETTING_CODES for v in violations),
             DatabaseControl.SCHEMA_AT_MIGRATION_HEAD: revision == self._head,
             DatabaseControl.SCHEMA_MATCHES_MANIFEST: digest(live) == digest(expected()),
         }

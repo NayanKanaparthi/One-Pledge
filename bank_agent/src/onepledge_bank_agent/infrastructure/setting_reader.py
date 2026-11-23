@@ -43,6 +43,7 @@ BIND_HOST_RULE = "an IPv4 or IPv6 address; set it to 127.0.0.1 or 0.0.0.0"
 WHOLE_NUMBER_RULE = "a whole number written with the digits 0 to 9"
 LOG_LEVEL_RULE = "DEBUG, INFO, WARNING, ERROR or CRITICAL"
 DATABASE_URL_RULE = "a postgresql://USER:PASSWORD@HOST:PORT/DATABASE URL"
+ROLE_URLS = frozenset({"DATABASE_URL", "MIGRATION_DATABASE_URL"})
 UNPLAIN_PROBLEM = "contains whitespace other than a space, or a control character"
 """The rules every service words the same way, so the same setting has the same sentence everywhere
 (SPEC_DECISIONS 78): a number, PORT, LOG_LEVEL, BIND_HOST, a database URL, a value that is not plain."""
@@ -113,6 +114,12 @@ class SettingReader:
             raise invalid(name, DATABASE_URL_RULE) from None
         if url.drivername not in _DATABASE_SCHEMES or not port_ok or (needs_database and not url.database):
             raise invalid(name, DATABASE_URL_RULE)
+        if name in ROLE_URLS and (url.query or "?" in secret.get_secret_value()):
+            # The bank agent sets its own session parameters; a URL may not change them (SPEC_DECISIONS 103).
+            raise OperatorError(
+                f"Configuration error: {name} must not carry query parameters; remove the part from ? on.",
+                CONFIGURATION_ERROR,
+            )
         return secret
 
     def secret(self, name: str) -> SecretStr | None:

@@ -1,10 +1,12 @@
-"""The one definition of a least-privilege app role, and the owner check (SPEC_DECISIONS 72).
+"""The one definition of a least-privilege app role, and the owner check (SPEC_DECISIONS 72, 103).
 
 `GRANT_MATRIX` is the only statement of what the app role may hold on each table of
 `public`: the grants migrations issue it (`apply_grants`), `inspect_role` compares the
 connected role with it for the startup guard and for the integrity report, and a test
-asserts it equals SPEC 12.2 as amended. `inspect_role` evaluates the six points of
-decision 72 and returns every violation, in point order. There is no second query.
+asserts it equals SPEC 12.2 as amended. `inspect_role` evaluates the ten points of
+decisions 72 and 103 and returns every violation, in point order. There is no second query.
+Privileges are compared at table level only: a privilege held on a column is
+`COLUMN_PRIVILEGE`, never "held" (103.5). Each code has its advice (`ADVICE`, one table).
 """
 
 from __future__ import annotations
@@ -15,6 +17,8 @@ from enum import StrEnum
 from types import MappingProxyType
 
 from sqlalchemy import Connection, text
+
+from onepledge_bank_agent.infrastructure.db import role_points
 
 SCHEMA = "public"
 READ = frozenset({"SELECT"})
@@ -33,10 +37,8 @@ GRANT_MATRIX: Mapping[str, frozenset[str]] = MappingProxyType(
     }
 )  # fmt: skip
 
-# Privileges that a column grant can give are held when the table or any column has them.
-COLUMN_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "REFERENCES")
-TABLE_ONLY_PRIVILEGES = ("DELETE", "TRUNCATE", "TRIGGER")
-PRIVILEGES = (*COLUMN_PRIVILEGES, *TABLE_ONLY_PRIVILEGES)
+# Compared at table level only (SPEC_DECISIONS 103.5).
+PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "REFERENCES", "DELETE", "TRUNCATE", "TRIGGER")
 ATTRIBUTES = ("CREATEDB", "CREATEROLE", "REPLICATION", "BYPASSRLS")
 
 
@@ -53,6 +55,34 @@ class Violation(StrEnum):
     TABLE_PRIVILEGE_MISSING = "TABLE_PRIVILEGE_MISSING"
     TABLE_NOT_IN_MATRIX = "TABLE_NOT_IN_MATRIX"
     SEQUENCE_PRIVILEGE = "SEQUENCE_PRIVILEGE"
+    COLUMN_PRIVILEGE = "COLUMN_PRIVILEGE"
+    ROLE_HAS_SETTING = "ROLE_HAS_SETTING"
+    PARAMETER_PRIVILEGE = "PARAMETER_PRIVILEGE"
+    TRIGGERS_DISABLED_FOR_SESSION = "TRIGGERS_DISABLED_FOR_SESSION"
+    SECURITY_DEFINER_FUNCTION = "SECURITY_DEFINER_FUNCTION"
+    FUNCTION_PRIVILEGE = "FUNCTION_PRIVILEGE"
+    DEFAULT_PRIVILEGE = "DEFAULT_PRIVILEGE"
+    GRANT_OPTION = "GRANT_OPTION"
+
+
+SETTING_CODES = frozenset(
+    {Violation.ROLE_HAS_SETTING, Violation.PARAMETER_PRIVILEGE, Violation.TRIGGERS_DISABLED_FOR_SESSION}
+)
+"""Point 7 of SPEC_DECISIONS 103: what `TRIGGERS_FIRE_FOR_APP_ROLE` requires; every other code is
+`APP_ROLE_GRANTS_EXACT`'s."""
+AS_PROVISIONED = "use the app role as provisioned"
+NOT_MIGRATED = "the database was not provisioned or migrated correctly; run db migrate as the owner"
+REMOVE_SETTINGS = "remove the role's settings"
+ADVICE: Mapping[Violation, str] = MappingProxyType(
+    {
+        **dict.fromkeys(Violation, AS_PROVISIONED),
+        Violation.TABLE_PRIVILEGE_MISSING: NOT_MIGRATED,
+        Violation.TABLE_NOT_IN_MATRIX: NOT_MIGRATED,
+        **dict.fromkeys(SETTING_CODES, REMOVE_SETTINGS),
+    }
+)
+"""The advice of the refusal for each code (SPEC_DECISIONS 103): an attribute, membership, ownership
+or extra privilege; a privilege the migrations should have given; a setting or a parameter."""
 
 
 @dataclass(frozen=True, order=True)
@@ -105,17 +135,13 @@ SELECT n.nspname, has_schema_privilege(current_user, n.oid, 'USAGE'),
 FROM pg_namespace AS n
 WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema' ORDER BY n.nspname
 """)
-# One column per privilege, in the order of COLUMN_PRIVILEGES then TABLE_ONLY_PRIVILEGES.
+# One column per privilege, in the order of PRIVILEGES; table level only.
 _TABLES = text("""
 SELECT c.relname,
-    (has_table_privilege(current_user, c.oid, 'SELECT')
-        OR has_any_column_privilege(current_user, c.oid, 'SELECT')),
-    (has_table_privilege(current_user, c.oid, 'INSERT')
-        OR has_any_column_privilege(current_user, c.oid, 'INSERT')),
-    (has_table_privilege(current_user, c.oid, 'UPDATE')
-        OR has_any_column_privilege(current_user, c.oid, 'UPDATE')),
-    (has_table_privilege(current_user, c.oid, 'REFERENCES')
-        OR has_any_column_privilege(current_user, c.oid, 'REFERENCES')),
+    has_table_privilege(current_user, c.oid, 'SELECT'),
+    has_table_privilege(current_user, c.oid, 'INSERT'),
+    has_table_privilege(current_user, c.oid, 'UPDATE'),
+    has_table_privilege(current_user, c.oid, 'REFERENCES'),
     has_table_privilege(current_user, c.oid, 'DELETE'),
     has_table_privilege(current_user, c.oid, 'TRUNCATE'),
     has_table_privilege(current_user, c.oid, 'TRIGGER')
@@ -134,7 +160,8 @@ ORDER BY 1
 
 
 def inspect_role(connection: Connection) -> tuple[RoleViolation, ...]:
-    """Every violation of the six points of SPEC_DECISIONS 72 by the connected role, in point order."""
+    """Every violation of the ten points of SPEC_DECISIONS 72 and 103 by the connected role, in point
+    order."""
     found: list[RoleViolation] = []
     superuser, *attributes = connection.execute(_ATTRIBUTES).one()
     if superuser:
@@ -147,9 +174,21 @@ def inspect_role(connection: Connection) -> tuple[RoleViolation, ...]:
     found.extend(RoleViolation(Violation.ROLE_HAS_MEMBERSHIP, r[0]) for r in connection.execute(_MEMBERSHIPS))
     found.extend(RoleViolation(Violation.ROLE_OWNS_OBJECT, r[0]) for r in connection.execute(_OWNED))
     found.extend(_database_and_schemas(connection))
+    found.extend(_coded(role_points.column_privileges(connection)))
     found.extend(_tables(connection))
     found.extend(RoleViolation(Violation.SEQUENCE_PRIVILEGE, r[0]) for r in connection.execute(_SEQUENCES))
+    for point in (
+        role_points.settings,
+        role_points.functions,
+        role_points.default_privileges,
+        role_points.grant_options,
+    ):
+        found.extend(_coded(point(connection)))
     return tuple(found)
+
+
+def _coded(pairs: list[tuple[str, str]]) -> list[RoleViolation]:
+    return [RoleViolation(Violation(code), object_name) for code, object_name in pairs]
 
 
 def _database_and_schemas(connection: Connection) -> list[RoleViolation]:
@@ -233,8 +272,16 @@ SELECT EXISTS (
 """)
 
 
-def owns_schema(connection: Connection) -> bool:
-    """The connected role owns every table of `public` and the database (the mirror check of decision 72)."""
-    foreign = connection.execute(_FOREIGN_TABLES).first()
+NOT_OWNER = "The role of MIGRATION_DATABASE_URL is not the owner of the database; use the owner role."
+FOREIGN_TABLE = "A table in the schema is owned by another role; the schema was changed outside db migrate."
+
+
+def owner_problem(connection: Connection) -> str | None:
+    """Why the connected role cannot act as the owner of the schema, or None (the mirror check of
+    decision 72, with the two sentences of decision 103): it must own the database, which db provision
+    gives the owner role, and every table of the schema, or the schema was changed outside db
+    migrate."""
     owns_database: bool = connection.execute(_OWNS_DATABASE).scalar_one()
-    return foreign is None and owns_database
+    if not owns_database:
+        return NOT_OWNER
+    return FOREIGN_TABLE if connection.execute(_FOREIGN_TABLES).first() is not None else None
