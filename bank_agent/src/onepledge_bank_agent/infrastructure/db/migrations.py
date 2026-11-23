@@ -187,6 +187,22 @@ class SchemaInspector:
             raise query_refused(sqlstate(error), "DATABASE_URL") from None
         return SchemaStatus(str(database), current, head_revision())
 
+    def require_tables(self) -> None:
+        """Refuse only a database that was never migrated, without reading anything else: what
+        `integrity report` needs before it can show a schema behind the code or a role that cannot read
+        the revision as false controls (SPEC_DECISIONS 78, 93 item 8)."""
+        try:
+            with self._engine.connect() as connection:
+                exists: object = connection.execute(
+                    text("SELECT to_regclass('public.alembic_version')")
+                ).scalar_one()
+        except OperationalError as error:
+            raise connection_failed(error, "DATABASE_URL") from None
+        except DBAPIError as error:
+            raise query_refused(sqlstate(error), "DATABASE_URL") from None
+        if exists is None:
+            raise tables_missing()
+
     def require_head(self) -> None:
         """Refuse to run against a database that is not migrated to the newest revision; a database that
         was never migrated says its tables are missing (SPEC_DECISIONS 78: the real cause)."""

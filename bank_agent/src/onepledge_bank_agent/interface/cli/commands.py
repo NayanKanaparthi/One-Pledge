@@ -287,12 +287,15 @@ def _runtime_command(
     arguments: argparse.Namespace, output: Output, collaborators: Collaborators | None
 ) -> int:
     """`registry sync`, `integrity report`, `integrity verify`: the app role, the runtime settings.
-    `integrity report` skips the schema and role checks, so it can show the controls that are false."""
+    `integrity report` skips the head and role checks, so it can show the controls that are false; it refuses
+    only a database that was never migrated."""
     settings = load_runtime_settings()
     _route_logs(settings.bank_code, settings.log_level, arguments.quiet)
     action = arguments.registry_command if arguments.command == "registry" else arguments.integrity_command
     with database_errors_as_operator_errors(), RuntimeComposition(settings, collaborators) as composition:
-        if action not in UNGUARDED:  # SPEC_DECISIONS 72, 93.8: integrity report must show a false control
+        if action in UNGUARDED:  # SPEC_DECISIONS 72, 93.8: integrity report must show a false control
+            composition.schema().require_tables()
+        else:
             composition.schema().require_head()
             composition.role_guard().require_least_privilege()
         return RUNTIME_HANDLERS[action](arguments, composition, output)

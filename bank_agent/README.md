@@ -232,13 +232,13 @@ abbreviated, so `--json` is always spelled in full.
   kept)" the failures a later proof recovered; the text and the JSON form walk the same
   lists (SPEC_DECISIONS 88). With `--json` the document is the `IntegrityReport` of
   `bank_agent.yaml` plus `"ok": true`. Both exit 0 when the status is OK and 1 when it is
-  BROKEN, after printing the whole report. `integrity report` skips the schema and role
-  checks, so it can show `SCHEMA_AT_MIGRATION_HEAD` or a role control false; a section
-  whose query the database refuses is `NOT_VERIFIED` with the SQLSTATE, and a role that
-  cannot read `alembic_version` shows `SCHEMA_AT_MIGRATION_HEAD` false beside the missing
-  grant. `integrity
-  verify` needs the registry: when it cannot be reached it prints
-  `DEPENDENCY_UNAVAILABLE` and stores nothing.
+  BROKEN, after printing the whole report. `integrity report` skips the head and role
+  checks, so it can show `SCHEMA_AT_MIGRATION_HEAD` or a role control false, and refuses
+  only a database that was never migrated ("The bank database tables are missing; run db
+  migrate first."); a section whose query the database refuses is `NOT_VERIFIED` with the
+  SQLSTATE, and a role that cannot read `alembic_version` shows `SCHEMA_AT_MIGRATION_HEAD`
+  false beside the missing grant. `integrity verify` needs the registry: when it cannot be
+  reached it prints `DEPENDENCY_UNAVAILABLE` and stores nothing.
 - A transient dependency failure prints `DEPENDENCY_UNAVAILABLE`; a refusal or an
   answer outside the contract prints `DEPENDENCY_REJECTED` (SPEC_DECISIONS 59); the halt
   rule prints `REGISTRY_INTEGRITY_BROKEN`. Each with its fixed message.
