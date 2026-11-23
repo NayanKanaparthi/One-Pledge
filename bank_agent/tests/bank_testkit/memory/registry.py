@@ -72,6 +72,7 @@ from onepledge_bank_agent.domain.registry_records import (
     SignedCertificate,
     SignedCheckpoint,
 )
+from onepledge_bank_agent.domain.storable import StorableTimestamp
 from onepledge_bank_agent.domain.values import KeyVersion
 from onepledge_bank_agent.infrastructure.http.registry_client import outbox_message
 
@@ -260,7 +261,11 @@ class ScriptedRegistry:
     def _signed(self, body: Mapping[str, JsonValue], key_id: str) -> SignedCertificate:
         message = canonical_json(dict(body))
         return SignedCertificate(
-            dict(body), hashlib.sha256(message).hexdigest(), sign(key_id, message), key_id, AT
+            dict(body),
+            hashlib.sha256(message).hexdigest(),
+            sign(key_id, message),
+            key_id,
+            StorableTimestamp(AT),
         )
 
     def certificate(self, certificate_id: uuid.UUID) -> SignedCertificate:
@@ -341,7 +346,7 @@ class ScriptedRegistry:
             signature = ("A" if signature[0] != "A" else "B") + signature[1:]
         seq, last, head_hash = body["checkpoint_seq"], body["last_event_seq"], body["head_hash"]
         assert isinstance(seq, int) and isinstance(last, int) and isinstance(head_hash, str)
-        signed = SignedCheckpoint(body, signature, signing_key, seq, last, head_hash, AT)
+        signed = SignedCheckpoint(body, signature, signing_key, seq, last, head_hash, StorableTimestamp(AT))
         self.deliver("CHECKPOINT", signed)
         return signed
 

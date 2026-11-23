@@ -18,12 +18,16 @@ from sqlalchemy.orm import Session, aliased
 
 from onepledge_bank_agent.domain.entities import Certificate
 from onepledge_bank_agent.domain.enums import CertificateFailure, TapeKind, TapeStatus
+from onepledge_bank_agent.domain.storable import StorableTimestamp
 from onepledge_bank_agent.domain.values import Sha256Hex
 from onepledge_bank_agent.infrastructure.db.models import (
     CertificateRow,
     RegistryRequestRow,
     TapeSubmissionRow,
 )
+from onepledge_bank_agent.infrastructure.db.readable import read_rows
+
+TABLE = "certificates"
 
 
 def _certificate(row: CertificateRow) -> Certificate:
@@ -34,7 +38,7 @@ def _certificate(row: CertificateRow) -> Certificate:
         registry_submission_id=row.registry_submission_id,
         kind=TapeKind(row.kind),
         as_of_seq=row.as_of_seq,
-        issued_at=row.issued_at,
+        issued_at=StorableTimestamp(row.issued_at),
         body=row.body,
         body_hash=Sha256Hex(row.body_hash),
         signature=row.signature,
@@ -63,7 +67,7 @@ class SqlCertificateRepository:
                 registry_submission_id=certificate.registry_submission_id,
                 kind=certificate.kind.value,
                 as_of_seq=certificate.as_of_seq,
-                issued_at=certificate.issued_at,
+                issued_at=certificate.issued_at.value,
                 body=dict(certificate.body),
                 body_hash=certificate.body_hash.value,
                 signature=certificate.signature,
@@ -87,14 +91,15 @@ class SqlCertificateRepository:
         statement = select(CertificateRow).where(
             CertificateRow.request_id.in_(wanted), CertificateRow.verified
         )
-        return {row.request_id: _certificate(row) for row in self._session.execute(statement).scalars()}
+        rows = read_rows(self._session, statement, CertificateRow.certificate_row_id, _certificate, TABLE)
+        return {row.request_id: row for row in rows}
 
     def all(self) -> list[Certificate]:
         """Every row in the order received."""
         statement = select(CertificateRow).order_by(
             CertificateRow.received_at, CertificateRow.certificate_row_id
         )
-        return [_certificate(row) for row in self._session.execute(statement).scalars()]
+        return read_rows(self._session, statement, CertificateRow.certificate_row_id, _certificate, TABLE)
 
     def expected(self) -> int:
         """Answered registry requests: each names the certificate it should have."""

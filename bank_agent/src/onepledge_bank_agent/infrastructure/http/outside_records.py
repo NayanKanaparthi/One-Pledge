@@ -10,10 +10,10 @@ answer outside the contract or about another vehicle is MALFORMED_RESPONSE.
 from __future__ import annotations
 
 from datetime import date
-from typing import Literal
+from typing import Annotated, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError
 
 from onepledge_bank_agent.domain.errors import OutsideRecordsProtocolError
 from onepledge_bank_agent.domain.outside_records import (
@@ -22,6 +22,7 @@ from onepledge_bank_agent.domain.outside_records import (
     PaymentWindow,
     TitleRecord,
 )
+from onepledge_bank_agent.domain.storable import BIGINT_MAX, EARLIEST_DATE, LATEST_DATE
 from onepledge_bank_agent.domain.vin import Vin
 from onepledge_bank_agent.infrastructure.http.answers import CanonicalUuid, plain_json
 from onepledge_bank_agent.infrastructure.http.base import RetryingHttpCaller
@@ -35,6 +36,17 @@ MAX_PAYMENTS_IN_WINDOW = 10_000
 VIN_PATTERN = r"^[A-HJ-NPR-Z0-9]{17}$"
 
 
+def _storable_date(value: date) -> date:
+    """A date inside the round-trip range of SPEC_DECISIONS 100 (2000-01-01 to 2099-12-31)."""
+    if not EARLIEST_DATE <= value <= LATEST_DATE:
+        raise ValueError("date")
+    return value
+
+
+type StoredDate = Annotated[date, AfterValidator(_storable_date)]
+type Cents = Annotated[int, Field(ge=1, le=BIGINT_MAX)]
+
+
 class _Lenient(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -44,28 +56,28 @@ class _TitleBody(_Lenient):
     state: str = Field(pattern=r"^[A-Z]{2}$")
     title_status: Literal["CLEAN", "SALVAGE", "JUNK"]
     lienholder_name: str | None = Field(max_length=200)
-    lien_recorded_on: date | None
+    lien_recorded_on: StoredDate | None
 
 
 class _PaymentBody(_Lenient):
     payment_id: CanonicalUuid
     vin: str = Field(pattern=VIN_PATTERN)
-    paid_on: date
-    amount_cents: int = Field(ge=1)
+    paid_on: StoredDate
+    amount_cents: Cents
     deposit_bank_code: str = Field(pattern=r"^[A-Z]{3,12}$")
 
 
 class _PaymentPageBody(_Lenient):
     items: list[_PaymentBody]
-    total: int = Field(ge=0)
+    total: int = Field(ge=0, le=BIGINT_MAX)
 
 
 class _ContractBody(_Lenient):
     contract_id: CanonicalUuid
     vin: str = Field(pattern=VIN_PATTERN)
     lender_name: str = Field(max_length=200)
-    amount_cents: int = Field(ge=1)
-    signed_on: date
+    amount_cents: Cents
+    signed_on: StoredDate
 
 
 class _ContractListBody(_Lenient):

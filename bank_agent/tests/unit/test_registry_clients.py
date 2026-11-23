@@ -31,6 +31,7 @@ from onepledge_bank_agent.domain.dependency_errors import (
 from onepledge_bank_agent.domain.enums import BankPosition, CaseStatus, FailureReason, TapeKind, TokenKind
 from onepledge_bank_agent.domain.errors import PipelineStageError, PositionAlreadyRecordedError
 from onepledge_bank_agent.domain.registry_records import QuarantinedPayload, RegistryItem, RegistrySubmission
+from onepledge_bank_agent.domain.storable import storable_json
 from onepledge_bank_agent.infrastructure.http.key_holder_client import KeyHolderHttpClient
 
 pytestmark = pytest.mark.unit
@@ -299,7 +300,7 @@ QUARANTINE_CASES = [
     (
         "a too large seq and a missing field",
         message("ALERT", {**{k: v for k, v in ALERT.items() if k != "role"}, "opened_seq": 2**63}),
-        "SCHEMA_MISMATCH",
+        "VALUE_OUT_OF_RANGE",  # SPEC_DECISIONS 100 first: a value the bank cannot store
     ),
     ("a position of 2 to the 63", {**message("CASE_UPDATE", CASE), "position": 2**63}, "VALUE_OUT_OF_RANGE"),
 ]
@@ -321,8 +322,11 @@ def test_a_known_message_outside_the_contract_is_quarantined_with_its_reason_and
     quarantined = received.payload
     assert (received.message_type, quarantined.reason.value) == (sent["type"], reason)
     assert len(quarantined.payload_sha256) == 64
-    if reason == "OVERSIZED":
-        assert quarantined.payload is None
+    as_text = any(word in case[0] for word in ("fraction", "exponent"))  # a float is kept as its text
+    if reason == "OVERSIZED" or (
+        not as_text and not storable_json(sent["payload"])
+    ):  # withheld (decision 100)
+        assert quarantined.payload is None and quarantined.withheld
     elif not any(word in case[0] for word in ("fraction", "exponent", "5000")):
         assert quarantined.payload == sent["payload"]
         assert quarantined.payload_sha256 == hashlib.sha256(canonical_json(sent["payload"])).hexdigest()

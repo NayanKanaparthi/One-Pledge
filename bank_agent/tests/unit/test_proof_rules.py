@@ -41,6 +41,7 @@ from onepledge_bank_agent.domain.enums import (
     TapeKind,
 )
 from onepledge_bank_agent.domain.registry_records import EventHeader, SignedCertificate, SignedCheckpoint
+from onepledge_bank_agent.domain.storable import StorableTimestamp
 from onepledge_bank_agent.domain.values import Sha256Hex
 from onepledge_bank_agent.infrastructure.crypto.signatures import Ed25519SignatureVerifier
 
@@ -81,7 +82,7 @@ def certificate_body(**changes: JsonValue) -> dict[str, JsonValue]:
 
 
 def signed_certificate(body: dict[str, JsonValue], key_id: str = KEY_ID) -> SignedCertificate:
-    return SignedCertificate(body, canonical_sha256(body), sign(body), key_id, AT)
+    return SignedCertificate(body, canonical_sha256(body), sign(body), key_id, StorableTimestamp(AT))
 
 
 EXPECTED = CertificateExpectation(
@@ -177,13 +178,14 @@ def signed_checkpoint(seq: int, last: int, head: str, key_id: str = KEY_ID) -> S
         "head_hash": head,
         "signed_at": "2026-11-20T12:00:00Z",
     }
-    return SignedCheckpoint(body, sign(body), key_id, seq, last, head, AT)
+    return SignedCheckpoint(body, sign(body), key_id, seq, last, head, StorableTimestamp(AT))
 
 
 def stored(checkpoint: SignedCheckpoint, failure: CheckpointFailure | None = None) -> Checkpoint:
     return Checkpoint(
         uuid.uuid4(), checkpoint.checkpoint_seq, checkpoint.last_event_seq, Sha256Hex(checkpoint.head_hash),
-        AT, checkpoint.signature, checkpoint.signing_key_id, checkpoint.body, AT, AT, failure, None,
+        StorableTimestamp(AT), checkpoint.signature, checkpoint.signing_key_id, checkpoint.body, AT, AT,
+        failure, None,
     )  # fmt: skip
 
 

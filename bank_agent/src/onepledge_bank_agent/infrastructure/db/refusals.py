@@ -4,12 +4,14 @@ A guard's SQLSTATE (`OP001` to `OP006`), a unique key, and every other integrity
 rule become `StoreRefusedError`; a lost or timed out connection, a serialisation failure
 and a deadlock become `StoreUnavailableError`; a missing table, column, function or
 privilege (class 42) becomes `StoreMismatchError`, a database that is not migrated or
-provisioned as the code expects, which the command line reports with its own sentence.
+provisioned as the code expects, which the command line reports with its own sentence. A
+value the driver cannot decode while reading (no SQLSTATE) becomes `StoreUnreadableError`
+(SPEC_DECISIONS 100).
 """
 
 from __future__ import annotations
 
-from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.exc import DataError, DBAPIError, OperationalError
 
 from onepledge_bank_agent.domain.errors import DomainError
 from onepledge_bank_agent.domain.store_errors import (
@@ -18,6 +20,7 @@ from onepledge_bank_agent.domain.store_errors import (
     StoreMismatchError,
     StoreRefusedError,
     StoreUnavailableError,
+    StoreUnreadableError,
 )
 
 UNIQUE_VIOLATION = "23505"
@@ -39,6 +42,8 @@ def sqlstate_of(error: DBAPIError) -> str | None:
 def store_error(error: DBAPIError) -> DomainError | None:
     """The store error a driver error stands for, or None when it is neither a refusal nor passing."""
     state = sqlstate_of(error)
+    if state is None and isinstance(error, DataError):  # the driver could not decode a stored value
+        return StoreUnreadableError(None)
     constraint = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
     if state is not None and (state in GUARD_CODES or state[:2] in REFUSAL_CLASSES):
         return StoreRefusedError(UNIQUE if state == UNIQUE_VIOLATION else state, state, constraint)

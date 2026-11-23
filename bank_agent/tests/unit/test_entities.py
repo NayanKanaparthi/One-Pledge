@@ -35,6 +35,7 @@ from onepledge_bank_agent.domain.errors import (
     InvalidVinError,
     TapeDuplicateError,
 )
+from onepledge_bank_agent.domain.storable import StorableTimestamp
 
 pytestmark = pytest.mark.unit
 
@@ -94,7 +95,7 @@ def test_registry_proofs_report_whether_they_verified() -> None:
         registry_submission_id=uuid.uuid4(),
         kind=TapeKind.PLEDGE,
         as_of_seq=7,
-        issued_at=AT,
+        issued_at=StorableTimestamp(AT),
         body={},
         body_hash=Sha256Hex("b" * 64),
         delivered_body_sha256=Sha256Hex("b" * 64),
@@ -111,7 +112,7 @@ def test_registry_proofs_report_whether_they_verified() -> None:
         checkpoint_seq=3,
         last_event_seq=40,
         head_hash=Sha256Hex("c" * 64),
-        signed_at=AT,
+        signed_at=StorableTimestamp(AT),
         signature="sig",
         signing_key_id="key",
         body={},

@@ -43,6 +43,7 @@ from onepledge_bank_agent.domain.registry_records import (
     RegistryAnswer,
 )
 from onepledge_bank_agent.domain.registry_results import StoredResult
+from onepledge_bank_agent.domain.storable import StorableTimestamp
 from onepledge_bank_agent.domain.tape_file import RawRow, raw_payload, row_sha256
 from onepledge_bank_agent.domain.values import (
     ALLOWED_CHECK_RESULTS,
@@ -190,7 +191,8 @@ def certificate(
     digest = delivered_sha256(delivered)
     assert digest is not None, "a canonical body"
     return Certificate(
-        uuid.uuid4(), certificate_id or uuid.uuid4(), request_id, uuid.uuid4(), TapeKind.PLEDGE, 7, T0,
+        uuid.uuid4(), certificate_id or uuid.uuid4(), request_id, uuid.uuid4(), TapeKind.PLEDGE, 7,
+        StorableTimestamp(T0),
         delivered, hex64("claimed"), signature, "registry-1", failure, received, received, Sha256Hex(digest),
     )  # fmt: skip
 
@@ -205,7 +207,8 @@ def checkpoint(
 ) -> Checkpoint:
     """A received checkpoint with the bank's verdict."""
     return Checkpoint(
-        uuid.uuid4(), seq, seq * 10, hex64((seq, head)), T0, signature, "registry-1", {"checkpoint_seq": seq},
+        uuid.uuid4(), seq, seq * 10, hex64((seq, head)), StorableTimestamp(T0), signature, "registry-1",
+        {"checkpoint_seq": seq},
         received, received, failure, 3 if failure is CheckpointFailure.CHAIN_BREAK else None,
     )  # fmt: skip
 

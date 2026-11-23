@@ -24,6 +24,7 @@ from onepledge_bank_agent.domain.enums import (
     TapeKind,
     TokenKind,
 )
+from onepledge_bank_agent.domain.storable import StorableTimestamp
 from onepledge_bank_agent.domain.values import KeyVersion
 
 
@@ -93,7 +94,7 @@ class SignedCertificate:
     body_hash: str
     signature: str
     signing_key_id: str
-    issued_at: datetime
+    issued_at: StorableTimestamp
 
 
 @dataclass(frozen=True)
@@ -106,7 +107,7 @@ class SignedCheckpoint:
     checkpoint_seq: int
     last_event_seq: int
     head_hash: str
-    signed_at: datetime
+    signed_at: StorableTimestamp
 
 
 @dataclass(frozen=True)

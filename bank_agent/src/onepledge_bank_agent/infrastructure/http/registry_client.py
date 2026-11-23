@@ -17,10 +17,12 @@ number too large) or SCHEMA_MISMATCH, so the sync keeps it as evidence and the o
 never blocked. A number with a fraction or an exponent, or an integer literal of more
 than 4000 digits, is kept as its text. An id or a base64 value that is not spelled
 canonically, or an object that holds a key twice, fails the schema (SPEC_DECISIONS 74, 75),
-for a message of an unknown type too. A known message holding text the bank cannot store
-(U+0000 or a surrogate code point, `holds_unstorable_text`) fails it as well, and its payload
-is kept as its hash alone. Only a message without a parseable id or a usable type, or a page
-that is not one bounded JSON document (`bounded_json`), is a protocol error of the page.
+for a message of an unknown type too. A known message holding a value the bank cannot store
+and read back (`storable_json`, SPEC_DECISIONS 100: a control character, a surrogate, text
+over 255 characters, an integer outside `bigint`, a timestamp outside 2000 to 2100) is
+VALUE_OUT_OF_RANGE, and a payload holding one is kept as its hash alone. Only a message
+without a parseable id or a usable type, or a page that is not one bounded JSON document
+(`bounded_json`), is a protocol error of the page.
 """
 
 from __future__ import annotations
@@ -54,9 +56,10 @@ from onepledge_bank_agent.domain.registry_records import (
     RegistrySubmission,
     SignedCertificate,
 )
+from onepledge_bank_agent.domain.storable import storable_json
 from onepledge_bank_agent.domain.values import KeyVersion
 from onepledge_bank_agent.infrastructure import bounded_json
-from onepledge_bank_agent.infrastructure.encodings import canonical_uuid, holds_unstorable_text
+from onepledge_bank_agent.infrastructure.encodings import canonical_uuid
 from onepledge_bank_agent.infrastructure.http import classification
 from onepledge_bank_agent.infrastructure.http.answers import error_code, json_object, parse, plain_json
 from onepledge_bank_agent.infrastructure.http.base import JsonBody, OutboundRequest, RetryingHttpCaller
@@ -69,6 +72,7 @@ from onepledge_bank_agent.infrastructure.http.registry_wire import (
     CheckpointMessageBody,
     EventPageBody,
     MessageEnvelope,
+    OutOfStorableRangeError,
     SignedCertificateBody,
     SubmissionResultBody,
 )
@@ -153,7 +157,7 @@ def _serialised(payload: JsonValue, unstorable: bool) -> bytes:
 def _evidence(payload: JsonValue) -> MessageEvidence:
     """The payload as received and its hash; only the hash when it exceeds 64 KiB or holds text the bank
     cannot store."""
-    unstorable = holds_unstorable_text(payload)
+    unstorable = not storable_json(payload)
     serialised = _serialised(payload, unstorable)
     oversized = len(serialised) > MAX_QUARANTINED_PAYLOAD_BYTES
     withheld = oversized or unstorable
@@ -164,14 +168,22 @@ def _rejection(model: type[BaseModel], value: object, evidence: MessageEvidence)
     """None when the message matches its contract in full and every number fits its column."""
     if evidence.oversized:
         return QuarantineReason.OVERSIZED
+    if not storable_json(value):  # SPEC_DECISIONS 100: a value the bank cannot store and read back
+        return QuarantineReason.VALUE_OUT_OF_RANGE
     try:
         model.model_validate_json(json.dumps(_validation_copy(value)))
     except ValidationError as error:
-        kinds = {str(detail["type"]) for detail in error.errors()}
-        return (
-            QuarantineReason.VALUE_OUT_OF_RANGE if kinds <= OUT_OF_RANGE else QuarantineReason.SCHEMA_MISMATCH
-        )
+        out_of_range = all(_out_of_range(detail) for detail in error.errors())
+        return QuarantineReason.VALUE_OUT_OF_RANGE if out_of_range else QuarantineReason.SCHEMA_MISMATCH
     return None
+
+
+def _out_of_range(detail: Mapping[str, object]) -> bool:
+    """A number past its column's bound, or a well formed timestamp the bank cannot hold (decision 100)."""
+    if detail.get("type") in OUT_OF_RANGE:
+        return True
+    context = detail.get("ctx")
+    return isinstance(context, dict) and isinstance(context.get("error"), OutOfStorableRangeError)
 
 
 def _position(value: object) -> int | None:
@@ -202,11 +214,7 @@ def outbox_message(value: object, status: int) -> OutboxMessage:
     well_formed = message_id_is_canonical(document) and not bounded_json.holds_duplicate_key(value)
     if model is None and well_formed:
         return OutboxMessage(envelope.message_id, position, envelope.type, None, evidence)
-    reason = (
-        _rejection(model, value, evidence)
-        if model is not None and well_formed and not holds_unstorable_text(value)
-        else SCHEMA_MISMATCH
-    )
+    reason = _rejection(model, value, evidence) if model is not None and well_formed else SCHEMA_MISMATCH
     if reason is not None:
         quarantined = QuarantinedPayload(reason, evidence.payload, evidence.payload_sha256, evidence.withheld)
         return OutboxMessage(envelope.message_id, position, envelope.type, quarantined, evidence)

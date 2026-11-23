@@ -21,12 +21,9 @@ import httpx
 from pydantic import BaseModel, BeforeValidator, ConfigDict, ValidationError
 
 from onepledge_bank_agent.domain.canonical_json import JsonValue
+from onepledge_bank_agent.domain.storable import storable_json
 from onepledge_bank_agent.infrastructure import bounded_json
-from onepledge_bank_agent.infrastructure.encodings import (
-    canonical_base64,
-    canonical_uuid,
-    holds_unstorable_text,
-)
+from onepledge_bank_agent.infrastructure.encodings import canonical_base64, canonical_uuid
 from onepledge_bank_agent.infrastructure.http.classification import DependencyErrors
 
 
@@ -72,11 +69,11 @@ def _refuse_float(text: str) -> float:
 
 def plain_json(response: httpx.Response) -> object:
     """The body as plain JSON within the bounds of `bounded_json` (no key twice, at most 32 levels deep),
-    refusing floats and text the bank cannot store (U+0000, a surrogate code point); raises `ValueError`
-    when it is not such a document (SPEC_DECISIONS 74)."""
+    refusing floats and any value the bank cannot store and read back (SPEC_DECISIONS 100); raises
+    `ValueError` when it is not such a document (SPEC_DECISIONS 74)."""
     document = bounded_json.loads(response.content, parse_float=_refuse_float)
-    if holds_unstorable_text(document):
-        raise ValueError("unstorable text")
+    if not storable_json(document):
+        raise ValueError("not storable")
     return document
 
 

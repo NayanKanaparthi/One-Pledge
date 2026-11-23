@@ -62,9 +62,10 @@ def test_checkpoints_with_numbers_too_large_to_store_are_quarantined_and_nothing
         doubles.inject_message("HARBOR", "CHECKPOINT", payload)
     agent.sync()
     quarantined = pairs(
-        bank_db, "SELECT payload->'body'->>'checkpoint_seq', reason FROM registry_messages_quarantined"
+        bank_db,
+        "SELECT payload_sha256, reason || ' ' || (payload IS NULL)::text FROM registry_messages_quarantined",
     )
-    assert quarantined == {str(2**63): "VALUE_OUT_OF_RANGE", "1": "VALUE_OUT_OF_RANGE"}
+    assert list(quarantined.values()) == ["VALUE_OUT_OF_RANGE true"] * 2, "kept as its hash (decision 100)"
     audited = pairs(
         bank_db,
         "SELECT q.quarantine_id::text, a.detail->>'reason' FROM registry_messages_quarantined q "
@@ -118,13 +119,13 @@ def test_messages_holding_text_postgresql_cannot_store_are_quarantined_by_their_
         bank_db,
         "SELECT payload_sha256, reason || ' ' || (payload IS NULL)::text FROM registry_messages_quarantined",
     )
-    assert held == {escaped_sha256(payload): "SCHEMA_MISMATCH true" for _, payload in poison}
+    assert held == {escaped_sha256(payload): "VALUE_OUT_OF_RANGE true" for _, payload in poison}
     audited = pairs(
         bank_db,
         "SELECT a.detail->>'payload_sha256', a.detail->>'reason' FROM audit_log a "
         "WHERE a.action = 'REGISTRY_MESSAGE_QUARANTINED'",
     )
-    assert audited == dict.fromkeys(held, "SCHEMA_MISMATCH")
+    assert audited == dict.fromkeys(held, "VALUE_OUT_OF_RANGE")
     unmatched = pairs(bank_db, "SELECT 'n', count(*)::text FROM audit_log WHERE action = 'ALERT_UNMATCHED'")
     assert unmatched == {"n": "1"}, "the message after the poison ones was applied"
     assert doubles.forged_pending("HARBOR") == 0, "all four acknowledged"

@@ -101,11 +101,11 @@ def test_a_missing_file_writes_nothing_and_is_refused(tmp_path: Path) -> None:
         ),
         (
             {"lenders": [{**LENDERS[0], "legal_name": "Summit\x00"}], "facilities": [HARBOR_SUMMIT]},
-            "{dir}/reference.json: holds text that cannot be stored.",
+            "{dir}/reference.json: holds a value that cannot be stored.",
         ),
         (
             {"lenders": [{**LENDERS[0], "legal_name": "Summit\ud800"}], "facilities": [HARBOR_SUMMIT]},
-            "{dir}/reference.json: holds text that cannot be stored.",
+            "{dir}/reference.json: holds a value that cannot be stored.",
         ),
         (
             {"lenders": LENDERS, "facilities": [{**HARBOR_SUMMIT, "credit_limit_cents": 7_500_000_000.0}]},

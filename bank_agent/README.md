@@ -78,6 +78,16 @@ What a reviewer can check, and where:
   shows the same violations under the control `APP_ROLE_GRANTS_EXACT` instead. `db
   migrate` and `seed-reference` refuse a `MIGRATION_DATABASE_URL` role that does not own
   the tables.
+- **Nothing is stored that cannot be read back.** A value another party supplies is checked
+  against one range before it is stored (SPEC_DECISIONS 100, `domain/storable.py`): a
+  timestamp from 2000-01-01T00:00:00Z up to 2100, a date from 2000 to 2099, an integer inside
+  its column, text without control characters or surrogates and at most 255 characters, JSON
+  made only of such text and integers. Outside it, a registry message is poison
+  `VALUE_OUT_OF_RANGE` and an answer `MALFORMED_RESPONSE`; repositories take the value
+  objects (`StorableTimestamp`, `StorableDate`), the database holds the same ranges as check
+  constraints, and the integrity report and deep verification read each section inside its
+  own guard, so a row forced past them is an `UNREADABLE` evidence problem naming the table
+  and the row, and every other section is still produced.
 - **Others can check us without trusting us, and we check them.** Every certificate and
   checkpoint is verified with the keys of `REGISTRY_PUBLIC_KEYS` only, stored with its
   verdict, and failures are never removed: a certificate that failed stays as evidence
@@ -112,7 +122,8 @@ bank_agent/
                        0008_outbox_poison.py (registry_outbox_attempts, the 20th table),
                        0009_grant_matrix.py (the grant matrix), 0010_column_guards.py
                        (status and case status pairs, column by column guards),
-                       0011_withheld_payload.py (a quarantined payload kept as its hash)
+                       0011_withheld_payload.py (a quarantined payload kept as its hash),
+                       0012_round_trip.py (range checks on times another party supplied)
   src/onepledge_bank_agent/
     domain/            values (Vin, Money, Lei, ...), enums, errors (one DomainError tree and
                        the fixed message table), tape and loan state machines, alert,
@@ -513,6 +524,7 @@ action and object type checks.
 | certificates | migration 0007 (SPEC_DECISIONS 61, 64): primary key `certificate_row_id`; `delivered_body_sha256 char(64) NOT NULL` with `ck_certificates_delivered_body_sha256` (a hex digest); `uq_certificates_verified_certificate_id` and `uq_certificates_verified_request_id` (partial, `WHERE verified`); `uq_certificates_delivery` on `(certificate_id, delivered_body_sha256, signature)`; `ix_certificates_request_id` | A failed certificate is kept beside the verified one a retry stores. `delivered_body_sha256` is the SHA-256 of the canonical JSON of the body as it arrived, computed by the bank, never taken from the registry; `body_hash` keeps the registry's claim, so the two differ exactly in a row whose body was altered. `VerifyCertificate` compares the stored column with the claim, and deep verification recomputes it from the stored body, so an edit of both `body` and `body_hash` is still found. The claim is not in the delivery key because CERTIFICATE_BODY changes only the body. |
 | registry_messages_quarantined | the 19th table, migration 0006 (SPEC_DECISIONS 57), amended by 0008 (SPEC_DECISIONS 85): `uq_registry_messages_quarantined_message_id`; value list on `reason` (the eight reasons of decision 85); `payload_sha256` a hex digest; `position` null or `>= 1`; `message_type` 1 to 64 characters; `reason <> 'OVERSIZED' OR payload IS NULL` (migration 0011; 0006 had `(reason = 'OVERSIZED') = (payload IS NULL)`) | One row per message however often it is delivered. An oversized payload is always kept as its hash alone, and so is one holding text the bank cannot store (U+0000, which `jsonb` refuses, or a surrogate code point, which UTF-8 cannot carry), so that such a message can still be quarantined and acknowledged. A position too large to store is kept as unknown. `REGISTRY_MESSAGE_QUARANTINED` joins the audit action list. |
 | registry_outbox_attempts | the 20th table, migration 0008 (SPEC_DECISIONS 85 rule 4): `message_id` primary key; `ck_registry_outbox_attempts_attempts`: `>= 1`; `ck_registry_outbox_attempts_last_reason`: a code | The deferrals of one message are counted in their own transaction; the fifth makes it poison. The app role may update it; rows are never removed. |
+| certificates, checkpoints_seen, tape_submissions, loans, facilities | `ck_certificates_issued_at_range`, `ck_checkpoints_seen_signed_at_range`: from 2000-01-01T00:00:00Z up to, not including, 2100-01-01T00:00:00Z; `ck_tape_submissions_as_of_date_range`, `ck_loans_origination_date_range`, `ck_facilities_opened_on_range`: 2000-01-01 to 2099-12-31 (migration 0012, SPEC_DECISIONS 100) | A time another party supplied is held only inside the range every reader can read back, the range of `domain/storable.py`; a row forced past it by a superuser is reported as an `UNREADABLE` evidence problem, never a failure of the report. |
 | alerts | `ck_alerts_status_case_status`, migration 0010 (SPEC_DECISIONS 86): NEW and REVIEWING only with an OPEN case, CLEARED only with `CLEARED_DATA_ERROR` or `CLEARED_LATE_RELEASE`, ESCALATED only with CONFIRMED | Only the registry's case outcome closes an alert; no statement can store one without the other. |
 | loans, tape_submissions, alerts | insert guards `loans_insert_guard`, `tape_submissions_insert_guard`; `alerts_guard` on insert and update, migration 0005 (SPEC_DECISIONS 46, 47) | Creation in the one state SPEC allows, and the tape and alert machines as the only path. |
 | audit_log | `ck_audit_log_seq`: `>= 1`; `ck_audit_log_actor_user`: `(actor_type = 'USER') = (actor_user_id IS NOT NULL)`; `ck_audit_log_request_id`: at most 64 characters; value lists on `action` and `object_type` | The chain starts at 1; a user entry names its user and a system entry names none; request ids are bounded; actions and object types are those of SPEC 17.2 and SPEC_DECISIONS 30. |

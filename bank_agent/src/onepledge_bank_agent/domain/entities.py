@@ -19,6 +19,7 @@ from onepledge_bank_agent.domain.enums import (
 )
 from onepledge_bank_agent.domain.errors import InvalidValueError
 from onepledge_bank_agent.domain.registry_records import SignedCertificate
+from onepledge_bank_agent.domain.storable import EARLIEST_DATE, LATEST_DATE, StorableTimestamp
 from onepledge_bank_agent.domain.values import KeyVersion, Lei, Sha256Hex
 
 _FACILITY_CODE = re.compile(r"^[A-Z0-9-]{3,40}$")
@@ -63,6 +64,8 @@ class Facility:
             raise InvalidValueError("credit_limit_cents", "OUT_OF_RANGE")
         if not 0 <= self.advance_rate_bps <= MAX_ADVANCE_RATE_BPS:
             raise InvalidValueError("advance_rate_bps", "OUT_OF_RANGE")
+        if not EARLIEST_DATE <= self.opened_on <= LATEST_DATE:  # SPEC_DECISIONS 100
+            raise InvalidValueError("opened_on", "OUT_OF_RANGE")
 
 
 @dataclass(frozen=True)
@@ -140,7 +143,7 @@ class Certificate:
     registry_submission_id: uuid.UUID
     kind: TapeKind
     as_of_seq: int
-    issued_at: datetime
+    issued_at: StorableTimestamp
     body: Mapping[str, JsonValue]
     body_hash: Sha256Hex
     signature: str
@@ -170,7 +173,7 @@ class Checkpoint:
     checkpoint_seq: int
     last_event_seq: int
     head_hash: Sha256Hex
-    signed_at: datetime
+    signed_at: StorableTimestamp
     signature: str
     signing_key_id: str
     body: Mapping[str, JsonValue]

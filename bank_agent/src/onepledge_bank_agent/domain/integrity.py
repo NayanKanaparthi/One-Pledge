@@ -101,11 +101,15 @@ class CertificateFinding(StrEnum):
 
 
 class EvidenceProblemKind(StrEnum):
-    """What the reconciliation of proofs with the audit log found (SPEC_DECISIONS 89 b)."""
+    """What deep verification and the readers found (SPEC_DECISIONS 89 b, 100, 107)."""
 
     ROW_MISSING = "ROW_MISSING"
     ROW_UNAUDITED = "ROW_UNAUDITED"
     SEQUENCE_GAP = "SEQUENCE_GAP"
+    DIGEST_MISMATCH = "DIGEST_MISMATCH"
+    DERIVATION_MISMATCH = "DERIVATION_MISMATCH"
+    STATE_MISMATCH = "STATE_MISMATCH"
+    UNREADABLE = "UNREADABLE"
 
 
 @dataclass(frozen=True, order=True)

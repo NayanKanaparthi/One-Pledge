@@ -47,3 +47,13 @@ class StoreMismatchError(DomainError):
 class ContradictsStoredStateError(DomainError):
     """A registry message describes a state that contradicts what the bank already holds
     (SPEC_DECISIONS 85, rule 3). Nothing is changed; the message is quarantined."""
+
+
+class StoreUnreadableError(DomainError):
+    """A stored row cannot be read back: the driver cannot hold one of its values, or a value breaks
+    the type that reads it (SPEC_DECISIONS 100). Names the table and, where known, the rows by key."""
+
+    def __init__(self, table: str | None, row_ids: tuple[str, ...] = ()) -> None:
+        super().__init__()
+        self.table = table
+        self.row_ids = row_ids

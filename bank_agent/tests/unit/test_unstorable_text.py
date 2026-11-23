@@ -8,7 +8,7 @@ being stored, and a lone surrogate anywhere in an outbox page made the whole pag
 either way the message was never acknowledged and blocked the outbox for good.
 
 Now an answer holding such text is outside the contract (MALFORMED_RESPONSE), and an outbox
-message holding it is poison (SCHEMA_MISMATCH) whose payload is kept as its SHA-256 alone,
+message holding it is poison (VALUE_OUT_OF_RANGE, decision 100) whose payload is kept as its SHA-256 alone,
 so it can be quarantined, audited and acknowledged like any other.
 """
 
@@ -34,8 +34,8 @@ from onepledge_bank_agent.domain.registry_records import (
     RegistryItem,
     RegistrySubmission,
 )
+from onepledge_bank_agent.domain.storable import storable_json
 from onepledge_bank_agent.domain.vin import Vin
-from onepledge_bank_agent.infrastructure.encodings import holds_unstorable_text
 from onepledge_bank_agent.infrastructure.http.key_holder_client import KeyHolderHttpClient
 from onepledge_bank_agent.infrastructure.http.outside_records import OutsideRecordsClient
 
@@ -69,21 +69,30 @@ def outbox_of(*messages: object) -> list[OutboxMessage]:
 
 
 @pytest.mark.parametrize(
-    ("value", "holds"),
+    ("value", "storable"),
     [
-        ({"a": ["b", {"c": "d"}], "n": 1, "t": True, "z": None}, False),
-        ({"a": "x\x01y\x7f\u2028\U0001f600"}, False),
-        ({"a": NUL}, True),
-        ({"a": ["ok", {"b": "x" + NUL}]}, True),
-        ({"k" + NUL: 1}, True),
-        ({"a": LONE_SURROGATE}, True),
-        ({"a": "\udfff"}, True),
-        (["x", LONE_SURROGATE + "y"], True),
-        ("plain", False),
+        ({"a": ["b", {"c": "d"}], "n": 1, "t": True, "z": None}, True),
+        ({"a": "caf\u00e9 \u2028\U0001f600", "n": 2**63 - 1, "m": -(2**63)}, True),
+        ({"a": "x" * 255}, True),
+        ({"a": NUL}, False),
+        ({"a": ["ok", {"b": "x" + NUL}]}, False),
+        ({"k" + NUL: 1}, False),
+        ({"a": LONE_SURROGATE}, False),
+        ({"a": "\udfff"}, False),
+        (["x", LONE_SURROGATE + "y"], False),
+        ({"a": "tab\there"}, False),
+        ({"a": "\x7f"}, False),
+        ({"a": "\x85"}, False),
+        ({"a": "x" * 256}, False),
+        ({"n": 2**63}, False),
+        ({"n": -(2**63) - 1}, False),
+        ({"f": 1.5}, False),
     ],
 )
-def test_text_holding_u0000_or_a_surrogate_anywhere_is_unstorable(value: object, holds: bool) -> None:
-    assert holds_unstorable_text(value) is holds
+def test_storable_json_holds_the_text_and_integer_rules_of_decision_100(
+    value: object, storable: bool
+) -> None:
+    assert storable_json(value) is storable
 
 
 def submission_answer(request: httpx.Request, **changes: object) -> httpx.Response:
@@ -168,7 +177,7 @@ def test_an_outside_records_answer_is_read_with_the_bounds_of_every_other_answer
 def test_an_outbox_message_holding_unstorable_text_is_poison_kept_as_its_hash_alone(
     where: str, name: str, char: str
 ) -> None:
-    """Quarantined as SCHEMA_MISMATCH by its id; the next message of the page is applied."""
+    """Quarantined as VALUE_OUT_OF_RANGE (SPEC_DECISIONS 100) by its id; the next message is applied."""
     payload: dict[str, object]
     if where == "an alert's extra field":
         payload = {**ALERT, "note": "x" + char}
@@ -183,7 +192,7 @@ def test_an_outbox_message_holding_unstorable_text_is_poison_kept_as_its_hash_al
     first, second = outbox_of(poison, good)
     assert first.message_id == uuid.UUID(str(poison["message_id"]))
     assert isinstance(first.payload, QuarantinedPayload)
-    assert first.payload.reason.value == "SCHEMA_MISMATCH"
+    assert first.payload.reason.value == "VALUE_OUT_OF_RANGE"
     assert first.payload.withheld and first.payload.payload is None
     escaped = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("ascii")
     assert first.payload.payload_sha256 == hashlib.sha256(escaped).hexdigest()

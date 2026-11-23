@@ -7,12 +7,13 @@ answer. Signed bodies are taken from the plain JSON, exactly as received.
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, Field
+from pydantic import AfterValidator, BeforeValidator, Field
 
 from onepledge_bank_agent.domain.canonical_json import JsonValue
 from onepledge_bank_agent.domain.enums import (
@@ -34,7 +35,7 @@ from onepledge_bank_agent.domain.registry_records import (
     SignedCertificate,
     SignedCheckpoint,
 )
-from onepledge_bank_agent.infrastructure.encodings import holds_unstorable_text
+from onepledge_bank_agent.domain.storable import StorableTimestamp, storable_text, utc_instant
 from onepledge_bank_agent.infrastructure.http.answers import (
     CanonicalUuid,
     Strict,
@@ -48,10 +49,40 @@ KEY_ID = r"^[a-z0-9-]{1,64}$"
 KEY_VERSION = r"^[1-9][0-9]*\.[1-9][0-9]*$"
 CODE = r"^[A-Z][A-Z0-9_]{0,63}$"
 BIGINT_MAX = 9_223_372_036_854_775_807
+MAX_TYPE_LENGTH = 64
 """The largest sequence number or position the bank can store (SPEC_DECISIONS 85, rule 1)."""
 type Hash = Annotated[str, Field(pattern=HASH)]
 type Signature = Annotated[str, Field(pattern=SIGNATURE), AfterValidator(base64_text)]
 """An Ed25519 signature: 88 characters of canonical standard base64 (SPEC_DECISIONS 75)."""
+RFC3339 = re.compile(
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:[.][0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
+)
+"""An RFC 3339 timestamp with an explicit offset or `Z` and at most 6 fraction digits (decision 100)."""
+
+
+class OutOfStorableRangeError(ValueError):
+    """A well formed value the bank cannot store and read back (SPEC_DECISIONS 100)."""
+
+
+def _rfc3339(value: object) -> datetime:
+    """The instant of an RFC 3339 text; anything else, a number or another form included, is refused."""
+    if not isinstance(value, str) or RFC3339.fullmatch(value) is None:
+        raise ValueError("timestamp")
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:  # a month 13 or an hour 25 has the shape and is no instant
+        raise ValueError("timestamp") from None
+
+
+def _storable_instant(value: datetime) -> datetime:
+    instant = utc_instant(value)
+    if instant is None:
+        raise OutOfStorableRangeError("timestamp")
+    return instant
+
+
+type Instant = Annotated[datetime, BeforeValidator(_rfc3339), AfterValidator(_storable_instant)]
+"""A timestamp from the registry inside the round-trip range of SPEC_DECISIONS 100."""
 type Seq = Annotated[int, Field(ge=0, le=BIGINT_MAX)]
 type PositiveSeq = Annotated[int, Field(ge=1, le=BIGINT_MAX)]
 
@@ -96,7 +127,7 @@ class SubmissionResultBody(Strict):
     kind: TapeKind
     key_version: Annotated[str, Field(pattern=KEY_VERSION)]
     status: Literal["COMPLETED"]
-    received_at: datetime
+    received_at: Instant
     as_of_seq: Seq
     certificate_id: CanonicalUuid
     results: Annotated[list[ItemResultBody], Field(min_length=1, max_length=500)]
@@ -129,7 +160,7 @@ class CertificateBodyModel(Strict):
     kind: TapeKind
     key_version: Annotated[str, Field(pattern=KEY_VERSION)]
     as_of_seq: Seq
-    issued_at: datetime
+    issued_at: Instant
     summary: SummaryBody
     items: Annotated[list[CertificateItemBody], Field(min_length=1, max_length=500)]
 
@@ -146,7 +177,7 @@ class SignedCertificateBody(Strict):
         """The domain record, with the body exactly as received."""
         body = json_object(document.get("body"))
         return SignedCertificate(
-            body, self.body_hash, self.signature, self.signing_key_id, self.body.issued_at
+            body, self.body_hash, self.signature, self.signing_key_id, StorableTimestamp(self.body.issued_at)
         )
 
 
@@ -157,7 +188,7 @@ class CheckpointBodyModel(Strict):
     checkpoint_seq: PositiveSeq
     last_event_seq: PositiveSeq
     head_hash: Hash
-    signed_at: datetime
+    signed_at: Instant
 
 
 class SignedCheckpointBody(Strict):
@@ -172,7 +203,7 @@ class SignedCheckpointBody(Strict):
         body = self.body
         return SignedCheckpoint(
             json_object(document.get("body")), self.signature, self.signing_key_id, body.checkpoint_seq,
-            body.last_event_seq, body.head_hash, body.signed_at,
+            body.last_event_seq, body.head_hash, StorableTimestamp(body.signed_at),
         )  # fmt: skip
 
 
@@ -210,7 +241,7 @@ class CasePayloadBody(Strict):
 
 def _storable(text: str) -> str:
     """A type the bank can store and name: no U+0000 and no surrogate code point."""
-    if holds_unstorable_text(text):
+    if not storable_text(text, MAX_TYPE_LENGTH):
         raise ValueError("type")
     return text
 
@@ -230,7 +261,7 @@ class MessageBody(Strict):
 
     message_id: CanonicalUuid
     position: PositiveSeq
-    created_at: datetime
+    created_at: Instant
 
 
 class AlertMessageBody(MessageBody):

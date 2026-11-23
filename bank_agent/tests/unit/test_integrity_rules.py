@@ -29,6 +29,7 @@ from onepledge_bank_agent.domain.integrity import (
     registry_messages_section,
 )
 from onepledge_bank_agent.domain.registry_records import QuarantinedMessage, QuarantinedPayload
+from onepledge_bank_agent.domain.storable import StorableTimestamp
 from onepledge_bank_agent.domain.values import Sha256Hex
 
 pytestmark = pytest.mark.unit
@@ -45,7 +46,7 @@ def certificate(request_id: uuid.UUID, failure: CertificateFailure | None, body:
         registry_submission_id=uuid.uuid4(),
         kind=TapeKind.PLEDGE,
         as_of_seq=3,
-        issued_at=AT,
+        issued_at=StorableTimestamp(AT),
         body={"locked": body},
         body_hash=Sha256Hex("a" * 64),
         signature="c2lnbmF0dXJl",
@@ -108,7 +109,7 @@ def failed_checkpoint(world: World) -> None:
                 1,
                 5,
                 Sha256Hex("b" * 64),
-                AT,
+                StorableTimestamp(AT),
                 "c2ln",
                 "registry-1",
                 {},

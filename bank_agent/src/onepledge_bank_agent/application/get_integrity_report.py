@@ -25,9 +25,7 @@ still built (SPEC_DECISIONS 93, item 8).
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
-from onepledge_bank_agent.application.evidence_ports import DatabaseControlInspector
+from onepledge_bank_agent.application.evidence_ports import DatabaseControlInspector, IntegrityRun
 from onepledge_bank_agent.application.integrity_sections import (
     certificates_section,
     deep_findings_of,
@@ -36,6 +34,7 @@ from onepledge_bank_agent.application.integrity_sections import (
 )
 from onepledge_bank_agent.application.ports import UnitOfWork, UnitOfWorkFactory
 from onepledge_bank_agent.application.runtime import Runtime
+from onepledge_bank_agent.application.section_reads import SectionReads
 from onepledge_bank_agent.domain.integrity import (
     AuditChainSection,
     CertificateSection,
@@ -43,18 +42,13 @@ from onepledge_bank_agent.domain.integrity import (
     RawDataSection,
     RegistryChainSection,
     RegistryMessagesSection,
-    SectionStatus,
-    UnreadSection,
     broken_if,
     controls_section,
-    evidence_section,
     registry_messages_section,
 )
 from onepledge_bank_agent.domain.integrity_document import StoredFindings, stored_findings
-from onepledge_bank_agent.domain.store_errors import StoreMismatchError
+from onepledge_bank_agent.domain.store_errors import StoreUnreadableError
 
-NOT_VERIFIED = SectionStatus.NOT_VERIFIED
-NOT_VERIFIED_RAW = RawDataSection(NOT_VERIFIED, 0, 0, ())
 DEEP_SECTIONS = ("audit_log", "raw_data", "evidence")
 
 
@@ -69,71 +63,80 @@ class GetIntegrityReport:
         self._clock = runtime.clock
 
     def execute(self) -> IntegrityReport:
-        """The report as of now."""
-        unread: list[UnreadSection] = []
-        run = self._read(DEEP_SECTIONS, lambda unit: unit.evidence.runs.latest(), unread)
-        stored = stored_findings(run.report) if run is not None else None
+        """The report as of now; no stored row can make it fail as a whole (SPEC_DECISIONS 100)."""
+        reads = SectionReads(self._units)
+        latest = reads.read(DEEP_SECTIONS, latest_run)
+        run, stored = latest if latest is not None else (None, None)
         return IntegrityReport(
             generated_at=self._clock.now(),
             last_deep_verification_at=run.ran_at if run is not None else None,
-            registry_chain=self._chain(stored, unread),
-            certificates=self._certificates(stored, unread),
-            audit_log=self._audit(stored, unread),
-            raw_data=stored.raw if stored is not None else NOT_VERIFIED_RAW,
+            registry_chain=self._chain(stored, reads),
+            certificates=self._certificates(stored, reads),
+            audit_log=self._audit(stored, reads),
+            raw_data=stored.raw
+            if stored is not None
+            else RawDataSection(reads.missing("raw_data"), 0, 0, ()),
             database_controls=controls_section(self._controls.controls(), self._controls.violations()),
-            registry_messages=self._messages(unread),
-            evidence=evidence_section(stored.evidence if stored is not None else None),
-            unread=tuple(unread),
+            registry_messages=self._messages(reads),
+            evidence=reads.evidence(stored.evidence if stored is not None else None),
+            unread=tuple(reads.unread),
         )
 
-    def _read[T](
-        self, sections: tuple[str, ...], query: Callable[[UnitOfWork], T], unread: list[UnreadSection]
-    ) -> T | None:
-        """`query` in its own transaction, or None with each section recorded as unread."""
-        try:
-            with self._units() as unit:
-                return query(unit)
-        except StoreMismatchError as error:
-            unread += [UnreadSection(section, error.sqlstate) for section in sections]
-            return None
-
-    def _chain(self, stored: StoredFindings | None, unread: list[UnreadSection]) -> RegistryChainSection:
-        found = self._read(
+    @staticmethod
+    def _chain(stored: StoredFindings | None, reads: SectionReads) -> RegistryChainSection:
+        found = reads.read(
             ("registry_chain",),
             lambda unit: (unit.evidence.checkpoints.all(), unit.evidence.certificates.expected()),
-            unread,
         )
         if found is None:
-            return RegistryChainSection(NOT_VERIFIED, 0, 0, None, ())
+            return RegistryChainSection(reads.missing("registry_chain"), 0, 0, None, ())
         checkpoints, expected = found
         return registry_chain(checkpoints, stored.checkpoints if stored else (), expected > 0)
 
-    def _certificates(self, stored: StoredFindings | None, unread: list[UnreadSection]) -> CertificateSection:
-        found = self._read(
+    @staticmethod
+    def _certificates(stored: StoredFindings | None, reads: SectionReads) -> CertificateSection:
+        found = reads.read(
             ("certificates",),
             lambda unit: (
                 unit.evidence.certificates.expected(),
                 unit.evidence.certificates.all(),
                 unit.evidence.certificates.missing_for_completed(),
             ),
-            unread,
         )
         if found is None:
-            return CertificateSection(NOT_VERIFIED, 0, 0, ())
+            return CertificateSection(reads.missing("certificates"), 0, 0, ())
         expected, certificates, missing = found
         deep = deep_findings_of(stored.certificates if stored else (), certificates)
         return certificates_section(expected, certificates, deep, missing)
 
-    def _audit(self, stored: StoredFindings | None, unread: list[UnreadSection]) -> AuditChainSection:
-        size = self._read(("audit_log",), lambda unit: unit.history.audit_size(), unread)
+    @staticmethod
+    def _audit(stored: StoredFindings | None, reads: SectionReads) -> AuditChainSection:
+        size = reads.read(("audit_log",), lambda unit: unit.history.audit_size())
         entries, last_seq = size if size is not None else (0, 0)
         if stored is None or size is None:
-            return AuditChainSection(NOT_VERIFIED, entries, last_seq, None)
+            return AuditChainSection(reads.missing("audit_log"), entries, last_seq, None)
         first_bad = stored.audit.first_bad_seq
         return AuditChainSection(broken_if(first_bad is not None), entries, last_seq, first_bad)
 
-    def _messages(self, unread: list[UnreadSection]) -> RegistryMessagesSection:
-        held = self._read(("registry_messages",), lambda unit: unit.evidence.quarantine.all(), unread)
+    @staticmethod
+    def _raw(stored: StoredFindings | None, reads: SectionReads) -> RawDataSection:
+        return stored.raw if stored is not None else RawDataSection(reads.missing("raw_data"), 0, 0, ())
+
+    @staticmethod
+    def _messages(reads: SectionReads) -> RegistryMessagesSection:
+        held = reads.read(("registry_messages",), lambda unit: unit.evidence.quarantine.all())
         if held is None:
-            return RegistryMessagesSection(NOT_VERIFIED, 0)
+            return RegistryMessagesSection(reads.missing("registry_messages"), 0)
         return registry_messages_section(quarantine_findings(held))
+
+
+def latest_run(unit: UnitOfWork) -> tuple[IntegrityRun, StoredFindings] | None:
+    """The last deep verification and its findings; a stored report that cannot be read back is an
+    unreadable `integrity_runs` row (SPEC_DECISIONS 100)."""
+    run = unit.evidence.runs.latest()
+    if run is None:
+        return None
+    try:
+        return run, stored_findings(run.report)
+    except (KeyError, TypeError, ValueError):
+        raise StoreUnreadableError("integrity_runs", (str(run.run_id),)) from None

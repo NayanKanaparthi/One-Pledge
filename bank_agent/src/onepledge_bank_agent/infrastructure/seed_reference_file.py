@@ -6,7 +6,7 @@ cannot store (U+0000, a surrogate code point), then validated with strict types 
 a JSON integer, never a fraction or a string; an id is a UUID in its canonical spelling,
 SPEC_DECISIONS 75). Every problem is one sentence that starts with the file's path: "PATH: no
 such file.", "PATH: larger than 5 MiB.", "PATH: nests too deeply.", "PATH: not valid JSON.",
-"PATH: holds text that cannot be stored." or "PATH: not a reference data file."
+"PATH: holds a value that cannot be stored." or "PATH: not a reference data file."
 """
 
 from __future__ import annotations
@@ -22,9 +22,9 @@ from onepledge_bank_agent.domain.canonical_json import sha256_hex
 from onepledge_bank_agent.domain.entities import Facility, Lender
 from onepledge_bank_agent.domain.enums import FacilityStatus
 from onepledge_bank_agent.domain.errors import InvalidValueError, ReferenceDataError
+from onepledge_bank_agent.domain.storable import storable_json
 from onepledge_bank_agent.domain.values import Lei
 from onepledge_bank_agent.infrastructure import bounded_json
-from onepledge_bank_agent.infrastructure.encodings import holds_unstorable_text
 from onepledge_bank_agent.infrastructure.http.answers import CanonicalUuid
 
 REFERENCE_FILE = "reference.json"
@@ -75,8 +75,8 @@ class ReferenceFileSource:
         except bounded_json.JsonRefusedError as refused:
             problem = PROBLEMS[refused.problem]
             raise ReferenceDataError(f"{path}: {problem}.") from None
-        if holds_unstorable_text(document):
-            raise ReferenceDataError(f"{path}: holds text that cannot be stored.")
+        if not storable_json(document):
+            raise ReferenceDataError(f"{path}: holds a value that cannot be stored.")
         try:
             parsed = _ReferenceFile.model_validate_json(content)
         except ValidationError:

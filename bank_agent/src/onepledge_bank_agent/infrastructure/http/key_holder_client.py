@@ -20,6 +20,7 @@ from pydantic import Field
 from onepledge_bank_agent.application.ports import IdGenerator
 from onepledge_bank_agent.domain.dependency_errors import KeyHolderProtocolError
 from onepledge_bank_agent.domain.registry_records import Evaluation
+from onepledge_bank_agent.domain.storable import INT_MAX
 from onepledge_bank_agent.infrastructure.crypto.blinder import decode_point
 from onepledge_bank_agent.infrastructure.http.answers import CanonicalUuid, Strict, parse
 from onepledge_bank_agent.infrastructure.http.base import RetryingHttpCaller
@@ -34,7 +35,7 @@ class EvaluateAnswer(Strict):
 
     request_id: CanonicalUuid
     holder_id: str
-    key_version: Annotated[int, Field(ge=1)]
+    key_version: Annotated[int, Field(ge=1, le=INT_MAX)]
     elements: list[Annotated[str, Field(pattern=ELEMENT)]]
 
 
