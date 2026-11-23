@@ -168,8 +168,9 @@ onepledge-bank integrity report           the live integrity report (SPEC 15.5)
 onepledge-bank integrity verify           deep verification (SPEC 15.6): stored, audited and printed
 ```
 
-Every command takes `--json`, `--quiet`, `--debug` and `--wide`. No option can be
-abbreviated, so `--json` is always spelled in full.
+Every command takes `--json`, `--quiet`, `--debug` and `--wide`. Arguments are exact
+(SPEC_DECISIONS 121): no option can be abbreviated, an option or flag given twice is a usage
+error, and a flag takes no value.
 
 - stdout carries only the result: aligned text, or with `--json` exactly one JSON
   document, `{"ok": true, ...}` with the facts the text shows, or on failure
@@ -178,8 +179,9 @@ abbreviated, so `--json` is always spelled in full.
   failure, one plain sentence.
 - Exit 0 on success, 1 for a failure (a variable missing, PostgreSQL not reachable, the
   schema not at the latest revision, an unusable reference file), 2 for a usage error.
-  A usage error prints argparse's usage text on stderr and, when `--json` is among the
-  arguments, also `{"ok": false, "error": {"code": "USAGE", "message": "The command line
+  A usage error prints the usage text and one sentence of the product's own on stderr (it
+  never repeats what was typed), every line at most 100 columns, help included, and, when an
+  argument starting with `--json` was given, also `{"ok": false, "error": {"code": "USAGE", "message": "The command line
   is not valid. See the usage text."}}` on stdout (SPEC_DECISIONS 78). An unexpected
   error prints `Unexpected error. Run with --debug for details.` and writes one `error`
   log record `unhandled_exception` with `exception_type` and `stack` (frames only), for
@@ -314,7 +316,7 @@ records and the worker output carry the same keys. Every failure code except
 
 | Variable | Used by | Meaning |
 |---|---|---|
-| `BANK_CODE` | `seed-reference`, `worker`, `registry sync`, `integrity report`, `integrity verify` | `HARBOR`, `NORTHGATE` or `CALDER`. Required by every runtime command (SPEC_DECISIONS 93, item 11). |
+| `BANK_CODE` | `seed-reference`, `worker`, `registry sync`, `integrity report`, `integrity verify` | Any code of 3 to 12 upper case letters, for example the demo banks `HARBOR`, `NORTHGATE` and `CALDER`. Required by every runtime command (SPEC_DECISIONS 93, item 11); `seed-reference` with a code that has no facility in `reference.json` says so. |
 | `BANK_NAME` | `worker`, `registry sync`, `integrity report`, `integrity verify` | The bank's display name, 1 to 100 printable ASCII characters. Required by every runtime command. |
 | `DATABASE_URL` | `db provision`, `db status`, `worker`, `registry sync`, `integrity report`, `integrity verify` | `postgresql://{db}_app:PASSWORD@HOST:PORT/{db}`, the app role. |
 | `MIGRATION_DATABASE_URL` | `db provision`, `db migrate`, `seed-reference` | `postgresql://{db}_owner:PASSWORD@HOST:PORT/{db}`, the owner role. Never read by the worker. |

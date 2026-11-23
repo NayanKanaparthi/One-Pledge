@@ -23,12 +23,10 @@ from onepledge_bank_agent.infrastructure.logging import StructlogOperationalLog,
 from onepledge_bank_agent.infrastructure.operator_errors import OperatorError
 from onepledge_bank_agent.interface.cli.commands import run_command
 from onepledge_bank_agent.interface.cli.output import USAGE_STATUS, Output
+from onepledge_bank_agent.interface.cli.parser import ProductParser
 from onepledge_bank_agent.interface.composition import Collaborators
 
 UNEXPECTED = "Unexpected error. Run with --debug for details."
-EXACT = False
-"""`allow_abbrev` of every parser: no abbreviated option, so `--json` is always spelled in full and a usage
-error can tell whether the result was asked for as JSON (SPEC_DECISIONS 78)."""
 UNEXPECTED_CODE = "INTERNAL_ERROR"
 DEPENDENCY_UNAVAILABLE = "DEPENDENCY_UNAVAILABLE"
 DEPENDENCY_REJECTED = "DEPENDENCY_REJECTED"
@@ -45,41 +43,35 @@ def _common_flags(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     """The argument parser with every command this package provides so far."""
-    parser = argparse.ArgumentParser(
+    parser = ProductParser(
         prog="onepledge-bank",
-        allow_abbrev=EXACT,
         description="OnePledge bank agent: the program that runs inside one bank.",
     )
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
     db = commands.add_parser(
         "db",
-        allow_abbrev=EXACT,
         help="create, migrate or inspect the bank database",
         description="Database administration.",
     )
     actions = db.add_subparsers(dest="db_command", required=True, metavar="ACTION")
     provision = actions.add_parser(
         "provision",
-        allow_abbrev=EXACT,
         help="create the two roles and the database (needs PG_ADMIN_URL), idempotent",
         description="Create {db}_owner and {db}_app and the database named in DATABASE_URL and "
         "MIGRATION_DATABASE_URL, using the superuser PG_ADMIN_URL. Safe to repeat.",
     )
     migrate = actions.add_parser(
         "migrate",
-        allow_abbrev=EXACT,
         help="run the migrations to the latest revision as the owner role",
         description="Run Alembic to head with MIGRATION_DATABASE_URL; grants go to DB_APP_ROLE.",
     )
     status = actions.add_parser(
         "status",
-        allow_abbrev=EXACT,
         help="show the current and the latest schema revision",
         description="Read the schema revision as the app role (DATABASE_URL).",
     )
     seed = commands.add_parser(
         "seed-reference",
-        allow_abbrev=EXACT,
         help="load this bank's lenders and facilities, idempotent",
         description="Upsert the lenders and facilities of BANK_CODE from the seed file DIR/reference.json "
         "as the owner role (MIGRATION_DATABASE_URL).",
@@ -89,10 +81,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     worker = commands.add_parser(
         "worker",
-        allow_abbrev=EXACT,
         help="run the pipeline worker",
-        description="Advance tape submissions through the pipeline as the app role (DATABASE_URL), "
-        "calling outside records (OUTSIDE_RECORDS_URL, OUTSIDE_RECORDS_API_KEY). Stops on SIGTERM or SIGINT.",
+        description="Advance tape submissions through the pipeline as the app role (DATABASE_URL) and "
+        "sync the registry outbox. It calls outside records (OUTSIDE_RECORDS_URL, OUTSIDE_RECORDS_API_KEY), "
+        "key holder 1 (KEY_HOLDER_1_URL, KEY_HOLDER_1_API_KEY), key holder 2 (KEY_HOLDER_2_URL, "
+        "KEY_HOLDER_2_API_KEY) and the registry (REGISTRY_URL, REGISTRY_API_KEY, REGISTRY_MEMBER_ID, "
+        "REGISTRY_PUBLIC_KEYS). Stops on SIGTERM or SIGINT.",
     )
     worker.add_argument(
         "--once", action="store_true", help="process until no submission is runnable, print what ran, exit"
@@ -104,40 +98,35 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _registry_parsers(
-    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+    commands: argparse._SubParsersAction[ProductParser],
 ) -> list[argparse.ArgumentParser]:
     """`registry sync`, `integrity report` and `integrity verify`."""
     registry = commands.add_parser(
         "registry",
-        allow_abbrev=EXACT,
         help="talk to the shared registry",
         description="Registry side actions.",
     )
     registry_actions = registry.add_subparsers(dest="registry_command", required=True, metavar="ACTION")
     sync = registry_actions.add_parser(
         "sync",
-        allow_abbrev=EXACT,
         help="pull and process the pending registry messages now (alerts, case updates, checkpoints)",
         description="Read this bank's registry outbox, process every message and acknowledge it, as the "
         "app role. Audited as REGISTRY_SYNC_REQUESTED with via cli.",
     )
     integrity = commands.add_parser(
         "integrity",
-        allow_abbrev=EXACT,
         help="show or recompute what this bank has verified",
         description="Integrity checks.",
     )
     integrity_actions = integrity.add_subparsers(dest="integrity_command", required=True, metavar="ACTION")
     report = integrity_actions.add_parser(
         "report",
-        allow_abbrev=EXACT,
         help="show the live integrity report",
         description="Checkpoints and certificates received, the audit chain and raw rows as of the last deep "
         "verification, and the database controls in force now.",
     )
     verify = integrity_actions.add_parser(
         "verify",
-        allow_abbrev=EXACT,
         help="recompute every proof from stored data, store and show the report",
         description="Walk the audit chain, recompute every raw row and file hash, re-verify every "
         "certificate and checkpoint signature and the registry chain from seq 1. Needs the registry.",
@@ -145,12 +134,17 @@ def _registry_parsers(
     return [sync, report, verify]
 
 
+def wants_json(argv: Sequence[str]) -> bool:
+    """A usage error is reported as JSON when any argument starts with `--json` (SPEC_DECISIONS 121.3)."""
+    return any(argument.startswith("--json") for argument in argv)
+
+
 def parse(argv: Sequence[str] | None) -> argparse.Namespace:
     """Parse the arguments; `worker --json` without `--once` is a usage error (it prints no result)."""
     parser = build_parser()
     arguments = parser.parse_args(argv)
     if arguments.command == "worker" and arguments.json and not arguments.once:
-        parser.error("--json needs --once: the worker without --once runs until stopped and prints no result")
+        parser.error("argument --json: must be given with --once, the worker without it prints no result")
     return arguments
 
 
@@ -177,7 +171,7 @@ def main(
     try:
         arguments = parse(given)
     except SystemExit as exit_:
-        if exit_.code == USAGE_STATUS and "--json" in given:
+        if exit_.code == USAGE_STATUS and wants_json(given):
             out.usage_failure()
         raise
     out.as_json, out.wide = arguments.json, arguments.wide

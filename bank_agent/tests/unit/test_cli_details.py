@@ -104,7 +104,7 @@ def test_an_abbreviated_option_is_a_usage_error_not_the_option(
     with pytest.raises(SystemExit) as raised:
         main(argv, Output(out, io.StringIO()))
     assert (raised.value.code, out.getvalue()) == (2, "")
-    assert "unrecognized arguments" in capsys.readouterr().err
+    assert "holds an argument this command does not take" in capsys.readouterr().err
 
 
 def test_the_last_column_of_a_long_row_wraps_under_itself_and_the_other_columns_stay_aligned() -> None:
