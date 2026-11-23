@@ -1752,3 +1752,86 @@ This commit does not touch the YAML files. The WP1 implementer makes exactly the
 4. Inside the bank agent: Y1 before Y2 (the outbox uses the storable types); Y7 before Y8 (deep verification tests disable and re-enable the new guards); Y6 after Y7 and Y2 (the manifest must include their tables and triggers).
 
 Everything else is independent.
+
+---
+
+# Round 7 (2026-11-23): leftovers of the round 6 implementation
+
+Inputs: the hand-backs for X1 to X16 and Y1 to Y15 (commits 7368d26 to ee87bc2). Decisions 125 to 131.
+
+## 125. Size bounds for stored JSON depend on whether a contract bounds the document (amends the `jsonb` row of decision 100)
+
+The 64 KiB bound of decision 100 was written for documents with no upper size of their own. It is wrong for a document whose size the contract already bounds, and the implementer was right to report the conflict instead of truncating or testing around it (decision 99). Two classes:
+
+| Class | Columns | Bound |
+|---|---|---|
+| **Contract-bounded.** The document passed full validation against a contract schema that limits every array and every string. | `registry_requests.response_body` (a `SubmissionResult`, at most 500 results), `certificates.body` (a `CertificateBody`, at most 500 items), `checkpoints_seen.body` | The serialised canonical JSON is at most `HTTP_MAX_RESPONSE_BYTES` (decision 102, default 4,194,304). Nothing is stored that did not pass the schema, so the schema's own limits are the effective bound; the byte cap is the backstop. |
+| **Free-form.** No contract schema limits the document, or the document failed its schema. | `registry_messages_quarantined.payload`, `audit_log.detail`, `local_checks.evidence`, `integrity_runs.report`, `loans_raw.raw_payload` and `raw_cells`, any other `jsonb` | 64 KiB, as decision 100 says, except: `integrity_runs.report` is bounded by its capped lists (decision 108) and at most 1 MiB; `raw_payload` and `raw_cells` are bounded by the tape limits of SPEC 10.1 (64 columns of 512 characters). A quarantined payload above 64 KiB is withheld (`payload_withheld`), as built. |
+
+Every other part of decision 100 applies to both classes: the bounded parser, the text rule for every string, integers only and inside the `bigint` range. A test stores and reads back a contract-valid submission answer with 500 results of the longest legal form, and a certificate with 500 items.
+
+## 126. A stop signal ends the test session; no test can absorb it (confirms and sharpens decision 115)
+
+Required behaviour when SIGTERM reaches a test session:
+
+1. No further test starts. The test that was running is reported as interrupted, not as failed or passed.
+2. All fixtures finalise and the session's own scratch objects are dropped (decision 115, points 1 and 2).
+3. The session ends with a non-zero exit code and a final line that says it was stopped by SIGTERM. It never ends with a summary such as "1 failed, 35 passed" that reads like a completed run.
+
+How: the handler records the signal in the session and raises an exception that derives from `BaseException`, not from `Exception`, so `except Exception` in a test or in product code under test does not catch it. Because a bare `except:` or a `finally` that swallows could still absorb it, the plugin also checks the recorded signal before every test starts and after every test ends, and stops the session there if it is set. During a provisioning call the signal is held and acted on when the call returns (decision 115, point 1).
+
+Tests: SIGTERM delivered while a test is inside `try: ... except Exception: pass`, inside a bare `except:`, inside `pytest.raises(Exception)`, inside a fixture, and during provisioning. Each ends the session as above and leaves no scratch object.
+
+## 127. Parity tests cover every method of every repository port, including the new reads
+
+Required now. Decision 63 asks for one behavioural test class per repository port, run against both implementations; that means every method of the port. `stage_rows`, `request_rows`, `reference_rows` and any other read added for deep verification get parity cases: the same data written through the port, the same rows returned in the same order by the in-memory and the PostgreSQL implementation, including the empty case, the multi-submission case and the ordering the digests of decision 107 rely on. Those reads feed the digests; a difference in order or in a column between the two implementations would make a unit-tested digest disagree with the real one.
+
+To keep this from recurring, a test in the bank agent enumerates the public methods of every repository port and fails when a method has no parity case (by a naming convention or a registry the shared test classes fill in).
+
+## 128. Implementer choices
+
+| Choice | Ruling |
+|---|---|
+| The ledger guard on `registry_outbox_messages` uses SQLSTATE `OP009` | **Confirmed.** The guard codes are now: `OP001` insert-only, `OP002` loan state, `OP003` loan immutable columns, `OP004` tape, `OP005` audit chain, `OP006` alert, `OP007` answered registry request, `OP008` no delete or truncate, `OP009` outbox ledger. `bank_agent/README.md` lists them in one table; `StoreRefusedError` carries the same codes. |
+| `pydantic-core` declared as a dependency of the doubles | **Confirmed**, and added to the allowed runtime packages: SPEC 2.1 requires a package to declare what it imports, and `pydantic_core` is imported by name. Rule for every package: where the name needed is exported by `pydantic` itself, import it from there; declare `pydantic-core` only where the name exists nowhere else. |
+| The schema startup check is named "schema in place" | **Confirmed as a name, with its meaning fixed.** The check passes only when the database's revision equals the head revision of the installed migrations (SPEC 12.5). Its failure sentence says which of two things is wrong: the tables are missing (run `db migrate`), or the database is at another revision than this program expects. A check that only looks for the tables would not be enough. |
+| A database-wide `session_replication_role` setting is reported as `TRIGGERS_DISABLED_FOR_SESSION` with object `database X` | **Overruled, small.** The session code describes a symptom; the operator has to fix a database setting. Use a distinct code, `DATABASE_HAS_SETTING`, with object `database X: session_replication_role`. `ROLE_HAS_SETTING` stays for role settings and `TRIGGERS_DISABLED_FOR_SESSION` for a session found in `replica` or `local` for a reason the other two checks did not explain. The advice sentence for the new code is "remove the database setting". `TRIGGERS_FIRE_FOR_APP_ROLE` is false for all three. |
+| `seed --json` carries the first 20 problems and `problems_total` | **Confirmed.** It is what decision 109 point 4 asks for. |
+| The WP1 implementer worked in the shared interpreter | **Not acceptable going forward.** Decision 81 (finding 11) already says "every reviewer and every implementer"; decision 114 repeats it. Implementers work in a private virtual environment built from their own working tree. Only the coordinator installs into the shared interpreter, and only between review rounds. No code change follows from this. |
+
+## 129. Where the residual list lives
+
+Confirmed. The list of what deep verification cannot detect (decision 107) is security documentation. Its one authoritative copy is `docs/layer1/THREAT_MODEL_L1.md`, written by WP5. Until WP5 lands it stays in `bank_agent/README.md`. When WP5 writes the threat model, the README keeps a single sentence pointing to it and no second copy of the list, so the two cannot drift. The wording of the four items of decision 107 is carried over unchanged, together with the limitation of decision 94.
+
+## 130. Allowed packages, restated
+
+After decisions 9, 76, 120 and 128 the lists of SPEC 2.1 read: runtime adds `starlette` and `pydantic-core` (each only where imported); dev-only adds `types-PyYAML`, `types-jsonschema`, `pytest-timeout`; `PyYAML`, `jsonschema` and `openapi-spec-validator` are runtime dependencies of the doubles package only. Nothing else has been added.
+
+## 131. No contract or rubric reading changes in this round
+
+`contracts/` is unchanged. Readings of decision 124 stand; TEST-01 is additionally read with decision 126 (a signalled session stops) and decision 127 (parity for every port method).
+
+---
+
+## Round 7: changes
+
+WP1 implementer (`tools/`, root tooling, `outside_records/`):
+
+| # | Change | Decision |
+|---|---|---|
+| Z1 | Test tooling: signal recorded and raised as a `BaseException` subclass; checked before and after every test; interrupted test reported as interrupted; non-zero exit with a "stopped by SIGTERM" line; the five absorption tests | 126 |
+| Z2 | Outside records `inspect_role()`: code `DATABASE_HAS_SETTING` with object `database X: session_replication_role` and its advice sentence | 128 |
+| Z3 | Check each WP1 package imports from `pydantic` where the name is exported there; keep `pydantic-core` declared only where needed | 128 |
+
+Bank agent implementer (`bank_agent/`):
+
+| # | Change | Decision |
+|---|---|---|
+| V1 | Size bounds by class: contract-bounded documents up to `HTTP_MAX_RESPONSE_BYTES` after schema validation, free-form as the table says; tests with a 500 result answer and a 500 item certificate | 125 |
+| V2 | Parity cases for `stage_rows`, `request_rows`, `reference_rows` and every other port read; a test that fails when a port method has no parity case | 127 |
+| V3 | `DATABASE_HAS_SETTING` as Z2; control false for all three causes | 128 |
+| V4 | README table of the nine guard codes; schema startup check passes only at head, with the two sentences | 128 |
+
+Order: Z1 before the bank agent implementer's final run (its suite uses the tooling). Nothing else depends on order.
+
+For WP5: the threat model takes over the residual list and the README keeps a pointer (decision 129).
