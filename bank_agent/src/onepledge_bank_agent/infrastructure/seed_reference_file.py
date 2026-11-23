@@ -22,12 +22,13 @@ from onepledge_bank_agent.domain.canonical_json import sha256_hex
 from onepledge_bank_agent.domain.entities import Facility, Lender
 from onepledge_bank_agent.domain.enums import FacilityStatus
 from onepledge_bank_agent.domain.errors import InvalidValueError, ReferenceDataError
-from onepledge_bank_agent.domain.storable import storable_json
+from onepledge_bank_agent.domain.storable import storable_json, storable_texts
 from onepledge_bank_agent.domain.values import Lei
 from onepledge_bank_agent.infrastructure import bounded_json
 from onepledge_bank_agent.infrastructure.http.answers import CanonicalUuid
 
 REFERENCE_FILE = "reference.json"
+UNSTORABLE = "holds a value that cannot be stored"
 PROBLEMS = MappingProxyType(
     {
         bounded_json.JsonProblem.TOO_DEEP: "nests too deeply",
@@ -75,8 +76,8 @@ class ReferenceFileSource:
         except bounded_json.JsonRefusedError as refused:
             problem = PROBLEMS[refused.problem]
             raise ReferenceDataError(f"{path}: {problem}.") from None
-        if not storable_json(document):
-            raise ReferenceDataError(f"{path}: holds a value that cannot be stored.")
+        if not storable_texts(document):
+            raise ReferenceDataError(f"{path}: {UNSTORABLE}.")
         try:
             parsed = _ReferenceFile.model_validate_json(content)
         except ValidationError:
@@ -89,13 +90,16 @@ class ReferenceFileSource:
             raise ReferenceDataError(f"{REFERENCE_FILE} names a lender that it does not define.")
         try:
             used = sorted({entry.lender_code for entry in facilities})
-            return ReferenceData(
+            found = ReferenceData(
                 lenders=tuple(self._lender(lenders[code]) for code in used),
                 facilities=tuple(self._facility(entry, lenders[entry.lender_code]) for entry in facilities),
                 source_sha256=sha256_hex(content),
             )
         except InvalidValueError as error:
             raise ReferenceDataError(f"{REFERENCE_FILE} has an invalid {error.field}.") from None
+        if not storable_json(document):  # a number out of range that no rule above names
+            raise ReferenceDataError(f"{path}: {UNSTORABLE}.")
+        return found
 
     @staticmethod
     def _content(path: Path) -> bytes:

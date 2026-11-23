@@ -106,3 +106,18 @@ def storable_json(value: object) -> bool:
         else:
             return False
     return True
+
+
+def storable_texts(value: object) -> bool:
+    """True when every key and string of a JSON value is a storable text; numbers are not looked at."""
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str) and not storable_text(item):
+            return False
+        if isinstance(item, dict):
+            pending.extend(item.keys())
+            pending.extend(item.values())
+        elif isinstance(item, list | tuple):
+            pending.extend(item)
+    return True
