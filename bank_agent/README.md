@@ -335,6 +335,8 @@ records and the worker output carry the same keys. Every failure code except
 | `PIPELINE_POLL_SECONDS` | `worker` | Default 1.0. |
 | `CHECK_CHUNK_LOANS` | `worker` | Default 100. |
 | `HTTP_CONNECT_TIMEOUT_SECONDS`, `HTTP_READ_TIMEOUT_SECONDS` | `worker` | Defaults 2 and 10. |
+| `HTTP_TOTAL_TIMEOUT_SECONDS` | `worker`, `registry sync`, `integrity verify` | Default 30: the most one call may take, so a body that trickles in is abandoned (SPEC_DECISIONS 102). |
+| `HTTP_MAX_RESPONSE_BYTES` | `worker`, `registry sync`, `integrity verify` | Default 4,194,304 (65,536 to 67,108,864): a larger answer is refused before or while it is read, as `MALFORMED_RESPONSE`; the bank asks for and accepts only `identity` encoding. |
 | `TITLE_PENDING_WINDOW_DAYS`, `FIRST_PAYMENT_GRACE_DAYS`, `PAYMENT_WINDOW_DAYS`, `CONTRACT_DATE_TOLERANCE_DAYS` | `worker` | Check windows of SPEC 11; defaults 30, 45, 90, 3. |
 
 `BIND_HOST` (default `127.0.0.1`) and `PORT` are read only by `serve`, the HTTP API of

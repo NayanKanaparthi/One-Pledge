@@ -18,7 +18,7 @@ from onepledge_bank_agent.domain.errors import (
     OutsideRecordsUnavailableError,
     PipelineStageError,
 )
-from onepledge_bank_agent.infrastructure.http.base import RetryingHttpCaller
+from onepledge_bank_agent.infrastructure.http.base import CallPolicy, RetryingHttpCaller
 from onepledge_bank_agent.infrastructure.http.outside_records import OutsideRecordsClient
 from onepledge_bank_agent.infrastructure.request_context import bound_request_id
 
@@ -70,7 +70,9 @@ def client(
 ) -> OutsideRecordsClient:
     log = recorder or Recorder()
     http = httpx.Client(base_url="http://outside.test", transport=httpx.MockTransport(handler))
-    return OutsideRecordsClient(RetryingHttpCaller(http, KEY, "outside_records", log, log.sleeps.append))
+    return OutsideRecordsClient(
+        RetryingHttpCaller(http, KEY, "outside_records", log, CallPolicy(log.sleeps.append))
+    )
 
 
 def answer(status: int, body: object) -> Callable[[httpx.Request], httpx.Response]:

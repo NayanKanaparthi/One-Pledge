@@ -37,6 +37,10 @@ _BANK_NAME = re.compile(r"^[ -~]{1,100}$")
 MAX_CHUNK = 1000
 MAX_TOKENIZE_CHUNK = 125  # 8 elements per loan, at most 1,000 elements per key holder request
 MAX_SUBMIT_BATCH = 500
+DEFAULT_RESPONSE_BYTES = 4_194_304
+MIN_RESPONSE_BYTES = 65_536
+MAX_RESPONSE_BYTES = 67_108_864
+"""`HTTP_MAX_RESPONSE_BYTES` (SPEC_DECISIONS 102): 4 MiB by default, 64 KiB to 64 MiB."""
 
 
 def read_environment() -> Mapping[str, str]:
@@ -66,6 +70,8 @@ class Tunables(BaseModel):
     submit_batch_items: int = 500
     http_connect_timeout_seconds: float = 2.0
     http_read_timeout_seconds: float = 10.0
+    http_total_timeout_seconds: float = 30.0
+    http_max_response_bytes: int = DEFAULT_RESPONSE_BYTES
     title_pending_window_days: int = 30
     first_payment_grace_days: int = 45
     payment_window_days: int = 90
@@ -84,6 +90,10 @@ def _tunables(read: SettingReader) -> Tunables:
         submit_batch_items=read.integer("SUBMIT_BATCH_ITEMS", 500, 1, MAX_SUBMIT_BATCH),
         http_connect_timeout_seconds=read.seconds("HTTP_CONNECT_TIMEOUT_SECONDS", 2.0),
         http_read_timeout_seconds=read.seconds("HTTP_READ_TIMEOUT_SECONDS", 10.0),
+        http_total_timeout_seconds=read.seconds("HTTP_TOTAL_TIMEOUT_SECONDS", 30.0),
+        http_max_response_bytes=read.integer(
+            "HTTP_MAX_RESPONSE_BYTES", DEFAULT_RESPONSE_BYTES, MIN_RESPONSE_BYTES, MAX_RESPONSE_BYTES
+        ),
         title_pending_window_days=read.integer("TITLE_PENDING_WINDOW_DAYS", 30, 0, 3650),
         first_payment_grace_days=read.integer("FIRST_PAYMENT_GRACE_DAYS", 45, 0, 3650),
         payment_window_days=read.integer("PAYMENT_WINDOW_DAYS", 90, 1, 3650),

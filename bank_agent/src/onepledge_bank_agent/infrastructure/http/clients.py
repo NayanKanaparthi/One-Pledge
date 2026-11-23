@@ -12,7 +12,13 @@ from dataclasses import dataclass
 from onepledge_bank_agent.application.ports import IdGenerator, OperationalLog
 from onepledge_bank_agent.domain.dependency_errors import KEY_HOLDER_1, KEY_HOLDER_2, REGISTRY
 from onepledge_bank_agent.domain.errors import OUTSIDE_RECORDS
-from onepledge_bank_agent.infrastructure.http.base import HttpClientFactory, HttpTimeouts, RetryingHttpCaller
+from onepledge_bank_agent.infrastructure.http.base import (
+    CallPolicy,
+    HttpClientFactory,
+    HttpTimeouts,
+    ResponseBounds,
+    RetryingHttpCaller,
+)
 from onepledge_bank_agent.infrastructure.http.key_holder_client import KeyHolderHttpClient
 from onepledge_bank_agent.infrastructure.http.outside_records import OutsideRecordsClient
 from onepledge_bank_agent.infrastructure.http.registry_client import RegistryHttpClient
@@ -43,7 +49,10 @@ class ServiceClients:
             tunables = self._settings.tunables
             timeouts = HttpTimeouts(tunables.http_connect_timeout_seconds, tunables.http_read_timeout_seconds)
             client = self._parts.factory(url, timeouts)
-            caller = RetryingHttpCaller(client, key, dependency, self._parts.log, self._parts.sleep)
+            bounds = ResponseBounds(tunables.http_max_response_bytes, tunables.http_total_timeout_seconds)
+            caller = RetryingHttpCaller(
+                client, key, dependency, self._parts.log, CallPolicy(self._parts.sleep, bounds)
+            )
             self._callers[dependency] = caller
         return caller
 

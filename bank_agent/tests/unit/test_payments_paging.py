@@ -20,7 +20,7 @@ from onepledge_bank_agent.domain import Vin
 from onepledge_bank_agent.domain.enums import FailureCode, FailureReason, LoanState, TapeStatus
 from onepledge_bank_agent.domain.errors import OutsideRecordsRejectedError
 from onepledge_bank_agent.domain.outside_records import PaymentWindow
-from onepledge_bank_agent.infrastructure.http.base import RetryingHttpCaller
+from onepledge_bank_agent.infrastructure.http.base import CallPolicy, RetryingHttpCaller
 from onepledge_bank_agent.infrastructure.http.outside_records import OutsideRecordsClient
 
 pytestmark = pytest.mark.unit
@@ -84,7 +84,9 @@ class StandIn:
 
 def read(service: StandIn) -> PaymentWindow:
     http = httpx.Client(base_url="http://outside.test", transport=httpx.MockTransport(service))
-    caller = RetryingHttpCaller(http, "opk_" + "a" * 43, "outside_records", Quiet(), lambda _: None)
+    caller = RetryingHttpCaller(
+        http, "opk_" + "a" * 43, "outside_records", Quiet(), CallPolicy(lambda _: None)
+    )
     return OutsideRecordsClient(caller).payments(VIN, WINDOW_FROM, WINDOW_TO)
 
 
@@ -194,7 +196,7 @@ def client_over(service: StandIn) -> OutsideRecordsClient:
     """The real payments client, over a stand-in service."""
     http = httpx.Client(base_url="http://outside.test", transport=httpx.MockTransport(service))
     return OutsideRecordsClient(
-        RetryingHttpCaller(http, "opk_" + "a" * 43, "outside_records", Quiet(), lambda _: None)
+        RetryingHttpCaller(http, "opk_" + "a" * 43, "outside_records", Quiet(), CallPolicy(lambda _: None))
     )
 
 

@@ -21,7 +21,7 @@ import pytest
 import yaml
 
 from onepledge_bank_agent.domain.vin import Vin
-from onepledge_bank_agent.infrastructure.http.base import RetryingHttpCaller
+from onepledge_bank_agent.infrastructure.http.base import CallPolicy, RetryingHttpCaller
 from onepledge_bank_agent.infrastructure.http.outside_records import OutsideRecordsClient
 from onepledge_bank_agent.infrastructure.request_context import bound_request_id
 
@@ -145,7 +145,9 @@ class Recorded:
 
     def client(self) -> OutsideRecordsClient:
         http = httpx.Client(base_url="http://outside.test", transport=httpx.MockTransport(self.handle))
-        return OutsideRecordsClient(RetryingHttpCaller(http, KEY, "outside_records", _Quiet(), _no_sleep))
+        return OutsideRecordsClient(
+            RetryingHttpCaller(http, KEY, "outside_records", _Quiet(), CallPolicy(_no_sleep))
+        )
 
 
 class _Quiet:

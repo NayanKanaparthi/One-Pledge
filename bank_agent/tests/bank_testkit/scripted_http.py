@@ -11,7 +11,7 @@ from collections.abc import Callable
 
 import httpx
 
-from onepledge_bank_agent.infrastructure.http.base import RetryingHttpCaller
+from onepledge_bank_agent.infrastructure.http.base import CallPolicy, RetryingHttpCaller
 from onepledge_bank_agent.infrastructure.http.registry_client import RegistryHttpClient
 
 type Handler = Callable[[httpx.Request], httpx.Response]
@@ -38,7 +38,7 @@ def caller(handler: Handler, dependency: str, seen: list[httpx.Request]) -> Retr
         return handler(request)
 
     client = httpx.Client(base_url="http://service.test", transport=httpx.MockTransport(record))
-    return RetryingHttpCaller(client, "k" * 40, dependency, Quiet(), lambda _: None)
+    return RetryingHttpCaller(client, "k" * 40, dependency, Quiet(), CallPolicy(lambda _: None))
 
 
 def registry(handler: Handler, seen: list[httpx.Request] | None = None) -> RegistryHttpClient:

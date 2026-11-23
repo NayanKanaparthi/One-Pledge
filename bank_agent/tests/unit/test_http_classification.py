@@ -20,7 +20,7 @@ from bank_testkit.memory.clocks import CountingIds
 from onepledge_bank_agent.domain.enums import FailureReason
 from onepledge_bank_agent.domain.errors import PipelineStageError
 from onepledge_bank_agent.domain.vin import Vin
-from onepledge_bank_agent.infrastructure.http.base import RetryingHttpCaller
+from onepledge_bank_agent.infrastructure.http.base import CallPolicy, RetryingHttpCaller
 from onepledge_bank_agent.infrastructure.http.key_holder_client import KeyHolderHttpClient
 from onepledge_bank_agent.infrastructure.http.outside_records import OutsideRecordsClient
 from onepledge_bank_agent.infrastructure.http.registry_client import RegistryHttpClient
@@ -45,7 +45,7 @@ class Quiet:
 
 def caller(dependency: str, handler: Handler) -> RetryingHttpCaller:
     client = httpx.Client(base_url="http://service.test", transport=httpx.MockTransport(handler))
-    return RetryingHttpCaller(client, "k" * 40, dependency, Quiet(), lambda _: None)
+    return RetryingHttpCaller(client, "k" * 40, dependency, Quiet(), CallPolicy(lambda _: None))
 
 
 def call_outside(handler: Handler) -> object:

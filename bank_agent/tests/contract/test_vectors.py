@@ -25,7 +25,7 @@ from onepledge_bank_agent.domain.values import BorrowerRef, Lei, LoanTerms, Mone
 from onepledge_bank_agent.domain.vin import Vin
 from onepledge_bank_agent.infrastructure.crypto.blinder import OprfBlinder
 from onepledge_bank_agent.infrastructure.crypto.signatures import Ed25519SignatureVerifier
-from onepledge_bank_agent.infrastructure.http.base import RetryingHttpCaller
+from onepledge_bank_agent.infrastructure.http.base import CallPolicy, RetryingHttpCaller
 from onepledge_bank_agent.infrastructure.http.registry_client import RegistryHttpClient
 
 pytestmark = pytest.mark.contract
@@ -56,7 +56,9 @@ def registry_answering(document: object) -> RegistryHttpClient:
     """The bank's registry client, every call answered 200 with `document`."""
     transport = httpx.MockTransport(lambda request: httpx.Response(200, json=document))
     client = httpx.Client(base_url="http://registry.test", transport=transport)
-    return RegistryHttpClient(RetryingHttpCaller(client, "k" * 40, "registry", QuietLog(), lambda _: None))
+    return RegistryHttpClient(
+        RetryingHttpCaller(client, "k" * 40, "registry", QuietLog(), CallPolicy(lambda _: None))
+    )
 
 
 def test_the_vector_loan_gives_the_vector_tokens_through_the_bank_agent_code() -> None:
