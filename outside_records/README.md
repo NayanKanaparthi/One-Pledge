@@ -112,6 +112,7 @@ outside_records/
       0002_grants.py    # the grant matrix for the app role
       0003_contract_checks.py  # the contract's rules as check constraints
       0004_alembic_version_grant.py  # SELECT on alembic_version for the app role
+      0005_collate_c.py  # COLLATE "C" on every text-typed column
   src/
     onepledge_outside_records/
       domain/
@@ -163,6 +164,12 @@ case letters`), and the count of the rest; `--json` carries the same list as `pr
 with `problems_total`. Migration 0003 gives the database the same rules as check
 constraints, so no writer can store a row that makes the API break its contract.
 `clients add` with a key another client already has says so.
+
+Text is compared and ordered by code point whatever the database's default collation
+(SPEC_DECISIONS 133): migration 0005 declares every text-typed column `COLLATE "C"` (the
+models say the same, and a test reads the catalogue for any other collation), which under
+UTF8 is the code point order Python uses and is deterministic, so VIN lookups, the unique
+client names and key hashes, and the pattern checks behave the same on any server.
 
 Every command exits 0 on
 success and 1 with one sentence on stderr when something is wrong (PostgreSQL not

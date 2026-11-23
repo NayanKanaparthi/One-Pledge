@@ -1,4 +1,7 @@
-"""SQLAlchemy models of the outside records database (SPEC 6.1). They must equal the migrations."""
+"""SQLAlchemy models of the outside records database (SPEC 6.1). They must equal the migrations.
+
+Every text-typed column is `COLLATE "C"` (SPEC_DECISIONS 133.2, migration 0005).
+"""
 
 from __future__ import annotations
 
@@ -65,10 +68,10 @@ class TitleRecordRow(Base):
         *_checks("title_records"),
     )
 
-    vin: Mapped[str] = mapped_column(CHAR(17), primary_key=True)
-    state: Mapped[str] = mapped_column(CHAR(2))
-    title_status: Mapped[str] = mapped_column(Text)
-    lienholder_name: Mapped[str | None] = mapped_column(Text)
+    vin: Mapped[str] = mapped_column(CHAR(17, collation="C"), primary_key=True)
+    state: Mapped[str] = mapped_column(CHAR(2, collation="C"))
+    title_status: Mapped[str] = mapped_column(Text(collation="C"))
+    lienholder_name: Mapped[str | None] = mapped_column(Text(collation="C"))
     lien_recorded_on: Mapped[date | None] = mapped_column(Date)
 
 
@@ -82,10 +85,10 @@ class PaymentRow(Base):
     )
 
     payment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
-    vin: Mapped[str] = mapped_column(CHAR(17))
+    vin: Mapped[str] = mapped_column(CHAR(17, collation="C"))
     paid_on: Mapped[date] = mapped_column(Date)
     amount_cents: Mapped[int] = mapped_column(BigInteger)
-    deposit_bank_code: Mapped[str] = mapped_column(Text)
+    deposit_bank_code: Mapped[str] = mapped_column(Text(collation="C"))
 
 
 class ContractRow(Base):
@@ -100,11 +103,11 @@ class ContractRow(Base):
     )
 
     contract_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
-    vin: Mapped[str] = mapped_column(CHAR(17))
-    lender_name: Mapped[str] = mapped_column(Text)
+    vin: Mapped[str] = mapped_column(CHAR(17, collation="C"))
+    lender_name: Mapped[str] = mapped_column(Text(collation="C"))
     amount_cents: Mapped[int] = mapped_column(BigInteger)
     signed_on: Mapped[date] = mapped_column(Date)
-    document_sha256: Mapped[str] = mapped_column(CHAR(64))
+    document_sha256: Mapped[str] = mapped_column(CHAR(64, collation="C"))
 
 
 class ApiClientRow(Base):
@@ -116,8 +119,8 @@ class ApiClientRow(Base):
     )
 
     client_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
-    name: Mapped[str] = mapped_column(Text, unique=True)
-    api_key_sha256: Mapped[str] = mapped_column(CHAR(64), unique=True)
+    name: Mapped[str] = mapped_column(Text(collation="C"), unique=True)
+    api_key_sha256: Mapped[str] = mapped_column(CHAR(64, collation="C"), unique=True)
     active: Mapped[bool] = mapped_column(Boolean, server_default="true")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

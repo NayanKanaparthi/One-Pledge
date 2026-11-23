@@ -16,7 +16,7 @@ from psycopg import errors as pg_errors
 from psycopg import sql
 from psycopg.abc import Params, QueryNoTemplate
 from psycopg.rows import TupleRow
-from sqlalchemy import Engine, inspect, text
+from sqlalchemy import Engine, String, inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from onepledge_outside_records.application.administration import RegisterClient, SeedRecords
@@ -94,7 +94,7 @@ def test_migrations_go_up_down_and_up_again(provisioned_database: Database) -> N
         assert set(TABLES) <= table_names(engine)
         with engine.connect() as connection:
             version: str = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert version == runner.head_revision() == "0004_alembic_version_grant"
+        assert version == runner.head_revision() == "0005_collate_c"
     finally:
         engine.dispose()
 
@@ -353,3 +353,33 @@ def test_provisioning_creates_a_utf8_database_from_template0(
             (fresh_database.target.database,),
         ).fetchone()
     assert encoding == ("UTF8",)
+
+
+# SPEC_DECISIONS 133.2: every text-typed column is COLLATE "C", in the database and in the models.
+_COLLATIONS = text("""
+SELECT c.relname || '.' || a.attname, coll.collname
+FROM pg_attribute AS a
+    JOIN pg_class AS c ON c.oid = a.attrelid
+    JOIN pg_namespace AS n ON n.oid = c.relnamespace
+    JOIN pg_collation AS coll ON coll.oid = a.attcollation
+WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND a.attnum > 0 AND NOT a.attisdropped
+""")
+
+
+def column_collations(engine: Engine) -> dict[str, str]:
+    """Every collatable column of the schema and its collation, from the catalogue."""
+    with engine.connect() as connection:
+        return {str(row[0]): str(row[1]) for row in connection.execute(_COLLATIONS)}
+
+
+def test_every_text_column_of_the_migrated_schema_is_collate_c(owner_engine: Engine) -> None:
+    collations = column_collations(owner_engine)
+    assert "title_records.vin" in collations and "alembic_version.version_num" in collations
+    assert {column: name for column, name in collations.items() if name != "C"} == {}
+
+
+def test_every_text_column_of_the_models_declares_collate_c() -> None:
+    columns = [column for table in Base.metadata.tables.values() for column in table.columns]
+    texts = [(f"{c.table.name}.{c.name}", c.type) for c in columns if isinstance(c.type, String)]
+    assert len(texts) == 11
+    assert [name for name, kind in texts if isinstance(kind, String) and kind.collation != "C"] == []
