@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 import yaml
 from jsonschema import Draft202012Validator
+from psycopg import sql
 
 from bank_testkit.data import CONTRACTS, seed_reference
 from bank_testkit.database import BankDatabase, pairs
@@ -219,3 +220,25 @@ def test_a_section_whose_query_fails_is_not_verified_with_the_reason_and_the_res
     assert section_line(plain.out, "registry_messages")[:2] == ["registry_messages", "NOT_VERIFIED"]
     assert "SQLSTATE 42703" in plain.out and "certificates" in plain.out
     assert "Traceback" not in plain.out + plain.err
+
+
+def test_integrity_report_shows_a_role_that_cannot_read_what_it_reports_on(
+    cli: Cli, bank_db: BankDatabase
+) -> None:
+    """SPEC_DECISIONS 72, 93 item 8: a privilege taken from the app role is a false control and an
+    unread section in a printed report, never a refusal of the whole report."""
+    with bank_db.connect("admin") as connection:
+        connection.execute(
+            sql.SQL("REVOKE SELECT ON alembic_version, registry_messages_quarantined FROM {}").format(
+                sql.Identifier(bank_db.app_role)
+            )
+        )
+    report = cli("integrity", "report", "--json")
+    assert report.code == 1, report.err
+    document = report.json()
+    controls = {c["name"]: c["ok"] for c in document["database_controls"]["controls"]}
+    assert controls["SCHEMA_AT_MIGRATION_HEAD"] is False and controls["APP_ROLE_GRANTS_EXACT"] is False
+    assert document["registry_messages"]["status"] == "NOT_VERIFIED"
+    plain = cli("integrity", "report")
+    assert plain.code == 1 and plain.err == ""
+    assert "TABLE_PRIVILEGE_MISSING" in plain.out and "SQLSTATE 42501" in plain.out

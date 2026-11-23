@@ -32,10 +32,14 @@ IDENTITY = frozenset(
     }
 )
 """Points 1 to 3 of SPEC_DECISIONS 72: what `APP_ROLE_IS_NOT_OWNER_OR_SUPERUSER` requires."""
-REVISION = text(
-    "SELECT CASE WHEN to_regclass('public.alembic_version') IS NULL THEN NULL "
-    "ELSE (SELECT version_num FROM alembic_version LIMIT 1) END"
+READABLE_REVISION = text(
+    "SELECT to_regclass('public.alembic_version') IS NOT NULL "
+    "AND has_table_privilege('public.alembic_version', 'SELECT')"
 )
+"""Whether the connected role can read the revision at all: a missing table or a revoked SELECT leaves
+`SCHEMA_AT_MIGRATION_HEAD` false (it cannot be shown to hold) instead of failing the whole report; the
+revoked grant itself is a `TABLE_PRIVILEGE_MISSING` of `APP_ROLE_GRANTS_EXACT`."""
+REVISION = text("SELECT version_num FROM alembic_version LIMIT 1")
 
 
 class SqlDatabaseControlInspector:
@@ -50,7 +54,8 @@ class SqlDatabaseControlInspector:
         with self._engine.connect() as connection:
             triggers = installed_triggers(connection)
             violations = inspect_role(connection)
-            revision = connection.execute(REVISION).scalar_one_or_none()
+            readable = bool(connection.execute(READABLE_REVISION).scalar_one())
+            revision = connection.execute(REVISION).scalar_one_or_none() if readable else None
 
         def enabled(*names: str) -> bool:
             return in_force(triggers, guards_named(*names))
