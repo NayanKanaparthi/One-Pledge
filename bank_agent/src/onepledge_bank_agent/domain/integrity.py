@@ -210,13 +210,22 @@ class RawDataSection:
 
 
 @dataclass(frozen=True)
+class ControlViolation:
+    """Why a control is false: the control, the violation code and the object it names (SPEC_DECISIONS
+    72, 103, 105, 108)."""
+
+    control: DatabaseControl
+    code: str
+    object: str | None
+
+
+@dataclass(frozen=True)
 class ControlsSection:
-    """Each database control and whether it is in force now, and how the app role differs from the
-    grant matrix (`CODE on object`, SPEC_DECISIONS 72) when `APP_ROLE_GRANTS_EXACT` is false."""
+    """Each database control and whether it is in force now, and every violation behind a false one."""
 
     status: SectionStatus
     controls: tuple[tuple[DatabaseControl, bool], ...]
-    violations: tuple[str, ...] = ()
+    violations: tuple[ControlViolation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -343,7 +352,7 @@ def evidence_section(problems: Iterable[EvidenceProblem] | None) -> EvidenceSect
 
 
 def controls_section(
-    controls: Mapping[DatabaseControl, bool], violations: Sequence[str] = ()
+    controls: Mapping[DatabaseControl, bool], violations: Sequence[ControlViolation] = ()
 ) -> ControlsSection:
     """Every control in report order; BROKEN when any is false (a missing one counts as false)."""
     ordered = tuple((control, bool(controls.get(control, False))) for control in DatabaseControl)

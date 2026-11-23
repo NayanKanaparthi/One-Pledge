@@ -18,7 +18,7 @@ from collections.abc import Mapping
 
 from sqlalchemy import Engine, text
 
-from onepledge_bank_agent.domain.integrity import DatabaseControl
+from onepledge_bank_agent.domain.integrity import ControlViolation, DatabaseControl
 from onepledge_bank_agent.infrastructure.db.guard_manifest import guards_named, in_force, installed_triggers
 from onepledge_bank_agent.infrastructure.db.role_check import SCHEMA, SETTING_CODES, Violation, inspect_role
 from onepledge_bank_agent.infrastructure.db.schema_manifest import catalogue, differences, digest, expected
@@ -102,15 +102,22 @@ class SqlDatabaseControlInspector:
             DatabaseControl.SCHEMA_MATCHES_MANIFEST: digest(live) == digest(expected()),
         }
 
-    def violations(self) -> tuple[str, ...]:
-        """Every way the connected role differs from the grant matrix, then every object of the schema that
-        differs from the manifest (SPEC_DECISIONS 105), as `CODE on object`."""
+    def violations(self) -> tuple[ControlViolation, ...]:
+        """Every way the connected role differs from a least-privilege app role, under the control it
+        falsifies, then every object of the schema that differs from the manifest (SPEC_DECISIONS 105)."""
         with self._engine.connect() as connection:
-            role = tuple(str(violation) for violation in inspect_role(connection))
+            role = inspect_role(connection)
             live = catalogue(connection)
         wanted = expected()
-        schema = tuple(f"{_difference(name, live, wanted)} on {name}" for name in differences(live, wanted))
-        return role + schema
+        return (
+            *(ControlViolation(_role_control(v.code), v.code.value, v.object_name) for v in role),
+            *(
+                ControlViolation(
+                    DatabaseControl.SCHEMA_MATCHES_MANIFEST, _difference(name, live, wanted), name
+                )
+                for name in differences(live, wanted)
+            ),
+        )
 
 
 def _difference(name: str, live: Mapping[str, str], wanted: Mapping[str, str]) -> str:
@@ -118,3 +125,13 @@ def _difference(name: str, live: Mapping[str, str], wanted: Mapping[str, str]) -
     if name not in wanted:
         return "SCHEMA_OBJECT_ADDED"
     return "SCHEMA_OBJECT_MISSING" if name not in live else "SCHEMA_OBJECT_CHANGED"
+
+
+def _role_control(code: Violation) -> DatabaseControl:
+    """The control a role violation falsifies: point 7 is TRIGGERS_FIRE_FOR_APP_ROLE's, the rest
+    APP_ROLE_GRANTS_EXACT's."""
+    return (
+        DatabaseControl.TRIGGERS_FIRE_FOR_APP_ROLE
+        if code in SETTING_CODES
+        else DatabaseControl.APP_ROLE_GRANTS_EXACT
+    )

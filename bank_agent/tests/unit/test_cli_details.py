@@ -121,6 +121,33 @@ def test_the_last_column_of_a_long_row_wraps_under_itself_and_the_other_columns_
     assert " ".join(part[column:] for part in [lines[3], *continuation]) == facts
 
 
+FACTS = [
+    "0f8fad5b-d9cb-469f-a165-70867728950e: HEAD_MISMATCH", "seq 2", "first bad event 5",
+    "received at 2026-11-20T09:30:00Z", "the checkpoint the registry signed with key version 3",
+]  # fmt: skip
+
+
+def test_a_failure_row_breaks_only_between_facts_and_never_after_a_colon() -> None:
+    """SPEC_DECISIONS 108: a fact is never cut, and no line ends in a colon (review 3, quality 11)."""
+    out = io.StringIO()
+    rows = [("registry_chain", "checkpoint", ", ".join(FACTS))]
+    Output(out, io.StringIO()).table("Open failures", ("section", "object", "finding"), rows, ("f", "fs"), "")
+    lines = out.getvalue().splitlines()
+    column = lines[1].index("finding")
+    cells = [line[column:] for line in lines[2 : lines.index("1 f")]]
+    assert len(cells) > 1 and all(len(line) <= WIDTH for line in lines)
+    assert not any(cell.endswith(":") for cell in cells)
+    assert all(cell.endswith(",") for cell in cells[:-1]), "each line ends between two facts"
+    assert [fact for cell in cells for fact in cell.removesuffix(",").split(", ")] == FACTS
+
+
+def test_a_sentence_never_breaks_after_a_colon() -> None:
+    sentence = "  " + "word " * 17 + "reason: CERTIFICATE_MISSING and more words to follow the colon here"
+    assert "reason:" in fit(sentence)
+    assert not any(line.endswith(":") for line in fit(sentence).splitlines())
+    assert " ".join(fit(sentence).split()) == " ".join(sentence.split())
+
+
 def test_a_pair_value_wraps_under_the_value_column_and_wide_keeps_one_line() -> None:
     value = " ".join(["word"] * 40)
     narrow, wide = io.StringIO(), io.StringIO()

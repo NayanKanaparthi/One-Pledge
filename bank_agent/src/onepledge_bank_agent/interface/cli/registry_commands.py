@@ -16,7 +16,7 @@ from onepledge_bank_agent.application.sync_registry_outbox import SyncResult
 from onepledge_bank_agent.domain.canonical_json import JsonValue
 from onepledge_bank_agent.domain.enums import IntegrityRunStatus
 from onepledge_bank_agent.domain.integrity import IntegrityReport, render_time
-from onepledge_bank_agent.domain.integrity_document import Finding, all_findings, report_json
+from onepledge_bank_agent.domain.integrity_document import LIST_CAP, Finding, all_findings, report_json
 from onepledge_bank_agent.interface.cli.output import Output, counted
 from onepledge_bank_agent.interface.composition import RuntimeComposition
 
@@ -99,9 +99,32 @@ def _audit_facts(report: IntegrityReport) -> str:
     return f"{counted(audit.entries, 'entry', 'entries')}{bad}"
 
 
+def _listed(total: int) -> str:
+    """The fact that says a list was capped (SPEC_DECISIONS 108), or nothing."""
+    return f", first {LIST_CAP} listed" if total > LIST_CAP else ""
+
+
 def _controls_facts(report: IntegrityReport) -> str:
-    controls = report.database_controls.controls
-    return f"{sum(1 for _, ok in controls if ok)} of {len(controls)} in force"
+    section = report.database_controls
+    controls = section.controls
+    facts = f"{sum(1 for _, ok in controls if ok)} of {len(controls)} in force"
+    total = len(section.violations)
+    return facts + (f", {counted(total, 'violation', 'violations')}{_listed(total)}" if total else "")
+
+
+def _messages_facts(report: IntegrityReport) -> str:
+    section = report.registry_messages
+    facts = (
+        counted(section.quarantined, "message", "messages") + " quarantined" + _listed(section.quarantined)
+    )
+    outbox = section.outbox
+    if outbox is None:
+        return facts
+    if outbox.blind:
+        since = render_time(outbox.blind_since) if outbox.blind_since is not None else "the start"
+        return f"{facts}, outbox blind since {since}"
+    synced = outbox.last_complete_sync_at
+    return f"{facts}, " + (f"last complete sync {render_time(synced)}" if synced else "no complete sync yet")
 
 
 FACTS: Mapping[str, Callable[[IntegrityReport], str]] = MappingProxyType(
@@ -118,10 +141,10 @@ FACTS: Mapping[str, Callable[[IntegrityReport], str]] = MappingProxyType(
             + f", {len(r.raw_data.bad_submission_ids):,} not intact"
         ),
         "database_controls": _controls_facts,
-        "registry_messages": lambda r: (
-            counted(r.registry_messages.quarantined, "message", "messages") + " quarantined"
+        "registry_messages": _messages_facts,
+        "evidence": lambda r: (
+            counted(len(r.evidence.problems), "problem", "problems") + _listed(len(r.evidence.problems))
         ),
-        "evidence": lambda r: counted(len(r.evidence.problems), "problem", "problems"),
     }
 )
 """The facts column of every section of the document, by section name."""

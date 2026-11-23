@@ -153,7 +153,9 @@ def test_each_violation_is_refused_by_the_guard_and_shown_by_the_report(
     controls = inspector.controls()
     false = {control for control in ROLE_CONTROLS if not controls[control]}
     assert false == {broken.control, *broken.also_false}
-    assert any(text.startswith(code.value) and named in text for text in inspector.violations())
+    assert any(
+        v.code == code.value and v.object is not None and named in v.object for v in inspector.violations()
+    )
 
 
 def test_a_superuser_and_the_owner_are_refused_and_shown(bank_db: BankDatabase) -> None:

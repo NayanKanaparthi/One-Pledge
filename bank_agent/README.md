@@ -246,9 +246,10 @@ error, and a flag takes no value.
   them (`PORT`, `LOG_LEVEL`, `BIND_HOST`, a database URL, a value that is not plain
   text), and a well formed number outside its bounds says "is out of range".
 - Human readable output is at most 100 columns. The last column of a table and the
-  value of a name and value pair wrap at spaces onto lines that start under that column;
-  any other long line, an error sentence included, wraps onto lines indented two more
-  spaces; a long identifier in a table is shortened as a hash is (12 characters and
+  value of a name and value pair wrap onto lines that start under that column, breaking
+  only between facts (after a comma), never inside one and never after a colon
+  (SPEC_DECISIONS 108); any other long line, an error sentence included, wraps at spaces,
+  never after a colon, onto lines indented two more spaces; a long identifier in a table is shortened as a hash is (12 characters and
   `...`). `--wide` turns the limit and the shortening off; `--json` carries every value
   in full.
 - `worker` without `--once` runs until stopped and prints no result, so `--json`
@@ -293,10 +294,17 @@ error, and a flag takes no value.
   also as `error`) and exits 1.
 - `integrity report` and `integrity verify` print the seven sections with their facts,
   then under "Open failures" every finding that makes a section BROKEN (the fifteen
-  database controls and the role violations among them) and under "Recovered (evidence
-  kept)" the failures a later proof recovered; the text and the JSON form walk the same
-  lists (SPEC_DECISIONS 88). With `--json` the document is the `IntegrityReport` of
-  `bank_agent.yaml` plus `"ok": true`. Both exit 0 when the status is OK and 1 when it is
+  database controls and the violations behind a false one, each with its control, code
+  and object; every open quarantined message; the outbox while blind, with since when and
+  why; every evidence problem with its stage) and under "Recovered (evidence kept)" the
+  failures a later proof recovered, a quarantined message applied late among them. The
+  facts of `registry_messages` give the outbox state (last complete sync, or blind since
+  when). The text and the JSON form are rendered from the same objects and carry the same
+  findings in both directions (SPEC_DECISIONS 88, 108): `violations`, `messages` and
+  `outbox`, and the evidence problems with `stage`. Each list holds at most 200 entries
+  (messages newest first) beside its total (`violations_total`, `quarantined`,
+  `problems_total`), and the text says "first 200 listed" when a list is longer. With
+  `--json` the document is the `IntegrityReport` of `bank_agent.yaml` plus `"ok": true`. Both exit 0 when the status is OK and 1 when it is
   BROKEN, after printing the whole report. `integrity report` skips the head and role
   checks, so it can show `SCHEMA_AT_MIGRATION_HEAD` or a role control false, and refuses
   only a database that was never migrated ("The bank database tables are missing; run db

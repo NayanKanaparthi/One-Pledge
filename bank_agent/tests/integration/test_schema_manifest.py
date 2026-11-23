@@ -14,7 +14,7 @@ from typing import LiteralString
 import pytest
 
 from bank_testkit.database import BankDatabase
-from onepledge_bank_agent.domain.integrity import DatabaseControl
+from onepledge_bank_agent.domain.integrity import ControlViolation, DatabaseControl
 from onepledge_bank_agent.infrastructure.db.controls import SqlDatabaseControlInspector
 from onepledge_bank_agent.infrastructure.db.engines import make_engine
 from onepledge_bank_agent.infrastructure.db.migrations import head_revision
@@ -23,7 +23,7 @@ from onepledge_bank_agent.infrastructure.db.schema_manifest import catalogue, di
 pytestmark = pytest.mark.integration
 
 
-def inspect(database: BankDatabase) -> tuple[bool, tuple[str, ...]]:
+def inspect(database: BankDatabase) -> tuple[bool, tuple[ControlViolation, ...]]:
     engine = make_engine(database.app_url)
     try:
         inspector = SqlDatabaseControlInspector(engine, head_revision())
@@ -64,4 +64,5 @@ def test_each_change_of_the_schema_turns_the_control_false_and_is_named(
         connection.execute(statement)
     holds, violations = inspect(bank_db)
     assert not holds
-    assert f"{code} on {name}" in violations
+    manifest = DatabaseControl.SCHEMA_MATCHES_MANIFEST
+    assert ControlViolation(manifest, code, name) in violations

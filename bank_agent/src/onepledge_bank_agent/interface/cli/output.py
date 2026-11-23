@@ -7,9 +7,11 @@ title line, column headers, aligned columns, a count line and a closing line. Ha
 are shown as their first 12 characters followed by `...`.
 
 Human readable lines are at most 100 columns (SPEC_DECISIONS 78). The last column of a
-table, and the value of a name and value pair, wraps at spaces onto continuation lines
-that start under that column, so the other columns stay aligned and no word or
-identifier is ever cut; any other long line wraps onto lines indented two more spaces.
+table, and the value of a name and value pair, wraps onto continuation lines that start
+under that column, so the other columns stay aligned; it breaks only between facts, after a
+comma, never inside one and never after a colon (SPEC_DECISIONS 108), and only a fact longer
+than the column itself is broken at its spaces. Any other long line wraps at spaces onto
+lines indented two more spaces.
 A long identifier in a table is shortened like a hash (`shorten`). `--wide` turns the
 limit and the shortening off. The call frames `--debug` prints are diagnostic text and
 are printed as they are: a file path is never wrapped.
@@ -35,10 +37,18 @@ USAGE_CODE: Final = "USAGE"
 USAGE_MESSAGE: Final = "The command line is not valid. See the usage text."
 
 
+GLUE = "\u00a0"
+"""Joins a colon to the word after it while wrapping (textwrap breaks only at ASCII white space)."""
+
+
 def _wrap(text: str, width: int, indent: str) -> list[str]:
-    return textwrap.wrap(
-        text, width, subsequent_indent=indent, break_long_words=False, break_on_hyphens=False
+    """`text` broken at spaces, never after a colon (SPEC_DECISIONS 108) and never inside a word."""
+    glue = GLUE not in text  # a text that holds the glue itself is wrapped as it is, never altered
+    glued = text.replace(": ", ":" + GLUE) if glue else text
+    lines = textwrap.wrap(
+        glued, width, subsequent_indent=indent, break_long_words=False, break_on_hyphens=False
     )
+    return [line.replace(GLUE, " ") for line in lines] if glue else lines
 
 
 def fit(text: str, wide: bool = False) -> str:
@@ -55,6 +65,22 @@ def fit(text: str, wide: bool = False) -> str:
     return "\n".join(lines)
 
 
+def wrap_facts(text: str, width: int) -> list[str]:
+    """`text` in lines of at most `width` columns, broken only after the comma between two facts; a
+    fact longer than `width` alone is broken at its spaces, never after a colon."""
+    facts = text.split(", ")
+    lines: list[str] = []
+    for index, fact in enumerate(facts):
+        piece = fact + ("," if index < len(facts) - 1 else "")
+        if lines and len(lines[-1]) + 1 + len(piece) <= width:
+            lines[-1] += " " + piece
+        elif len(piece) <= width:
+            lines.append(piece)
+        else:
+            lines += _wrap(piece, width, "")
+    return lines
+
+
 def hanging(prefix: str, last: str, wide: bool = False) -> list[str]:
     """`prefix` followed by `last`; when that is over 100 columns, `last` wraps onto lines that start
     under its first character, so the columns of `prefix` stay aligned."""
@@ -62,7 +88,7 @@ def hanging(prefix: str, last: str, wide: bool = False) -> list[str]:
     available = WIDTH - len(prefix)
     if wide or len(line) <= WIDTH or available < MIN_WRAP_COLUMN:
         return fit(line, wide).split("\n")
-    wrapped = _wrap(last, available, "")
+    wrapped = wrap_facts(last, available)
     return [prefix + wrapped[0], *(" " * len(prefix) + part for part in wrapped[1:])]
 
 

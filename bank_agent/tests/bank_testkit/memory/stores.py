@@ -40,7 +40,7 @@ from onepledge_bank_agent.domain.enums import (
     TokenKind,
 )
 from onepledge_bank_agent.domain.errors import ConcurrentUploadError, ReferenceDataError
-from onepledge_bank_agent.domain.integrity import DatabaseControl
+from onepledge_bank_agent.domain.integrity import ControlViolation, DatabaseControl
 from onepledge_bank_agent.domain.loan import Loan
 from onepledge_bank_agent.domain.outbox import LedgerEntry, OutboxOutcome, OutboxState
 from onepledge_bank_agent.domain.registry_records import ItemOutcome, QuarantinedMessage, RegistryAnswer
@@ -611,12 +611,12 @@ class MemoryControls:
 
     def __init__(self) -> None:
         self.state = dict.fromkeys(DatabaseControl, True)
-        self.role_violations: tuple[str, ...] = ()
+        self.role_violations: tuple[ControlViolation, ...] = ()
 
     def controls(self) -> Mapping[DatabaseControl, bool]:
         return dict(self.state)
 
-    def violations(self) -> tuple[str, ...]:
+    def violations(self) -> tuple[ControlViolation, ...]:
         return self.role_violations
 
 

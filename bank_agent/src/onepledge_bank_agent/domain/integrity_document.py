@@ -1,8 +1,10 @@
 """The integrity report as a document: the `IntegrityReport` wire shape, and the findings a stored one holds.
 
-One walk of the report gives both renderings their facts (SPEC_DECISIONS 88): the JSON
-document here, and the text report of the command line, which lists the same sections
-and the same failures (`all_findings`).
+One walk of the report gives both renderings their facts (SPEC_DECISIONS 88, 108): the JSON
+document here, and the text report of the command line, which lists the same sections and the
+same failures (`all_findings`). The lists that can grow (violations, quarantined messages,
+evidence problems) are capped at 200 entries, newest first where they have a time, by the same
+functions for both forms, and the JSON gives each list's total.
 """
 
 from __future__ import annotations
@@ -10,20 +12,27 @@ from __future__ import annotations
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from onepledge_bank_agent.domain.canonical_json import JsonValue
-from onepledge_bank_agent.domain.enums import CheckpointFailure
+from onepledge_bank_agent.domain.enums import CheckpointFailure, TapeStatus
 from onepledge_bank_agent.domain.errors import InvalidValueError
 from onepledge_bank_agent.domain.integrity import (
     AuditChainSection,
     CertificateFinding,
     CertificateProblem,
     CheckpointProblem,
+    ControlsSection,
+    ControlViolation,
+    DatabaseControl,
     EvidenceProblem,
     EvidenceProblemKind,
+    EvidenceSection,
     IntegrityReport,
+    QuarantineFinding,
     RawDataSection,
     RegistryChainSection,
+    RegistryMessagesSection,
     SectionStatus,
     parse_time,
     render_time,
@@ -61,6 +70,71 @@ def _chain_json(chain: RegistryChainSection) -> dict[str, JsonValue]:
     }
 
 
+LIST_CAP = 200
+OBJECT_LENGTH = 200
+
+
+def shown_violations(section: ControlsSection) -> tuple[ControlViolation, ...]:
+    """The violations both forms list."""
+    return section.violations[:LIST_CAP]
+
+
+def shown_messages(section: RegistryMessagesSection) -> tuple[QuarantineFinding, ...]:
+    """The quarantined messages both forms list, newest first."""
+    ordered = sorted(section.messages, key=lambda m: (m.received_at, str(m.quarantine_id)), reverse=True)
+    return tuple(ordered[:LIST_CAP])
+
+
+def shown_problems(section: EvidenceSection) -> tuple[EvidenceProblem, ...]:
+    """The evidence problems both forms list."""
+    return section.problems[:LIST_CAP]
+
+
+def _controls_json(section: ControlsSection) -> dict[str, JsonValue]:
+    return {
+        "status": section.status.value,
+        "controls": [{"name": name.value, "ok": ok} for name, ok in section.controls],
+        "violations": [
+            {
+                "control": v.control.value,
+                "code": v.code,
+                "object": v.object[:OBJECT_LENGTH] if v.object else None,
+            }
+            for v in shown_violations(section)
+        ],
+        "violations_total": len(section.violations),
+    }
+
+
+def _messages_json(section: RegistryMessagesSection) -> dict[str, JsonValue]:
+    """The section; a section that could not be read (no outbox state) has no lists to carry."""
+    document: dict[str, JsonValue] = {"status": section.status.value, "quarantined": section.quarantined}
+    outbox = section.outbox
+    if outbox is None:
+        return document
+    document["messages"] = [
+        {
+            "quarantine_id": str(m.quarantine_id),
+            "message_id": str(m.message_id) if m.message_id is not None else None,
+            "message_type": m.message_type,
+            "reason": m.reason,
+            "received_at": render_time(m.received_at),
+            "payload_withheld": m.payload_withheld,
+            "open": m.open,
+        }
+        for m in shown_messages(section)
+    ]
+    document["outbox"] = {
+        "last_complete_sync_at": render_time(outbox.last_complete_sync_at)
+        if outbox.last_complete_sync_at
+        else None,
+        "blind": outbox.blind,
+        "blind_since": render_time(outbox.blind_since) if outbox.blind_since else None,
+        "reason": outbox.reason,
+    }
+    return document
+
+
 def report_json(report: IntegrityReport) -> dict[str, JsonValue]:
     """The `IntegrityReport` wire shape."""
     certificates, audit, raw = report.certificates, report.audit_log, report.raw_data
@@ -92,20 +166,20 @@ def report_json(report: IntegrityReport) -> dict[str, JsonValue]:
             "rows_checked": raw.rows_checked,
             "bad_submission_ids": _id_list(raw.bad_submission_ids),
         },
-        "database_controls": {
-            "status": report.database_controls.status.value,
-            "controls": [{"name": name.value, "ok": ok} for name, ok in report.database_controls.controls],
-        },
-        "registry_messages": {
-            "status": report.registry_messages.status.value,
-            "quarantined": report.registry_messages.quarantined,
-        },
+        "database_controls": _controls_json(report.database_controls),
+        "registry_messages": _messages_json(report.registry_messages),
         "evidence": {
             "status": report.evidence.status.value,
             "problems": [
-                {"table": p.table, "row_id": p.row_id, "problem": p.problem.value}
-                for p in report.evidence.problems
+                {
+                    "table": p.table,
+                    "row_id": p.row_id,
+                    "problem": p.problem.value,
+                    "stage": p.stage.value if p.stage is not None else None,
+                }
+                for p in shown_problems(report.evidence)
             ],
+            "problems_total": len(report.evidence.problems),
         },
     }
 
@@ -225,11 +299,12 @@ def stored_document(report: IntegrityReport, tail: AuditTail | None) -> dict[str
 
 
 def _evidence_problem(entry: Mapping[str, JsonValue]) -> EvidenceProblem:
-    row_id = entry.get("row_id")
+    row_id, stage = entry.get("row_id"), entry.get("stage")
     return EvidenceProblem(
         _text(entry.get("table")),
         row_id if isinstance(row_id, str) else None,
         EvidenceProblemKind(_text(entry.get("problem"))),
+        TapeStatus(stage) if isinstance(stage, str) else None,
     )
 
 
@@ -277,11 +352,10 @@ def all_findings(report: IntegrityReport) -> tuple[list[Finding], list[Finding]]
         for name, ok in report.database_controls.controls
         if not ok
     ]
-    for violation in report.database_controls.violations:
-        code, _, name = violation.partition(" on ")
-        subject = "schema" if code.startswith("SCHEMA_OBJECT_") else "role"
-        open_findings.append(Finding("database_controls", subject, name, code))
-    for m in report.registry_messages.messages:
+    for violation in shown_violations(report.database_controls):
+        subject = SUBJECTS.get(violation.control, "role")
+        open_findings.append(Finding("database_controls", subject, violation.object or "", violation.code))
+    for m in shown_messages(report.registry_messages):
         finding = Finding("registry_messages", "message", str(m.quarantine_id), m.reason, m.message_type)
         (open_findings if m.open else recovered).append(finding)
     outbox = report.registry_messages.outbox
@@ -290,6 +364,15 @@ def all_findings(report: IntegrityReport) -> tuple[list[Finding], list[Finding]]
         where = f"since {since}" + (f", {outbox.reason}" if outbox.reason else "")
         open_findings.append(Finding("registry_messages", "outbox", "", "OUTBOX_BLIND", where))
     open_findings += [
-        Finding("evidence", p.table, p.row_id or "", p.problem.value) for p in report.evidence.problems
+        Finding(
+            "evidence", p.table, p.row_id or "", p.problem.value, f"stage {p.stage.value}" if p.stage else ""
+        )
+        for p in shown_problems(report.evidence)
     ]
     return open_findings, recovered
+
+
+SUBJECTS: Mapping[DatabaseControl, str] = MappingProxyType(
+    {DatabaseControl.SCHEMA_MATCHES_MANIFEST: "schema", DatabaseControl.TRIGGERS_FIRE_FOR_APP_ROLE: "session"}
+)
+"""What a violation of each control names in the text report; every other is the role's."""

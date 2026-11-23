@@ -19,7 +19,7 @@ from onepledge_bank_agent.domain.audit import AuditEntry
 from onepledge_bank_agent.domain.canonical_json import JsonValue
 from onepledge_bank_agent.domain.entities import Certificate, Checkpoint, RegistryRequest
 from onepledge_bank_agent.domain.enums import IntegrityRunStatus, RegistryItemResult, RequestOrigin
-from onepledge_bank_agent.domain.integrity import DatabaseControl
+from onepledge_bank_agent.domain.integrity import ControlViolation, DatabaseControl
 from onepledge_bank_agent.domain.outbox import LedgerEntry, OutboxState
 from onepledge_bank_agent.domain.raw_evidence import StoredTape
 from onepledge_bank_agent.domain.registry_records import ItemOutcome, QuarantinedMessage, RegistryAnswer
@@ -332,6 +332,6 @@ class DatabaseControlInspector(Protocol):
         """Each control and whether it holds."""
         ...
 
-    def violations(self) -> tuple[str, ...]:
-        """How the app role differs from the grant matrix, as `CODE on object` (SPEC_DECISIONS 72)."""
+    def violations(self) -> tuple[ControlViolation, ...]:
+        """Every violation behind a false control: role, session and schema (SPEC_DECISIONS 72, 103, 105)."""
         ...
