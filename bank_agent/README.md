@@ -32,7 +32,11 @@ What a reviewer can check, and where:
   fails with `OP005` (`migrations/versions/0002_guards.py`, `0005_state_guards.py`,
   `0010_column_guards.py`). `TRUNCATE loans_raw` by the
   owner fails with `0A000` first, because other tables reference it by foreign key, and
-  `TRUNCATE loans_raw CASCADE` fails with `OP001` (SPEC_DECISIONS 24).
+  `TRUNCATE loans_raw CASCADE` fails with `OP001` (SPEC_DECISIONS 24). No row of any other
+  table is ever deleted either: the eleven tables without an insert-only trigger refuse
+  `DELETE` and `TRUNCATE` for everyone with `OP008` (users are deactivated, never removed), and
+  an answered registry request and an item with its result are frozen whole, the answer set
+  once with its status (`OP007`; `0014_no_delete.py`, SPEC_DECISIONS 106).
 - **What the lender sent can be rebuilt byte for byte.** Each upload keeps its BOM
   flag, its verbatim header record and trailing text, and every record's verbatim text
   and cells (SPEC_DECISIONS 25). Intake refuses a file whose stored forms would not
@@ -129,7 +133,8 @@ bank_agent/
                        0012_round_trip.py (range checks on times another party supplied),
                        0013_outbox_ledger.py (registry_outbox_messages and
                        registry_outbox_state replace registry_outbox_attempts: 21
-                       tables, 22 with alembic_version)
+                       tables, 22 with alembic_version), 0014_no_delete.py (no row is
+                       deleted; answered requests are frozen)
   src/onepledge_bank_agent/
     domain/            values (Vin, Money, Lei, ...), enums, errors (one DomainError tree and
                        the fixed message table), tape and loan state machines, alert,
@@ -548,6 +553,8 @@ action and object type checks.
 | registry_outbox_messages | the 20th table, migration 0013 (SPEC_DECISIONS 101, replacing `registry_outbox_attempts` of 0008): `message_id` primary key; value lists on `outcome` (or null) and `ack_status`; `message_type` of the type pattern or `UNREADABLE`; `(outcome IS NULL) = (handled_at IS NULL)`; `registry_outbox_messages_guard` (`OP009`): `message_id`, `message_type`, `first_seen_at` immutable, `outcome` set once except `QUARANTINED` to `APPLIED_LATE` | One row per message with a usable id, written in the handler's transaction: what makes "handled once" and "nothing unrecorded" checkable. The app role may insert and update; rows are never removed. |
 | registry_outbox_state | the 21st table, migration 0013: one row (`ck_registry_outbox_state_singleton`), with the last complete sync, since when syncs are incomplete and why, and since when the bank is blind | The blind rule of SPEC_DECISIONS 101 reads it; the integrity report shows it. |
 | certificates, checkpoints_seen, tape_submissions, loans, facilities | `ck_certificates_issued_at_range`, `ck_checkpoints_seen_signed_at_range`: from 2000-01-01T00:00:00Z up to, not including, 2100-01-01T00:00:00Z; `ck_tape_submissions_as_of_date_range`, `ck_loans_origination_date_range`, `ck_facilities_opened_on_range`: 2000-01-01 to 2099-12-31 (migration 0012, SPEC_DECISIONS 100) | A time another party supplied is held only inside the range every reader can read back, the range of `domain/storable.py`; a row forced past it by a superuser is reported as an `UNREADABLE` evidence problem, never a failure of the report. |
+| lenders, facilities, users, login_attempts, tape_submissions, loans, registry_requests, registry_request_items, alerts, registry_outbox_messages, registry_outbox_state | `{table}_no_delete`, migration 0014 (SPEC_DECISIONS 106): before `DELETE` and `TRUNCATE`, for each statement, SQLSTATE `OP008` | No row of the bank database is ever removed; with the insert-only triggers this covers every table. |
+| registry_requests, registry_request_items | `registry_requests_guard`, `registry_request_items_guard`, migration 0014 (`OP007`): identities immutable; attempts and send times change until the answer; the answer (the result) is set once, in the update that sets `response_status` (`result`); then the row never changes | What the registry answered cannot be rewritten by the app role, nor by the owner without disabling a trigger, which the controls show. The columns are classified in `guard_columns.py`. |
 | alerts | `ck_alerts_status_case_status`, migration 0010 (SPEC_DECISIONS 86): NEW and REVIEWING only with an OPEN case, CLEARED only with `CLEARED_DATA_ERROR` or `CLEARED_LATE_RELEASE`, ESCALATED only with CONFIRMED | Only the registry's case outcome closes an alert; no statement can store one without the other. |
 | loans, tape_submissions, alerts | insert guards `loans_insert_guard`, `tape_submissions_insert_guard`; `alerts_guard` on insert and update, migration 0005 (SPEC_DECISIONS 46, 47) | Creation in the one state SPEC allows, and the tape and alert machines as the only path. |
 | audit_log | `ck_audit_log_seq`: `>= 1`; `ck_audit_log_actor_user`: `(actor_type = 'USER') = (actor_user_id IS NOT NULL)`; `ck_audit_log_request_id`: at most 64 characters; value lists on `action` and `object_type` | The chain starts at 1; a user entry names its user and a system entry names none; request ids are bounded; actions and object types are those of SPEC 17.2 and SPEC_DECISIONS 30. |

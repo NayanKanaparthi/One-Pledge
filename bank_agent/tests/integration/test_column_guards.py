@@ -25,7 +25,17 @@ from bank_testkit.database import BankDatabase, drop, new_bank_database, provisi
 from bank_testkit.doubles import InProcessDoubles
 from bank_testkit.outside import InProcessOutsideRecords
 from bank_testkit.pipeline import BankAgentHarness, Services
-from bank_testkit.sql_rows import Action, attempt, new_alert, new_loan, new_tape, statement, values_insert
+from bank_testkit.sql_rows import (
+    Action,
+    attempt,
+    new_alert,
+    new_item,
+    new_loan,
+    new_request,
+    new_tape,
+    statement,
+    values_insert,
+)
 from onepledge_bank_agent.domain.enums import TapeKind, TapeStatus
 from onepledge_bank_agent.infrastructure.db.guard_columns import (
     FROZEN_CODES,
@@ -68,8 +78,29 @@ CHANGES = {
                          "ELSE 'CONFIRMED_DOUBLE_PLEDGE' END",
         "position_submitted_at": "coalesce(position_submitted_at + interval '1 hour', now())",
     },
+    "registry_requests": {
+        "request_id": "gen_random_uuid()", "submission_id": "gen_random_uuid()", "origin": "'TAPE'",
+        "batch_index": "batch_index + 7", "idempotency_key": "repeat('0', 64)", "kind": "'RELEASE'",
+        "key_version": "'2.2'", "item_count": "item_count + 1", "attempts": "attempts + 1",
+        "sent_at": "now() - interval '1 hour'", "last_attempt_at": "now() - interval '1 hour'",
+        "response_status": "coalesce(response_status, 200) + 1", "responded_at": "now() - interval '1 hour'",
+        "registry_submission_id": "gen_random_uuid()", "as_of_seq": "coalesce(as_of_seq, 0) + 1",
+        "certificate_id": "gen_random_uuid()", "response_body": "'{\"changed\": true}'::jsonb",
+    },
+    "registry_request_items": {
+        "request_id": "gen_random_uuid()",
+        "item_ref": "gen_random_uuid()", "position": "position + 1",
+        "loan_id": "gen_random_uuid()",
+        "result": "CASE WHEN result = 'LOCKED' THEN 'CONFLICT' ELSE 'LOCKED' END",
+        "already_held": "NOT coalesce(already_held, false)", "match_kind": "'LIKELY'",
+        "match_basis": "'FIELDS'", "kinds_matched": "ARRAY['VIN']", "registry_case_id": "gen_random_uuid()",
+        "lock_id": "gen_random_uuid()", "reason": "'CHANGED'",
+    },
 }  # fmt: skip
-KEYS = {"loans": "loan_id", "tape_submissions": "submission_id", "alerts": "alert_id"}
+KEYS = {
+    "loans": "loan_id", "tape_submissions": "submission_id", "alerts": "alert_id",
+    "registry_requests": "request_id", "registry_request_items": "item_ref",
+}  # fmt: skip
 
 
 @pytest.fixture(scope="module")
@@ -162,14 +193,56 @@ def alert_states(bank: BankDatabase) -> list[State]:
             State("CLEARED", key, cleared), State("ESCALATED", key, escalated)]  # fmt: skip
 
 
-STATES = {"loans": loan_states, "tape_submissions": tape_states, "alerts": alert_states}
-FROZEN = {"loans": {"RELEASED"}, "tape_submissions": {"COMPLETED"}, "alerts": {"CLEARED", "ESCALATED"}}
+ANSWER = (
+    "response_status = 201, responded_at = now(), registry_submission_id = gen_random_uuid(), "
+    "as_of_seq = 7, certificate_id = gen_random_uuid(), response_body = '{\"results\": []}'::jsonb"
+)
+RESULT = "result = 'LOCKED', already_held = false, registry_case_id = NULL, lock_id = gen_random_uuid()"
+
+
+def request_states(bank: BankDatabase) -> list[State]:
+    row = new_request(bank)
+    key = row["request_id"]
+    assert isinstance(key, uuid.UUID)
+    unanswered = (values_insert("registry_requests", [row]),)
+    sent = (
+        *unanswered,
+        update("registry_requests", key, "attempts = 1, sent_at = now(), last_attempt_at = now()"),
+    )
+    answered = (*sent, update("registry_requests", key, ANSWER))
+    return [State("UNANSWERED", key, unanswered), State("SENT", key, sent), State("ANSWERED", key, answered)]
+
+
+def item_states(bank: BankDatabase) -> list[State]:
+    request = new_request(bank)
+    row = new_item(bank, request["request_id"])
+    key = row["item_ref"]
+    assert isinstance(key, uuid.UUID)
+    open_item = (
+        values_insert("registry_requests", [request]),
+        values_insert("registry_request_items", [row]),
+    )
+    answered = (*open_item, update("registry_request_items", key, RESULT))
+    return [State("NO_RESULT", key, open_item), State("RESULT", key, answered)]
+
+
+STATES = {
+    "loans": loan_states, "tape_submissions": tape_states, "alerts": alert_states,
+    "registry_requests": request_states, "registry_request_items": item_states,
+}  # fmt: skip
+FROZEN = {
+    "loans": {"RELEASED"}, "tape_submissions": {"COMPLETED"}, "alerts": {"CLEARED", "ESCALATED"},
+    "registry_requests": {"ANSWERED"}, "registry_request_items": {"RESULT"},
+}  # fmt: skip
 CONDITIONAL_ALLOWED = {
     ("loans", "PENDING"): set(GUARDED_COLUMNS["loans"]),
     ("tape_submissions", "RECEIVED"): {"attempts", "next_attempt_at"},
     ("alerts", "NEW"): {"note", "reviewed_by", "reviewed_at"},
     ("alerts", "REVIEWING"): {"note", "reviewed_by", "reviewed_at", "bank_position", "position_submitted_at"},
     ("alerts", "POSITIONED"): {"note", "reviewed_by", "reviewed_at"},
+    ("registry_requests", "UNANSWERED"): {"attempts", "sent_at", "last_attempt_at", "response_status"},
+    ("registry_requests", "SENT"): {"attempts", "sent_at", "last_attempt_at", "response_status"},
+    ("registry_request_items", "NO_RESULT"): {"result"},
 }
 
 

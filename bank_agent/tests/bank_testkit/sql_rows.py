@@ -82,6 +82,24 @@ def new_alert(database: BankDatabase, **changes: object) -> Row:
     return {**row, **changes}
 
 
+def new_request(database: BankDatabase, **changes: object) -> Row:
+    """An unanswered RESUBMIT registry request of a stored tape, with changes."""
+    tape = stored_row(database, "tape_submissions", "uploaded_at")
+    row: Row = {
+        "request_id": uuid.uuid4(), "submission_id": tape["submission_id"], "origin": "RESUBMIT",
+        "batch_index": 0, "idempotency_key": uuid.uuid4().hex * 2, "kind": "PLEDGE", "key_version": "1.1",
+        "item_count": 1, "attempts": 0,
+    }  # fmt: skip
+    return {**row, **changes}
+
+
+def new_item(database: BankDatabase, request_id: object, **changes: object) -> Row:
+    """An item without a result of that request, for a stored loan, with changes."""
+    loan = stored_row(database, "loans", "loan_id")
+    row: Row = {"request_id": request_id, "item_ref": uuid.uuid4(), "position": 0, "loan_id": loan["loan_id"]}
+    return {**row, **changes}
+
+
 def values_insert(table: str, rows: Sequence[Mapping[str, object]], conflict: str = "") -> Action:
     """One `INSERT ... VALUES (...), (...)` of every row, optionally followed by an ON CONFLICT clause."""
     columns = list(rows[0])

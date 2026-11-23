@@ -1,10 +1,11 @@
 """What may change on a guarded row, column by column (SPEC_DECISIONS 87).
 
-Every column of `loans`, `tape_submissions` and `alerts` is classified here, and a test
-fails when a table has a column that is not. The guards of migration 0010 are written by
-hand from this table; a parametrised test changes each immutable and each conditionally
-mutable column alone, for each role and each relevant row state, and expects the guard's
-SQLSTATE, so a clause deleted from a guard fails a test.
+Every column of `loans`, `tape_submissions`, `alerts`, `registry_requests` and
+`registry_request_items` is classified here, and a test fails when a table has a column that is
+not. The guards of migrations 0010 and 0014 (the two request tables, SPEC_DECISIONS 106) are
+written by hand from this table; a parametrised test changes each immutable and each
+conditionally mutable column alone, for each role and each relevant row state, and expects the
+guard's SQLSTATE, so a clause deleted from a guard fails a test.
 
 | Class | Meaning |
 |---|---|
@@ -58,18 +59,36 @@ GUARDED_COLUMNS: Mapping[str, Mapping[str, ColumnClass]] = MappingProxyType(
             "bank_position position_submitted_at note reviewed_by reviewed_at",
             "status case_status",
         ),
+        "registry_requests": _classes(
+            "request_id submission_id origin batch_index idempotency_key kind key_version item_count",
+            "attempts sent_at last_attempt_at response_status responded_at registry_submission_id as_of_seq "
+            "certificate_id response_body",
+            "",
+        ),
+        "registry_request_items": _classes(
+            "request_id item_ref position loan_id",
+            "result already_held match_kind match_basis kinds_matched registry_case_id lock_id reason",
+            "",
+        ),
     }
 )
 
 GUARD_CODES: Mapping[str, str] = MappingProxyType(
-    {"loans": "OP003", "tape_submissions": "OP004", "alerts": "OP006"}
-)
+    {
+        "loans": "OP003", "tape_submissions": "OP004", "alerts": "OP006",
+        "registry_requests": "OP007", "registry_request_items": "OP007",
+    }
+)  # fmt: skip
 """The SQLSTATE each table's guard raises for an immutable or conditional column."""
 
 FROZEN_CODES: Mapping[str, str] = MappingProxyType(
-    {"loans": "OP002", "tape_submissions": "OP004", "alerts": "OP006"}
-)
-"""The SQLSTATE for any change to a frozen row: a RELEASED loan, a COMPLETED tape, a closed alert."""
+    {
+        "loans": "OP002", "tape_submissions": "OP004", "alerts": "OP006",
+        "registry_requests": "OP007", "registry_request_items": "OP007",
+    }
+)  # fmt: skip
+"""The SQLSTATE for any change to a frozen row: a RELEASED loan, a COMPLETED tape, a closed alert, an
+answered registry request, an item with a result (SPEC_DECISIONS 106)."""
 
 CONDITIONS: Mapping[str, str] = MappingProxyType(
     {
@@ -78,5 +97,8 @@ CONDITIONS: Mapping[str, str] = MappingProxyType(
         "FAILED, or on the resume out of FAILED",
         "alerts": "bank_position and position_submitted_at from null to a value once, while REVIEWING; "
         "note, reviewed_by and reviewed_at while NEW or REVIEWING",
+        "registry_requests": "attempts, sent_at and last_attempt_at until answered; the answer columns "
+        "once, in the update that sets response_status",
+        "registry_request_items": "the result columns once, in the update that sets result",
     }
 )

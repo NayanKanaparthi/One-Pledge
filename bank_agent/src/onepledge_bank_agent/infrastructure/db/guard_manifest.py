@@ -25,6 +25,8 @@ ROW, BEFORE, INSERT, DELETE, UPDATE, TRUNCATE = 1, 2, 4, 8, 16, 32
 """The bits of `pg_trigger.tgtype` (PostgreSQL's `TRIGGER_TYPE_*`)."""
 FORBID_MUTATION = BEFORE | DELETE | UPDATE | TRUNCATE
 """Statement level, before UPDATE, DELETE and TRUNCATE: the insert-only tables."""
+FORBID_DELETION = BEFORE | DELETE | TRUNCATE
+"""Statement level, before DELETE and TRUNCATE: every other table (SPEC_DECISIONS 106)."""
 ROW_BEFORE_INSERT = ROW | BEFORE | INSERT
 ROW_BEFORE_UPDATE = ROW | BEFORE | UPDATE
 ENABLED = frozenset({"O", "A"})
@@ -47,8 +49,14 @@ INSERT_ONLY_TABLES = (
     "audit_log", "certificates", "checkpoints_seen", "cleaning_issues", "integrity_runs", "loan_tokens",
     "loans_raw", "local_checks", "registry_messages_quarantined", "submission_items",
 )  # fmt: skip
+NO_DELETE = ("onepledge_forbid_delete", "4c77fa80d321037857d7bcb0183f6411851195fe4f4eec4df29c1437f2138129")
+NO_DELETE_TABLES = (
+    "alerts", "facilities", "lenders", "loans", "login_attempts", "registry_outbox_messages",
+    "registry_outbox_state", "registry_request_items", "registry_requests", "tape_submissions", "users",
+)  # fmt: skip
 GUARDS: tuple[Guard, ...] = (
     *(Guard(f"{table}_insert_only", table, FORBID_MUTATION, *FORBID) for table in INSERT_ONLY_TABLES),
+    *(Guard(f"{table}_no_delete", table, FORBID_DELETION, *NO_DELETE) for table in NO_DELETE_TABLES),
     Guard("alerts_guard", "alerts", ROW_BEFORE_INSERT | UPDATE, "onepledge_alerts_guard",
           "c3563d5a045549e9661d828d4499bd6cb611a82616d8be109c95da52875ebf92"),
     Guard("audit_log_chain_guard", "audit_log", ROW_BEFORE_INSERT, "onepledge_audit_guard",
@@ -64,6 +72,11 @@ GUARDS: tuple[Guard, ...] = (
     Guard("registry_outbox_messages_guard", "registry_outbox_messages", ROW_BEFORE_UPDATE,
           "onepledge_outbox_ledger_guard",
           "506bd685c20e6144a6747e791be6e52368c2307925899568d62fdb0ef063f724"),
+    Guard("registry_requests_guard", "registry_requests", ROW_BEFORE_UPDATE, "onepledge_requests_guard",
+          "2a47f30c3f592daeea18c396a3490e30f9f6017b62bc23dad156139c031ec1cf"),
+    Guard("registry_request_items_guard", "registry_request_items", ROW_BEFORE_UPDATE,
+          "onepledge_request_items_guard",
+          "1a76a0764fad24900f12fafcb8a5461123accfee0a4b34fe86a0dce8cc72328e"),
 )  # fmt: skip
 MANIFEST: Mapping[tuple[str, str], Guard] = MappingProxyType({(g.table, g.trigger): g for g in GUARDS})
 """Each guard by (table, trigger name): a trigger name is unique only within its table."""

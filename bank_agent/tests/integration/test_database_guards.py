@@ -125,6 +125,48 @@ def test_insert_only_tables_refuse_every_change_for_the_app_role_and_the_owner(
     assert before["loans_raw"] == (20,)
 
 
+NO_DELETE = (
+    "lenders", "facilities", "users", "login_attempts", "tape_submissions", "loans", "registry_requests",
+    "registry_request_items", "alerts", "registry_outbox_messages", "registry_outbox_state",
+)  # fmt: skip
+"""Every table without an insert-only trigger (SPEC_DECISIONS 106)."""
+
+
+def every_count(database: BankDatabase) -> dict[str, int]:
+    with database.connect("admin") as connection:
+        rows = connection.execute(
+            "SELECT relname, (xpath('/row/n/text()', query_to_xml("
+            "format('SELECT count(*) AS n FROM %I', relname), false, true, '')))[1]::text::int "
+            "FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relkind = 'r'"
+        ).fetchall()
+    return {str(name): int(str(count)) for name, count in rows}
+
+
+def test_every_table_is_insert_only_or_refuses_delete_and_truncate() -> None:
+    """Together the two lists are every table of the bank database except `alembic_version`."""
+    assert not set(NO_DELETE) & set(INSERT_ONLY)
+    assert len(NO_DELETE) + len(INSERT_ONLY) == 21
+
+
+@pytest.mark.parametrize("table", NO_DELETE)
+def test_no_row_is_ever_deleted_by_the_owner_or_the_app_role(filled: BankDatabase, table: str) -> None:
+    """SPEC_DECISIONS 106: DELETE and TRUNCATE fail with OP008 for the owner, whatever they would remove;
+    the app role holds neither privilege."""
+    before = every_count(filled)
+    name = sql.Identifier(table)
+    for statement in (
+        sql.SQL("DELETE FROM {}").format(name),
+        sql.SQL("DELETE FROM {} WHERE false").format(name),
+        sql.SQL("TRUNCATE {} CASCADE").format(name),
+    ):
+        assert sqlstate(filled, "owner", statement) == "OP008", statement.as_string()
+        assert sqlstate(filled, "app", statement) == "42501", statement.as_string()
+    with filled.connect("owner") as connection, pytest.raises(psycopg.Error) as raised:
+        connection.execute(sql.SQL("DELETE FROM {} WHERE false").format(name))
+    assert f"rows of {table} are never deleted" in str(raised.value)
+    assert every_count(filled) == before
+
+
 def test_the_insert_only_trigger_names_the_table(filled: BankDatabase) -> None:
     with filled.connect("owner") as connection, pytest.raises(psycopg.Error) as raised:
         connection.execute("DELETE FROM audit_log WHERE false")

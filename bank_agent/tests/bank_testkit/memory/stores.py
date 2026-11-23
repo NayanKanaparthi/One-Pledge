@@ -322,11 +322,15 @@ class _Requests:
 
     def mark_sent(self, request_id: uuid.UUID, at: datetime) -> int:
         request = self._state.requests[request_id]
+        if request.response_status is not None:
+            raise StoreRefusedError("OP007", "OP007", "registry_requests_guard")
         self._state.requests[request_id] = replace(request, attempts=request.attempts + 1)
         return request.attempts + 1
 
     def store_answer(self, request_id: uuid.UUID, answer: RegistryAnswer, at: datetime) -> None:
         request = self._state.requests[request_id]
+        if request.response_status is not None:  # migration 0014: an answered request is frozen
+            raise StoreRefusedError("OP007", "OP007", "registry_requests_guard")
         self._state.answers[request_id] = answer
         self._state.requests[request_id] = replace(
             request,
@@ -337,6 +341,9 @@ class _Requests:
         )
 
     def store_result(self, request_id: uuid.UUID, outcome: ItemOutcome, stored: StoredResult) -> None:
+        held = [i for i in self._state.request_items[request_id] if i.item_ref == outcome.item_ref]
+        if any(item.result is not None for item in held):  # migration 0014: a result is set once
+            raise StoreRefusedError("OP007", "OP007", "registry_request_items_guard")
         self._state.request_items[request_id] = [
             replace(item, result=stored.result, registry_case_id=outcome.case_id)
             if item.item_ref == outcome.item_ref

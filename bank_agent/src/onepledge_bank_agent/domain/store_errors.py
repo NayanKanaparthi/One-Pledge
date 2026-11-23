@@ -11,12 +11,12 @@ from onepledge_bank_agent.domain.errors import DomainError
 
 UNIQUE = "UNIQUE"
 """The refusal code of a write that would duplicate a unique key (SQLSTATE 23505)."""
-GUARD_CODES = frozenset({"OP001", "OP002", "OP003", "OP004", "OP005", "OP006", "OP009"})
+GUARD_CODES = frozenset({"OP001", "OP002", "OP003", "OP004", "OP005", "OP006", "OP007", "OP008", "OP009"})
 """The SQLSTATEs the bank's own guards raise (SPEC 12.4, SPEC_DECISIONS 46, 47, 87)."""
 
 
 class StoreRefusedError(DomainError):
-    """The store refused a write: a guard (`OP001` to `OP006`, `OP009`), a unique key (`UNIQUE`), or another
+    """The store refused a write: a guard (`OP001` to `OP009`), a unique key (`UNIQUE`), or another
     constraint or value rule, named by its SQLSTATE. Repeating the same write is refused again."""
 
     def __init__(self, refusal: str, sqlstate: str, constraint: str | None = None) -> None:
