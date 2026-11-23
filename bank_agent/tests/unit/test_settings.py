@@ -301,3 +301,26 @@ def test_an_administrative_database_url_is_checked_in_the_loader(name: str, valu
         f"Configuration error: {name} must be a postgresql://USER:PASSWORD@HOST:PORT/DATABASE URL."
     )
     assert AdminSettings.from_env({**FULL, "PG_ADMIN_URL": "postgresql://postgres@localhost:55432"})
+
+
+OUTBOUND_KEYS = (
+    "OUTSIDE_RECORDS_API_KEY",
+    "REGISTRY_API_KEY",
+    "KEY_HOLDER_1_API_KEY",
+    "KEY_HOLDER_2_API_KEY",
+)
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [(a, b) for i, a in enumerate(OUTBOUND_KEYS) for b in OUTBOUND_KEYS[i + 1 :]],
+)
+def test_two_outbound_api_keys_that_are_equal_are_refused(first: str, second: str) -> None:
+    """SPEC 16.4 and SPEC_DECISIONS 112.12: each of the four outbound keys is distinct."""
+    keys = {name: f"key-{index}-" + "k" * 30 for index, name in enumerate(OUTBOUND_KEYS)}
+    keys[second] = keys[first]
+    with pytest.raises(OperatorError) as raised:
+        RuntimeSettings.from_env({**IDENTITY, **keys})
+    assert raised.value.sentence == f"Configuration error: {second} must differ from {first}."
+    assert keys[first] not in raised.value.sentence
+    assert RuntimeSettings.from_env({**IDENTITY, **{n: f"key-{i}" for i, n in enumerate(OUTBOUND_KEYS)}})

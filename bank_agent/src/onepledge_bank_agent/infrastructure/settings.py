@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import re
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, SecretStr
@@ -113,6 +113,17 @@ def _required[T](name: str, value: T | None, reveal: Callable[[T], str]) -> str:
     return reveal(value)
 
 
+def _refuse_shared_keys(keys: Sequence[tuple[str, SecretStr | None]]) -> None:
+    """Each outbound key that is set differs from every other (SPEC 16.4, SPEC_DECISIONS 112.12); the
+    sentence names both variables, never the key."""
+    for index, (name, key) in enumerate(keys):
+        for earlier, other in keys[:index]:
+            if key is not None and other is not None and key.get_secret_value() == other.get_secret_value():
+                raise OperatorError(
+                    f"Configuration error: {name} must differ from {earlier}.", CONFIGURATION_ERROR
+                )
+
+
 class RegistrySettings(BaseModel):
     """The shared services of a runtime process: the registry, its trust anchors and the two key holders."""
 
@@ -198,7 +209,7 @@ class RuntimeSettings(BaseModel):
     def from_env(cls, environ: Mapping[str, str]) -> Self:
         """Parse the variables of a runtime process that are present; requirements are checked per use."""
         read = SettingReader(environ)
-        return cls(
+        settings = cls(
             bank_code=_required("BANK_CODE", _bank_code(read), str),
             bank_name=_required("BANK_NAME", _bank_name(read), str),
             database_url=read.database_url("DATABASE_URL"),
@@ -207,6 +218,18 @@ class RuntimeSettings(BaseModel):
             registry=RegistrySettings.read(read),
             log_level=_log_level(read),
             tunables=_tunables(read),
+        )
+        _refuse_shared_keys(settings.outbound_keys())
+        return settings
+
+    def outbound_keys(self) -> tuple[tuple[str, SecretStr | None], ...]:
+        """The four outbound API keys by variable, in the order the variables are listed (SPEC 16.4)."""
+        registry = self.registry
+        return (
+            ("OUTSIDE_RECORDS_API_KEY", self.outside_records_api_key),
+            ("REGISTRY_API_KEY", registry.registry_api_key),
+            ("KEY_HOLDER_1_API_KEY", registry.key_holder_1_api_key),
+            ("KEY_HOLDER_2_API_KEY", registry.key_holder_2_api_key),
         )
 
     def require_database_url(self) -> str:
