@@ -14,12 +14,10 @@ import uvicorn
 from fastapi import FastAPI
 
 from onepledge_outside_records.domain.errors import OperatorError
-from onepledge_outside_records.infrastructure.binding import check_binding
 from onepledge_outside_records.infrastructure.logging_setup import LogEvent, configure_logging, get_logger
 from onepledge_outside_records.infrastructure.settings import (
     AdminSettings,
     load_admin_settings,
-    load_serve_settings,
     read_secret_variable,
 )
 from onepledge_outside_records.interface.composition import Composition
@@ -31,6 +29,7 @@ from onepledge_outside_records.interface.output import (
     plural,
     run_guarded,
 )
+from onepledge_outside_records.interface.startup import start
 
 # The `service` value in log lines is the contract's health value (SPEC_DECISIONS 22.6).
 SERVICE_NAME = "outside_records"
@@ -143,13 +142,10 @@ def build_server(app: FastAPI, host: str, port: int) -> uvicorn.Server:
 
 
 def _serve(composition: Composition) -> None:
-    settings = load_serve_settings()
-    port = settings.require_port()
-    check_binding(settings.bind_host, port)
-    app = composition.service(settings)
-    configure_logging(SERVICE_NAME, settings.log_level)
+    started = start(composition)
+    configure_logging(SERVICE_NAME, started.settings.log_level)
     get_logger(__name__).info(LogEvent.SERVICE_STARTED)
-    build_server(app, settings.bind_host, port).run()
+    build_server(started.app, started.settings.bind_host, started.port).run()
 
 
 def _provision(arguments: argparse.Namespace, composition: Composition, console: Console) -> None:

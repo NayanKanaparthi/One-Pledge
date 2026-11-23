@@ -14,7 +14,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
+import psycopg
 import pytest
+from psycopg import sql
 from sqlalchemy.engine import make_url
 
 from onepledge_outside_records.domain.errors import OperatorError
@@ -266,7 +268,8 @@ def test_serving_as_the_owner_role_is_refused(run: Run, database: Database) -> N
     assert run(["serve"], **env) == (
         1,
         "",
-        "The role of DATABASE_URL is not least-privilege (ROLE_OWNS_OBJECT); use the app role.\n",
+        "The role of DATABASE_URL is not least-privilege (ROLE_OWNS_OBJECT); "
+        "use the app role as provisioned.\n",
     )
 
 
@@ -275,7 +278,10 @@ def test_serving_as_a_superuser_is_refused(run: Run, database: Database) -> None
     env = database.environment(PORT=str(free_port()), DATABASE_URL=admin_on_database)
     code, out, err = run(["serve"], **env)
     assert (code, out) == (1, "")
-    assert err == "The role of DATABASE_URL is not least-privilege (ROLE_IS_SUPERUSER); use the app role.\n"
+    assert err == (
+        "The role of DATABASE_URL is not least-privilege (ROLE_IS_SUPERUSER); "
+        "use the app role as provisioned.\n"
+    )
 
 
 # SPEC_DECISIONS 43.3: ordinary mistakes get their own sentence, never the last resort one.
@@ -427,7 +433,8 @@ def test_the_served_api_answers_and_logs_no_vin(
 def test_a_failed_migration_logs_its_revision_and_debug_shows_the_frames(
     run: Run, provisioned_database: Database
 ) -> None:
-    env = provisioned_database.environment(DB_APP_ROLE="optest_no_such_role", LOG_LEVEL="INFO")
+    drop_app_role(provisioned_database)
+    env = provisioned_database.environment(LOG_LEVEL="INFO")
     code, out, err = run(["db", "migrate"], **env)
     assert (code, out) == (1, "")
     assert err.splitlines()[-1] == "The role named by DB_APP_ROLE does not exist; run db provision first."
@@ -493,3 +500,13 @@ def test_the_real_probe_on_each_bind_host(database: Database, host: str) -> None
         assert outcome == "started" or err == NO_IPV6_SENTENCE + "\n", err
     else:
         assert outcome == "started", err
+
+
+def drop_app_role(database: Database) -> None:
+    """Drop the provisioned app role, so the grants migration finds no role of the right name."""
+    role = sql.Identifier(database.app_role)
+    with psycopg.connect(database.admin_url, autocommit=True, dbname=database.target.database) as connection:
+        connection.execute(sql.SQL("DROP OWNED BY {}").format(role))
+    with psycopg.connect(database.admin_url, autocommit=True) as connection:
+        connection.execute(sql.SQL("DROP OWNED BY {}").format(role))
+        connection.execute(sql.SQL("DROP ROLE {}").format(role))

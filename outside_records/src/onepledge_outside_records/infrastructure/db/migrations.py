@@ -12,6 +12,7 @@ from alembic.runtime.migration import MigrationContext, MigrationInfo
 from alembic.script import ScriptDirectory
 from alembic.script.revision import RevisionError
 from alembic.util import CommandError
+from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
 from onepledge_outside_records.domain.errors import OperatorError
@@ -24,6 +25,12 @@ _log = get_logger(__name__)
 
 MIGRATIONS_PACKAGE = "onepledge_outside_records_migrations"
 _REPR_MARKS = ("'", '"', "[", "(")
+_APP_ROLE_REFUSAL = OperatorError(
+    "Configuration error: DB_APP_ROLE must be {database}_app, the app role of the database of "
+    "MIGRATION_DATABASE_URL.",
+    "CONFIGURATION_ERROR",
+)
+_DATABASE_OWNER = text("SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = current_database()")
 
 
 def _log_applied_step(*, step: MigrationInfo, **_: object) -> None:
@@ -52,6 +59,7 @@ class MigrationRunner:
 
     def __init__(self, migration_url: str, app_role: str) -> None:
         self._migration_url = migration_url
+        self._app_role = app_role
         self._config = alembic_config(migration_url, app_role)
         # The revision the database was at when this runner last connected, None at base; and
         # whether it connected at all, since an unreachable database has no known revision.
@@ -90,13 +98,18 @@ class MigrationRunner:
         return pending[-1].revision if pending else None
 
     def _as_owner(self, action: Callable[[], None]) -> None:
-        """Run `action` only when MIGRATION_DATABASE_URL connects as the owner (SPEC_DECISIONS 72)."""
+        """Run `action` only when MIGRATION_DATABASE_URL connects as the owner and DB_APP_ROLE names
+        the app role of that database, which does not own it (SPEC_DECISIONS 72, 103)."""
+        if self._app_role != f"{sqlalchemy_url(self._migration_url).database}_app":
+            raise _APP_ROLE_REFUSAL
         engine = make_engine(self._migration_url)
         try:
             with engine.connect() as connection:
                 problem = owner_problem(connection)
                 if problem is not None:
                     raise problem
+                if connection.execute(_DATABASE_OWNER).scalar_one() == self._app_role:
+                    raise _APP_ROLE_REFUSAL
                 self._current = MigrationContext.configure(connection).get_current_revision()
                 self._reached = True
         finally:

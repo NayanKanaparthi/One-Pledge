@@ -99,4 +99,7 @@ class DatabaseProvisioner:
                 sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(target.database))
             )
             for role in (target.app_role, target.owner_role):
-                connection.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role)))
+                if connection.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,)).fetchone():
+                    # Revokes what the role holds on shared objects too, such as a parameter.
+                    connection.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(role)))
+                    connection.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))

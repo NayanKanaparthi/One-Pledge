@@ -247,3 +247,19 @@ def test_a_client_key_is_trimmed_and_checked_like_every_value(monkeypatch: pytes
     with pytest.raises(OperatorError) as raised:
         read_secret_variable("OUTSIDE_TEST_KEY")
     assert "OUTSIDE_TEST_KEY contains whitespace other than a space" in raised.value.sentence
+
+
+# SPEC_DECISIONS 103: the two role URLs carry no query parameters (review 4 failure 2, first case).
+@pytest.mark.parametrize("query", ["?options=-csearch_path%3Dpg_temp", "?sslmode=disable", "?x"])
+@pytest.mark.parametrize("variable", ["DATABASE_URL", "MIGRATION_DATABASE_URL"])
+def test_a_role_url_with_query_parameters_is_refused_naming_the_variable(variable: str, query: str) -> None:
+    url = (APP if variable == "DATABASE_URL" else OWNER) + query
+    with pytest.raises(OperatorError) as raised:
+        if variable == "DATABASE_URL":
+            ServeSettings.from_env({variable: url})
+        else:
+            AdminSettings.from_env({variable: url}, "seed")
+    assert raised.value.sentence == (
+        f"Configuration error: {variable} must not carry query parameters; remove the part from ? on."
+    )
+    assert "pg_temp" not in raised.value.sentence and "sslmode" not in raised.value.sentence

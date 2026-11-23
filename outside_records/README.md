@@ -9,19 +9,41 @@ synthetic and comes from `onepledge-datagen`.
   `GET /v1/payments?vin=...`, `GET /v1/contracts/{vin}`. `GET /healthz` needs no key.
 - The API process connects as `{db}_app`, which has `SELECT` on the four tables and
   nothing else, so it cannot write even if the code tried. `serve` checks this at startup
-  with `inspect_role()` (SPEC_DECISIONS 72) and refuses to start, with one line naming
-  `DATABASE_URL` and the first violation code, unless all six points hold: no superuser,
+  with `inspect_role()` (SPEC_DECISIONS 72, 103) and refuses to start, with one sentence
+  naming `DATABASE_URL`, the first violation code and the advice that fits it, unless all
+  ten points hold: no superuser,
   `CREATEDB`, `CREATEROLE`, `REPLICATION` or `BYPASSRLS`; membership of no role, the
   predefined `pg_` roles included; ownership of nothing in the database; `CONNECT` only on
   the database, `USAGE` only on `public` and nothing on any other schema; on every table of
-  `public` exactly the privileges of the grant matrix, counting grants to the role and to
-  `PUBLIC` at table and at column level, with no table outside the matrix; and no
-  privilege on any sequence. The grant matrix (`role_check.GRANT_MATRIX`) is the one table
-  the grants migration and the check both read. The check reads the role's attributes and
+  `public` no column-level privilege at all (`COLUMN_PRIVILEGE`) and, compared at table
+  level, exactly the privileges of the grant matrix, counting grants to the role and to
+  `PUBLIC`, with no table outside the matrix; no privilege on any sequence; no role
+  setting (`ROLE_HAS_SETTING`), no database-wide `session_replication_role`, no privilege
+  on a configuration parameter (`PARAMETER_PRIVILEGE`) and a session that fires triggers
+  (`TRIGGERS_DISABLED_FOR_SESSION`); no `SECURITY DEFINER` function and no `EXECUTE` on any
+  function outside the system schemas (`SECURITY_DEFINER_FUNCTION`, `FUNCTION_PRIVILEGE`);
+  no default privilege for the role or `PUBLIC` (`DEFAULT_PRIVILEGE`); and nothing held
+  `WITH GRANT OPTION` (`GRANT_OPTION`). The advice comes from one table: "use the app role
+  as provisioned" for an attribute, membership, ownership or extra privilege; "the database
+  was not provisioned or migrated correctly; run db migrate as the owner" for a missing
+  privilege or a table outside the matrix; "remove the role's settings" for a setting or
+  parameter. The grant matrix (`role_check.GRANT_MATRIX`) is the one table the grants
+  migration and the check both read. The check reads the role's attributes and
   privileges, never the URL, and does not depend on the search path.
+- `serve` sets its own session parameters on every connection, as connection options that
+  override role and database defaults: `search_path` `public`, `statement_timeout` 5s,
+  `lock_timeout` 2s, `idle_in_transaction_session_timeout` 10s; and refuses every new
+  pooled connection whose `session_replication_role` is not `origin`. `DATABASE_URL` and
+  `MIGRATION_DATABASE_URL` may not carry query parameters.
+- `serve` starts through named checks, in order: settings, database reachable, session
+  parameters, schema in place, role inspection, bind probe (SPEC_DECISIONS 104). Each has
+  its own sentence, and a statement the database refuses inside one is "The database
+  refused a statement of the startup check NAME (SQLSTATE X); ...", never the last resort.
 - `db migrate`, `seed` and `clients add` refuse to run when the role of
-  `MIGRATION_DATABASE_URL` does not own the outside records tables (on a database with no
-  table yet, the database itself).
+  `MIGRATION_DATABASE_URL` does not own the database ("is not the owner of the database;
+  use the owner role"), and when a table of the schema is owned by another role ("the
+  schema was changed outside db migrate"). `db migrate` also refuses a `DB_APP_ROLE` that
+  is not `{db}_app` for the database of `MIGRATION_DATABASE_URL`, or that owns it.
 - Client keys are stored only as SHA-256 hashes of 256 bit random keys. A request's key is
   hashed and looked up by indexed equality on that hash; nothing is compared in memory.
 - A VIN that does not match `^[A-HJ-NPR-Z0-9]{17}$` gets 422 `VALIDATION_ERROR` with
@@ -87,10 +109,13 @@ outside_records/
         settings  logging_setup  csv_source  binding
         db/
           models  engines  provisioning  migrations  repositories
-          role_check    # inspect_role and the grant matrix
+          role_check    # inspect_role, the grant matrix and the advice per code
+          role_points   # points 5 (columns) and 7 to 10 of the role check
+          session       # the session parameters of every connection, the pooled guard
           failures      # the sentences naming the real cause of a database failure
       interface/
         cli  composition  output
+        startup         # the named startup checks of serve
         http/
           app  plumbing  query
   tests/
@@ -151,7 +176,7 @@ the variables in the table below.
 |---|---|---|
 | `DATABASE_URL` | `serve`, `db provision` | `postgresql://{db}_app:PASSWORD@HOST:PORT/{db}`, the read-only app role. |
 | `MIGRATION_DATABASE_URL` | `db provision`, `db migrate`, `seed`, `clients add` | `postgresql://{db}_owner:PASSWORD@HOST:PORT/{db}`, the owner role. Never read by `serve`. |
-| `DB_APP_ROLE` | `db migrate` | The role that receives `SELECT` on the four tables (`{db}_app`). |
+| `DB_APP_ROLE` | `db migrate` | The role that receives `SELECT` on the four tables; must be `{db}_app` for the database of `MIGRATION_DATABASE_URL`. |
 | `PG_ADMIN_URL` | `db provision` | Superuser URL. Provisioning only. |
 | `PORT` | `serve` | TCP port, 1 to 65535 in ASCII digits (8200 in the local stack: `ONEPLEDGE_PORT_BASE` plus 200). |
 | `BIND_HOST` | `serve` | An IPv4 or IPv6 literal of this machine (a name such as `localhost` is refused). Default `127.0.0.1`; `0.0.0.0` in the container. `serve` binds a socket to it before anything else and refuses with one line that names the variable, never its value (SPEC_DECISIONS 73). |
@@ -209,6 +234,8 @@ They cover provisioning twice, migrations up, down and up, agreement of the mode
 the migrated schema, seeding and its idempotence, the app role being refused every write,
 client keys stored only as hashes, every endpoint against the contract's schemas, ordering
 and paging of payments, 401, 404 and 422 without echo, trailing slashes and 405 `Allow` on
-every route, `serve` refused for a hand-made violation of each of the six points
-(`test_role_check.py`, column-level grants included), the administrative commands refused
-for a role that is not the owner, and log records that hold no VIN, path or query string.
+every route, `serve` refused for a hand-made violation of each of the ten points
+(`test_role_check.py`, column-level grants, role settings, parameter privileges, functions,
+default privileges and grant options included), the startup checks and the reproductions
+of review 4 (`test_startup.py`), the administrative commands refused for a role that is not
+the owner, and log records that hold no VIN, path or query string.

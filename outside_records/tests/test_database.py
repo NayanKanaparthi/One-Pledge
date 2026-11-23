@@ -110,8 +110,19 @@ def test_the_payment_index_orders_paid_on_descending(owner_engine: Engine) -> No
 
 
 def test_migrating_needs_an_existing_app_role(provisioned_database: Database) -> None:
+    drop_app_role(provisioned_database)
     with pytest.raises(OperatorError, match="does not exist"):
-        MigrationRunner(provisioned_database.owner_url, "optest_missing_app").upgrade()
+        MigrationRunner(provisioned_database.owner_url, provisioned_database.app_role).upgrade()
+
+
+def drop_app_role(database: Database) -> None:
+    """Drop the provisioned app role, so the grants migration finds no role of the right name."""
+    role = sql.Identifier(database.app_role)
+    with psycopg.connect(database.admin_url, autocommit=True, dbname=database.target.database) as connection:
+        connection.execute(sql.SQL("DROP OWNED BY {}").format(role))
+    with psycopg.connect(database.admin_url, autocommit=True) as connection:
+        connection.execute(sql.SQL("DROP OWNED BY {}").format(role))
+        connection.execute(sql.SQL("DROP ROLE {}").format(role))
 
 
 def test_migrating_an_unprovisioned_database_says_what_to_run(fresh_database: Database) -> None:

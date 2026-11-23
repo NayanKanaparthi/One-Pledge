@@ -108,7 +108,8 @@ class OperatorError(Exception):
 
     The code appears in the `--json` failure document: CONFIGURATION_ERROR,
     DATABASE_UNAVAILABLE, NOT_MIGRATED, INVALID_INPUT, PORT_UNAVAILABLE or
-    OPERATION_FAILED.
+    OPERATION_FAILED; `serve`, which prints no document, also uses UNSAFE_DATABASE_ROLE and
+    STARTUP_CHECK_FAILED.
     """
 
     def __init__(

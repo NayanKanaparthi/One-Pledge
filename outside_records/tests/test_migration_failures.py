@@ -89,7 +89,9 @@ def test_an_unreachable_database_names_that_cause_and_is_still_recorded(
     provisioned_database: Database, migrate: Callable[..., tuple[int, str, list[dict[str, Any]], str]]
 ) -> None:
     unreachable = "postgresql://nobody:secret@127.0.0.1:1/none"
-    env = provisioned_database.environment(MIGRATION_DATABASE_URL=unreachable, LOG_LEVEL="INFO")
+    env = provisioned_database.environment(
+        MIGRATION_DATABASE_URL=unreachable, DB_APP_ROLE="none_app", LOG_LEVEL="INFO"
+    )
     code, out, records, sentence = migrate(**env)
     assert code == 1
     assert sentence == "PostgreSQL is not reachable at MIGRATION_DATABASE_URL; start it or fix the URL."

@@ -9,6 +9,7 @@ from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
 
 from onepledge_outside_records.domain.errors import OperatorError
+from onepledge_outside_records.infrastructure.db.session import connect_options
 
 
 def sqlalchemy_url(url: str) -> URL:
@@ -24,9 +25,11 @@ def sqlalchemy_url(url: str) -> URL:
     return parsed.set(drivername="postgresql+psycopg")
 
 
-def make_engine(url: str) -> Engine:
-    """A pooled engine with hidden parameters."""
-    return create_engine(sqlalchemy_url(url), hide_parameters=True, pool_pre_ping=True)
+def make_engine(url: str, service: bool = False) -> Engine:
+    """A pooled engine with hidden parameters; the serving engine sets the service's own session
+    parameters on every connection (SPEC_DECISIONS 103.7)."""
+    options = {"options": connect_options()} if service else {}
+    return create_engine(sqlalchemy_url(url), hide_parameters=True, pool_pre_ping=True, connect_args=options)
 
 
 class EngineSet:
@@ -35,9 +38,9 @@ class EngineSet:
     def __init__(self) -> None:
         self._engines: list[Engine] = []
 
-    def engine(self, url: str) -> Engine:
+    def engine(self, url: str, service: bool = False) -> Engine:
         """A new engine on `url`, remembered for disposal."""
-        engine = make_engine(url)
+        engine = make_engine(url, service)
         self._engines.append(engine)
         return engine
 

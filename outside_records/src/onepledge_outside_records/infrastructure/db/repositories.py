@@ -43,6 +43,10 @@ from onepledge_outside_records.infrastructure.db.role_check import (
     owner_problem,
     refusal,
 )
+from onepledge_outside_records.infrastructure.db.session import (
+    refuse_replica_sessions,
+    session_parameter_problems,
+)
 
 COPY_TITLES = "COPY title_records (vin, state, title_status, lienholder_name, lien_recorded_on) FROM STDIN"
 COPY_PAYMENTS = "COPY payments (payment_id, vin, paid_on, amount_cents, deposit_bank_code) FROM STDIN"
@@ -98,29 +102,56 @@ class SqlRecordsReader:
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
 
+    # The startup checks of `serve` (SPEC_DECISIONS 104). A connection that does not open is the
+    # reachability check's own sentence; any statement the database refuses after that reaches
+    # the check's boundary, which names the check and the SQLSTATE.
+
+    def ensure_reachable(self) -> None:
+        """The database of DATABASE_URL accepts a connection and answers one statement."""
+        connection = self._open()
+        with connection:
+            connection.execute(text("SELECT 1"))
+
+    def ensure_session_parameters(self) -> None:
+        """Every session parameter the service sets holds in the session (SPEC_DECISIONS 103.7)."""
+        with self._open() as connection:
+            differing = session_parameter_problems(connection)
+        if differing:
+            raise OperatorError(
+                "The database did not keep the session parameters the service sets "
+                f"({', '.join(differing)}); check the database's configuration.",
+                "CONFIGURATION_ERROR",
+            )
+
     def ensure_readable(self) -> None:
-        """Check before serving that the database is reachable and migrated, or say what to do."""
-        try:
-            with self._engine.connect() as connection:
-                missing: int = connection.execute(
-                    _MISSING_TABLES, {"tables": sorted(GRANT_MATRIX)}
-                ).scalar_one()
-        except OperationalError as error:
-            raise connection_failed(error, "DATABASE_URL") from None
+        """The outside records tables are in place, or say what to do."""
+        with self._open() as connection:
+            missing: int = connection.execute(_MISSING_TABLES, {"tables": sorted(GRANT_MATRIX)}).scalar_one()
         if missing:
             raise tables_missing()
 
     def ensure_read_only(self) -> None:
-        """Refuse to serve as a role that is not least-privilege (SPEC 6.1, SPEC_DECISIONS 72).
+        """Refuse to serve as a role that is not least-privilege (SPEC 6.1, SPEC_DECISIONS 72, 103).
 
-        `inspect_role` compares the role with the grant matrix on all six points, so "cannot
+        `inspect_role` compares the role with the grant matrix on all ten points, so "cannot
         write even if the code tried" is a property checked at startup, not only of the
         deployment.
         """
-        with _connection(self._engine) as connection:
+        with self._open() as connection:
             violations = inspect_role(connection)
         if violations:
             raise refusal(violations)
+
+    def guard_new_connections(self) -> None:
+        """From now on, refuse every new pooled connection whose session would not fire triggers."""
+        self._engine.dispose()
+        refuse_replica_sessions(self._engine)
+
+    def _open(self) -> Connection:
+        try:
+            return self._engine.connect()
+        except OperationalError as error:
+            raise connection_failed(error, "DATABASE_URL") from None
 
     def title(self, vin: VinText) -> TitleRecord | None:
         """The title record of a VIN."""

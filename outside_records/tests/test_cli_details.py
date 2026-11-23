@@ -9,7 +9,7 @@ import pytest
 
 from onepledge_outside_records.domain.errors import OperatorError
 from onepledge_outside_records.infrastructure.settings import ServeSettings
-from onepledge_outside_records.interface import cli
+from onepledge_outside_records.interface import cli, startup
 from onepledge_outside_records.interface.output import WIDTH, Console, fit
 from onepledge_testtools.command_lines import Option, malformed, usage_problems, wants_json
 
@@ -60,7 +60,7 @@ def test_the_last_resort_writes_one_error_record_then_the_sentence(monkeypatch: 
     def explode(*_: object) -> ServeSettings:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(cli, "load_serve_settings", explode)
+    monkeypatch.setattr(startup, "load_serve_settings", explode)
     out, err = io.StringIO(), io.StringIO()
     assert cli.main(["serve"], Console(out, err)) == 1
     record = json.loads(out.getvalue())

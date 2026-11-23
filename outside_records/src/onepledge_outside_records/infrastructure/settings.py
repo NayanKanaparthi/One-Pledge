@@ -28,6 +28,7 @@ _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 _ROLE_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 MAX_PORT = 65535
 _DATABASE_SCHEMES = frozenset({"postgresql", "postgresql+psycopg"})
+_ROLE_URLS = frozenset({"DATABASE_URL", "MIGRATION_DATABASE_URL"})
 DEFAULT_BIND_HOST = "127.0.0.1"
 BIND_HOST_SENTENCE = "BIND_HOST must be an IPv4 or IPv6 address; set it to 127.0.0.1 or 0.0.0.0."
 # Settings are trimmed of ASCII whitespace only; any other space is part of the value and fails it.
@@ -98,6 +99,9 @@ def _database_url(environ: Mapping[str, str], name: str, needs_database: bool) -
         or (needs_database and not url.database)
     ):
         raise _invalid(f"{name} must be a postgresql://USER:PASSWORD@HOST:PORT/DATABASE URL.")
+    if name in _ROLE_URLS and (url.query or "?" in secret.get_secret_value()):
+        # The service sets its own session parameters; a URL may not change them (SPEC_DECISIONS 103).
+        raise _invalid(f"{name} must not carry query parameters; remove the part from ? on.")
     return secret
 
 

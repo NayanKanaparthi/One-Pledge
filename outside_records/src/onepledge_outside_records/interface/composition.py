@@ -5,8 +5,6 @@ from __future__ import annotations
 from types import TracebackType
 from typing import Self
 
-from fastapi import FastAPI
-
 from onepledge_outside_records.application.administration import RegisterClient, SeedRecords
 from onepledge_outside_records.infrastructure.csv_source import CsvRecordsSource
 from onepledge_outside_records.infrastructure.db.engines import DatabaseTarget, EngineSet
@@ -18,7 +16,6 @@ from onepledge_outside_records.infrastructure.db.repositories import (
     SqlRecordsWriter,
 )
 from onepledge_outside_records.infrastructure.settings import AdminSettings, ServeSettings
-from onepledge_outside_records.interface.http.app import create_app
 
 
 class Composition:
@@ -57,9 +54,9 @@ class Composition:
         """Client registration as the owner role."""
         return RegisterClient(SqlClientRegistry(self._engines.engine(settings.require_migration_url())))
 
-    def service(self, settings: ServeSettings) -> FastAPI:
-        """The API on the app role, once the schema is in place and the role is shown unable to write."""
-        reader = SqlRecordsReader(self._engines.engine(settings.require_database_url()))
-        reader.ensure_readable()
-        reader.ensure_read_only()
-        return create_app(reader)
+    def reader(self, settings: ServeSettings) -> SqlRecordsReader:
+        """The reader on the app role, with the service's own session parameters on every connection.
+
+        `interface.startup` runs the startup checks on it before the app is built.
+        """
+        return SqlRecordsReader(self._engines.engine(settings.require_database_url(), service=True))

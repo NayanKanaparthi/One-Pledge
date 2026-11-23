@@ -29,6 +29,7 @@ from onepledge_outside_records.infrastructure.db.role_check import (
 )
 from onepledge_outside_records.interface.cli import main
 from onepledge_outside_records.interface.output import Console
+from onepledge_testtools.command_lines import UnwrappingStream
 
 if TYPE_CHECKING:
     from conftest import Database
@@ -37,9 +38,37 @@ if TYPE_CHECKING:
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(60)]
 
 VARIABLES = ("PG_ADMIN_URL", "DATABASE_URL", "MIGRATION_DATABASE_URL", "DB_APP_ROLE", "PORT", "BIND_HOST")
-OWNER_REFUSAL = (
-    "The role of MIGRATION_DATABASE_URL does not own the outside records tables; use the owner role.\n"
-)
+OWNER_REFUSAL = "The role of MIGRATION_DATABASE_URL is not the owner of the database; use the owner role.\n"
+FOREIGN_TABLE = "A table in the schema is owned by another role; the schema was changed outside db migrate.\n"
+# SPEC_DECISIONS 103: the advice that fits each code, from one table.
+AS_PROVISIONED = "use the app role as provisioned"
+NOT_MIGRATED = "the database was not provisioned or migrated correctly; run db migrate as the owner"
+SETTINGS = "remove the role's settings"
+ADVICE = {
+    **dict.fromkeys(
+        (
+            Violation.ROLE_IS_SUPERUSER,
+            Violation.ROLE_HAS_ATTRIBUTE,
+            Violation.ROLE_HAS_MEMBERSHIP,
+            Violation.ROLE_OWNS_OBJECT,
+            Violation.ROLE_HAS_DATABASE_PRIVILEGE,
+            Violation.ROLE_HAS_SCHEMA_PRIVILEGE,
+            Violation.COLUMN_PRIVILEGE,
+            Violation.TABLE_PRIVILEGE_EXTRA,
+            Violation.SEQUENCE_PRIVILEGE,
+            Violation.SECURITY_DEFINER_FUNCTION,
+            Violation.FUNCTION_PRIVILEGE,
+            Violation.DEFAULT_PRIVILEGE,
+            Violation.GRANT_OPTION,
+        ),
+        AS_PROVISIONED,
+    ),
+    Violation.TABLE_PRIVILEGE_MISSING: NOT_MIGRATED,
+    Violation.TABLE_NOT_IN_MATRIX: NOT_MIGRATED,
+    Violation.ROLE_HAS_SETTING: SETTINGS,
+    Violation.PARAMETER_PRIVILEGE: SETTINGS,
+    Violation.TRIGGERS_DISABLED_FOR_SESSION: SETTINGS,
+}
 
 
 @pytest.fixture
@@ -57,7 +86,8 @@ def admin(migrated: Database) -> Iterator[psycopg.Connection[Any]]:
 
 
 def violations(database: Database) -> tuple[RoleViolation, ...]:
-    engine = make_engine(database.app_url)
+    """What the service's own engine (with its session parameters) finds."""
+    engine = make_engine(database.app_url, service=True)
     try:
         with engine.connect() as connection:
             return inspect_role(connection)
@@ -81,7 +111,7 @@ def cli(monkeypatch: pytest.MonkeyPatch) -> Callable[..., tuple[int, str, str]]:
             monkeypatch.delenv(name, raising=False)
         for name, value in environment.items():
             monkeypatch.setenv(name, value)
-        out, err = io.StringIO(), io.StringIO()
+        out, err = io.StringIO(), UnwrappingStream()
         code = main(argv, Console(out, err))
         return code, out.getvalue(), err.getvalue()
 
@@ -182,20 +212,33 @@ CASES = (
             "GRANT INSERT (payment_id, vin, paid_on, amount_cents, deposit_bank_code) "
             "ON public.payments TO {app}",
         ),
-        Violation.TABLE_PRIVILEGE_EXTRA,
-        "public.payments INSERT",
+        Violation.COLUMN_PRIVILEGE,
+        "public.payments.vin INSERT",
     ),
     Case(
         "column_update",
         ("GRANT UPDATE (lienholder_name) ON public.title_records TO {app}",),
-        Violation.TABLE_PRIVILEGE_EXTRA,
-        "public.title_records UPDATE",
+        Violation.COLUMN_PRIVILEGE,
+        "public.title_records.lienholder_name UPDATE",
     ),
     Case(
         "column_references",
         ("GRANT REFERENCES (vin) ON public.contracts TO {app}",),
-        Violation.TABLE_PRIVILEGE_EXTRA,
-        "public.contracts REFERENCES",
+        Violation.COLUMN_PRIVILEGE,
+        "public.contracts.vin REFERENCES",
+    ),
+    # SPEC_DECISIONS 103.5: SELECT held on one column only is a column privilege and a missing one.
+    Case(
+        "column_select_only",
+        ("REVOKE SELECT ON public.contracts FROM {app}", "GRANT SELECT (vin) ON public.contracts TO {app}"),
+        Violation.COLUMN_PRIVILEGE,
+        "public.contracts.vin SELECT",
+    ),
+    Case(
+        "column_select_to_public",
+        ("GRANT SELECT (api_key_sha256) ON public.api_clients TO PUBLIC",),
+        Violation.COLUMN_PRIVILEGE,
+        "public.api_clients.api_key_sha256 SELECT",
     ),
     Case(
         "table_delete",
@@ -263,6 +306,67 @@ CASES = (
         Violation.SEQUENCE_PRIVILEGE,
         "public.optest_sequence",
     ),
+    # 7. Session and role settings (SPEC_DECISIONS 103).
+    Case(
+        "replica_in_database",
+        ("ALTER ROLE {app} IN DATABASE {db} SET session_replication_role = replica",),
+        Violation.ROLE_HAS_SETTING,
+        "in database {db_name}",
+    ),
+    Case(
+        "statement_timeout_setting",
+        ("ALTER ROLE {app} SET statement_timeout = '1ms'",),
+        Violation.ROLE_HAS_SETTING,
+        "in every database",
+    ),
+    Case(
+        "search_path_setting",
+        ("ALTER ROLE {app} SET search_path = pg_temp, public",),
+        Violation.ROLE_HAS_SETTING,
+        "in every database",
+    ),
+    Case(
+        "parameter_privilege",
+        ("GRANT SET ON PARAMETER session_replication_role TO {app}",),
+        Violation.PARAMETER_PRIVILEGE,
+        "session_replication_role",
+    ),
+    Case(
+        "replica_for_the_database",
+        ("ALTER DATABASE {db} SET session_replication_role = replica",),
+        Violation.TRIGGERS_DISABLED_FOR_SESSION,
+        "database {db_name}",
+    ),
+    # 8. Functions.
+    Case(
+        "security_definer_for_public",
+        (
+            "CREATE FUNCTION public.optest_definer() RETURNS integer LANGUAGE sql SECURITY DEFINER "
+            "AS 'SELECT 1'",
+        ),
+        Violation.SECURITY_DEFINER_FUNCTION,
+        "public.optest_definer",
+    ),
+    Case(
+        "function_executable_by_public",
+        ("CREATE FUNCTION public.optest_plain() RETURNS integer LANGUAGE sql AS 'SELECT 1'",),
+        Violation.FUNCTION_PRIVILEGE,
+        "public.optest_plain",
+    ),
+    # 9. Default privileges.
+    Case(
+        "default_privileges",
+        ("ALTER DEFAULT PRIVILEGES FOR ROLE {owner} IN SCHEMA public GRANT INSERT ON TABLES TO {app}",),
+        Violation.DEFAULT_PRIVILEGE,
+        "{owner_name} tables",
+    ),
+    # 10. Grant options.
+    Case(
+        "grant_option",
+        ("GRANT SELECT ON public.payments TO {app} WITH GRANT OPTION",),
+        Violation.GRANT_OPTION,
+        "table public.payments SELECT",
+    ),
 )
 
 
@@ -294,7 +398,18 @@ def test_every_hand_made_violation_is_found_and_serve_refuses_with_the_first_cod
     assert RoleViolation(case.first, shown) in found, found
     code, out, err = cli(["serve"], **migrated.environment(PORT=str(free_port())))
     assert (code, out) == (1, "")
-    assert err == f"The role of DATABASE_URL is not least-privilege ({case.first}); use the app role.\n"
+    assert err == f"The role of DATABASE_URL is not least-privilege ({case.first}); {ADVICE[case.first]}.\n"
+
+
+def test_every_code_has_its_advice() -> None:
+    assert set(ADVICE) == set(Violation)
+
+
+def test_a_role_setting_also_disables_triggers_in_the_session_when_it_is_replica(
+    migrated: Database, admin: psycopg.Connection[Any]
+) -> None:
+    apply(admin, migrated, next(case for case in CASES if case.name == "replica_in_database"))
+    assert RoleViolation(Violation.TRIGGERS_DISABLED_FOR_SESSION, "session") in violations(migrated)
 
 
 def test_a_column_grant_on_one_table_is_reported_on_that_table_only(
@@ -303,7 +418,7 @@ def test_a_column_grant_on_one_table_is_reported_on_that_table_only(
     app = sql.Identifier(migrated.app_role)
     admin.execute(sql.SQL("GRANT UPDATE (lienholder_name) ON public.title_records TO {}").format(app))
     assert violations(migrated) == (
-        RoleViolation(Violation.TABLE_PRIVILEGE_EXTRA, "public.title_records UPDATE"),
+        RoleViolation(Violation.COLUMN_PRIVILEGE, "public.title_records.lienholder_name UPDATE"),
     )
 
 
@@ -341,5 +456,26 @@ def test_migrating_with_the_app_role_says_it_is_not_the_owner_before_and_after_t
 def test_a_table_the_owner_does_not_own_stops_the_administrative_commands(
     migrated: Database, admin: psycopg.Connection[Any], cli: Callable[..., tuple[int, str, str]]
 ) -> None:
+    """WP1 review 4 quality 5: the owner is the owner; the table is foreign, and that is said."""
     admin.execute("CREATE TABLE public.optest_foreign (x integer)")
-    assert cli(["db", "migrate"], **migrated.environment()) == (1, "", OWNER_REFUSAL)
+    assert cli(["db", "migrate"], **migrated.environment()) == (1, "", FOREIGN_TABLE)
+
+
+@pytest.mark.parametrize("role", ["{db}_owner", "{db}_other", "postgres"])
+def test_migrate_grants_only_to_the_app_role_of_its_database(
+    provisioned_database: Database, cli: Callable[..., tuple[int, str, str]], role: str
+) -> None:
+    """WP1 review 4 quality 4: DB_APP_ROLE set to the owner granted nothing and recorded 0002."""
+    env = provisioned_database.environment(DB_APP_ROLE=role.format(db=provisioned_database.target.database))
+    assert cli(["db", "migrate"], **env) == (
+        1,
+        "",
+        "Configuration error: DB_APP_ROLE must be {database}_app, the app role of the database of "
+        "MIGRATION_DATABASE_URL.\n",
+    )
+    engine = make_engine(provisioned_database.owner_url)
+    try:
+        with engine.connect() as connection:
+            assert connection.exec_driver_sql("SELECT to_regclass('public.alembic_version')").scalar() is None
+    finally:
+        engine.dispose()

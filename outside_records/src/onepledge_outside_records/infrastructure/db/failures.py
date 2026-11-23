@@ -7,7 +7,13 @@ sentences, in every command. Each names the variable, never its value.
 
 from __future__ import annotations
 
+import psycopg
+from sqlalchemy.exc import DBAPIError
+
 from onepledge_outside_records.domain.errors import OperatorError
+
+# Every error the driver or SQLAlchemy raises for a statement or a connection.
+DATABASE_ERRORS: tuple[type[Exception], ...] = (DBAPIError, psycopg.Error)
 
 UNDEFINED_TABLE = "42P01"
 INSUFFICIENT_PRIVILEGE = "42501"
@@ -49,5 +55,16 @@ def privilege_missing(variable: str, remedy: str, error: BaseException | None = 
     return OperatorError(
         f"The role of {variable} lacks a privilege this command needs; {remedy}.",
         "CONFIGURATION_ERROR",
+        error,
+    )
+
+
+def startup_check_refused(check: str, error: BaseException) -> OperatorError:
+    """A statement the database refused inside the named startup check (SPEC_DECISIONS 104)."""
+    return OperatorError(
+        f"The database refused a statement of the startup check {check} "
+        f"(SQLSTATE {sqlstate(error) or 'unknown'}); check the settings of the role of DATABASE_URL "
+        "and of its database.",
+        "STARTUP_CHECK_FAILED",
         error,
     )
