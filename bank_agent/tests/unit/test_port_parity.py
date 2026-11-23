@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 import inspect
 from pathlib import Path
+from typing import Protocol
 
 import pytest
 
@@ -25,20 +26,31 @@ PORT_TESTS = Path(__file__).resolve().parents[1] / "ports"
 EXTRA_PORTS = ("HistoryReader", "UnitOfWork")
 
 
-def port_methods() -> set[str]:
-    """`Port.method` for every public method (not a property) of every repository port."""
-    found: set[str] = set()
+def repository_ports() -> dict[str, type]:
+    """Every repository port protocol, by name."""
+    found: dict[str, type] = {}
     for module in (ports, evidence_ports):
         for name, value in vars(module).items():
             is_port = name.endswith("Repository") or name in EXTRA_PORTS
             if inspect.isclass(value) and value.__module__ == module.__name__ and is_port:
                 assert getattr(value, "_is_protocol", False), name
-                found |= {
-                    f"{name}.{method}"
-                    for method, member in vars(value).items()
-                    if not method.startswith("_") and inspect.isfunction(member)
-                }
+                found[name] = value
     return found
+
+
+def methods_of(classes: dict[str, type]) -> set[str]:
+    """`Port.method` for every public method (not a property) a class defines."""
+    return {
+        f"{name}.{method}"
+        for name, port in classes.items()
+        for method, member in vars(port).items()
+        if not method.startswith("_") and inspect.isfunction(member)
+    }
+
+
+def port_methods() -> set[str]:
+    """`Port.method` for every public method of every repository port."""
+    return methods_of(repository_ports())
 
 
 def parity_cases() -> dict[str, set[str]]:
@@ -76,11 +88,16 @@ def test_the_deep_verification_reads_are_ports_with_cases() -> None:
     assert reads <= covered
 
 
-def test_a_method_added_to_a_port_without_a_case_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+class _Extended(evidence_ports.HistoryReader, Protocol):
+    """A port with one read more than `HistoryReader`, as a change to the port would make it."""
+
+    def new_read(self) -> list[object]:
+        """A read without a parity case."""
+        ...
+
+
+def test_a_method_added_to_a_port_without_a_case_fails() -> None:
     """The check itself: a new method on a port is seen at once."""
-
-    def added(self: object) -> None:
-        del self
-
-    monkeypatch.setattr(evidence_ports.HistoryReader, "new_read", added, raising=False)
-    assert "HistoryReader.new_read" in port_methods() - set().union(*parity_cases().values())
+    added = methods_of({"HistoryReader": _Extended})
+    assert added == {"HistoryReader.new_read"}
+    assert added - set().union(*parity_cases().values()) == added
