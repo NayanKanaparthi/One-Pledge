@@ -1,18 +1,26 @@
-"""The repository's pytest plugin (SPEC_DECISIONS 76): SIGTERM teardown, stale sweep, e2e time limit.
+"""The repository's pytest plugin (SPEC_DECISIONS 76): SIGTERM stop, stale sweep, e2e time limit.
 
-The root `conftest.py` loads it for every package. It turns SIGTERM into the same orderly
-stop as Ctrl-C, so fixtures still drop the databases and roles they made when a run is
-killed; it drops `optest_` databases and roles a crashed run left more than two hours ago
-before any test starts; it gives e2e tests 600 seconds where the root configuration
-gives every other test 120; and it offers the `enforce_unit_isolation` fixture that holds
-`unit` tests to SPEC_DECISIONS 77.
+The root `conftest.py` loads it for every package. A SIGTERM ends the session wherever it
+lands (SPEC_DECISIONS 126): the handler records it and raises `TerminatedError`, a
+`BaseException`, so `except Exception` cannot catch it; and since a bare `except:` still
+could, the record is checked before every test starts and after every test ends. No further
+test starts, the running test is reported as interrupted (never as passed or failed), every
+fixture finalises, the session drops its scratch objects, the exit code is not zero and the
+last line says the run was stopped by SIGTERM. During provisioning the signal is held and
+acted on when the call returns (`deferred_signals`). The plugin also drops `optest_`
+databases and roles a crashed run left more than two hours ago before any test starts; it
+gives e2e tests 600 seconds where the root configuration gives every other test 120; and it
+offers the `enforce_unit_isolation` fixture that holds `unit` tests to SPEC_DECISIONS 77.
 """
 
 from __future__ import annotations
 
+import os
 import signal
+import sys
 import threading
 from collections.abc import Generator, Iterator
+from dataclasses import dataclass
 from datetime import timedelta
 from types import FrameType
 
@@ -33,18 +41,36 @@ E2E_TIMEOUT_SECONDS = 600
 
 
 class TerminatedError(KeyboardInterrupt):
-    """The run received SIGTERM; raised as an interrupt so pytest tears every fixture down."""
+    """The run received SIGTERM: a `BaseException`, so pytest stops and tears every fixture down."""
 
 
-_TERMINATING: list[bool] = []
+STOPPED = "stopped by SIGTERM"
+
+
+@dataclass
+class _Signalled:
+    """The SIGTERM of this session, once received, and the test it interrupted."""
+
+    received: bool = False
+    interrupted: str | None = None
+    raised: bool = False
+
+
+_SIGNALLED = _Signalled()
 
 
 def _terminate(signum: int, _: FrameType | None) -> None:
-    # Only the first SIGTERM interrupts; later ones arrive while the session is already ending
-    # and must not cut its final drop short.
-    if not _TERMINATING:
-        _TERMINATING.append(True)
+    _SIGNALLED.received = True
+    # Only the first SIGTERM is raised; later ones arrive while the session is already ending
+    # and must not cut its final drop short. The record is what the checks between tests read.
+    if not _SIGNALLED.raised:
+        _SIGNALLED.raised = True
         raise TerminatedError(f"received signal {signal.Signals(signum).name}")
+
+
+def signalled() -> bool:
+    """Whether this session has received SIGTERM."""
+    return _SIGNALLED.received
 
 
 def install_sigterm_handler() -> None:
@@ -92,8 +118,11 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     """After every fixture: drop whatever this session made, by its stem and its registered names.
 
     It runs on a normal end, a failure, SIGINT and SIGTERM (SPEC_DECISIONS 115.2); signals are
-    held back while it runs, so it cannot be cut short.
+    held back while it runs, so it cannot be cut short. After a SIGTERM the exit status is
+    never zero.
     """
+    if signalled() and session.exitstatus == pytest.ExitCode.OK:
+        session.exitstatus = pytest.ExitCode.INTERRUPTED
     if not registered():
         return
     try:
@@ -114,6 +143,43 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 
 @pytest.hookimpl(wrapper=True)
+def pytest_runtest_protocol(
+    item: pytest.Item, nextitem: pytest.Item | None
+) -> Generator[None, object, object]:
+    """No test starts after a SIGTERM, and the session stops after the test that received it."""
+    del nextitem
+    if signalled():
+        raise TerminatedError(STOPPED)
+    outcome = yield
+    if signalled():
+        _SIGNALLED.interrupted = _SIGNALLED.interrupted or item.nodeid
+        item.session.shouldstop = STOPPED
+    return outcome
+
+
+def _reraise_absorbed(item: pytest.Item) -> None:
+    """A SIGTERM a bare `except:` absorbed during this phase is raised again, before the phase is
+    reported, so the test counts as interrupted rather than passed."""
+    if signalled():
+        _SIGNALLED.interrupted = _SIGNALLED.interrupted or item.nodeid
+        raise TerminatedError(STOPPED)
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> Generator[None, None, None]:
+    """Fixture setup: an absorbed SIGTERM is raised again when it ends."""
+    yield
+    _reraise_absorbed(item)
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_call(item: pytest.Item) -> Generator[None, None, None]:
+    """The test itself: an absorbed SIGTERM is raised again when it ends."""
+    yield
+    _reraise_absorbed(item)
+
+
+@pytest.hookimpl(wrapper=True)
 def pytest_runtest_makereport(
     item: pytest.Item, call: pytest.CallInfo[None]
 ) -> Generator[None, pytest.TestReport, pytest.TestReport]:
@@ -122,6 +188,31 @@ def pytest_runtest_makereport(
     if call.when == "call":
         item.stash[CALL_PASSED] = report.passed
     return report
+
+
+def pytest_keyboard_interrupt(excinfo: pytest.ExceptionInfo[BaseException]) -> None:
+    """Note which test a SIGTERM raised inside was running, for the last line."""
+    del excinfo
+    if signalled() and _SIGNALLED.interrupted is None:
+        _SIGNALLED.interrupted = _current_test()
+
+
+def _current_test() -> str | None:
+    current = os.environ.get("PYTEST_CURRENT_TEST")
+    return current.rsplit(" ", 1)[0] if current else None
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """After the summary: the last line says the run did not complete (SPEC_DECISIONS 126.3)."""
+    if not signalled():
+        return
+    during = f" during {_SIGNALLED.interrupted}" if _SIGNALLED.interrupted else ""
+    line = f"{STOPPED}{during}; the run is not complete and no further test ran"
+    reporter = config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None:
+        reporter.write_line(line)
+    else:
+        sys.stderr.write(line + "\n")
 
 
 @pytest.fixture

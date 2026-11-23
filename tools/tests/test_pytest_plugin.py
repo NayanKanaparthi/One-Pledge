@@ -204,3 +204,127 @@ def test_sigterm_at_twenty_moments_leaves_nothing_under_the_session_stem(tmp_pat
             if found:
                 left[moment] = found
     assert left == {}
+
+
+# SPEC_DECISIONS 126: a SIGTERM ends the session wherever it lands; no test can absorb it.
+ABSORBING_HEADER = """
+import os
+import time
+from pathlib import Path
+
+import psycopg
+import pytest
+from psycopg import sql
+
+from onepledge_testtools.scratch_databases import admin_url, deferred_signals, new_name
+
+
+def create(name):
+    with psycopg.connect(admin_url(), autocommit=True) as admin:
+        admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+
+
+def drop(name):
+    with psycopg.connect(admin_url(), autocommit=True) as admin:
+        admin.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))
+
+
+@pytest.fixture
+def scratch():
+    name = new_name("absorb")
+    create(name)
+    yield name
+    drop(name)
+
+
+def wait(name):
+    Path(os.environ["READY_FILE"]).write_text(name)
+    time.sleep(30)
+"""
+ABSORBING_BODIES = {
+    "except Exception": """
+@pytest.mark.integration
+def test_absorbs(scratch):
+    try:
+        wait(scratch)
+    except Exception:
+        pass
+""",
+    "bare except": """
+@pytest.mark.integration
+def test_absorbs(scratch):
+    try:
+        wait(scratch)
+    except:  # the construct under test
+        pass
+""",
+    "pytest.raises(Exception)": """
+@pytest.mark.integration
+def test_absorbs(scratch):
+    with pytest.raises(Exception):
+        wait(scratch)
+""",
+    "fixture": """
+@pytest.fixture
+def waiting(scratch):
+    try:
+        wait(scratch)
+    except Exception:
+        pass
+    yield scratch
+
+
+@pytest.mark.integration
+def test_absorbs(waiting):
+    pass
+""",
+    "provisioning": """
+@pytest.fixture
+def provisioned():
+    name = new_name("absorb")
+    with deferred_signals():
+        create(name)
+        Path(os.environ["READY_FILE"]).write_text(name)
+        time.sleep(1)
+    yield name
+    drop(name)
+
+
+@pytest.mark.integration
+def test_absorbs(provisioned):
+    time.sleep(30)
+""",
+}
+NEXT_TEST = """
+
+@pytest.mark.integration
+def test_must_not_start():
+    Path(os.environ["STARTED_FILE"]).write_text("started")
+"""
+
+
+@pytest.mark.reliability
+@pytest.mark.integration
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("construct", sorted(ABSORBING_BODIES))
+def test_a_sigterm_stops_the_session_whatever_the_test_does_with_it(tmp_path: Path, construct: str) -> None:
+    tests = tmp_path / "test_absorbing.py"
+    tests.write_text(ABSORBING_HEADER + ABSORBING_BODIES[construct] + NEXT_TEST)
+    ready, started = tmp_path / "ready", tmp_path / "started"
+    environment = _environment(READY_FILE=str(ready), STARTED_FILE=str(started))
+    child = processes.start(_child(tests), environment, merge_stderr=True)
+    deadline = time.monotonic() + 60
+    while not ready.exists() and child.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert ready.exists(), child.communicate(timeout=60)[0]
+    child.send_signal(signal.SIGTERM)
+    output, _ = child.communicate(timeout=60)
+    with psycopg.connect(admin_url(), autocommit=True) as admin:
+        left = leftovers(admin, child.pid)
+    lines = [line for line in output.splitlines() if line.strip()]
+    assert left == [], output
+    assert not started.exists(), output
+    assert child.returncode == pytest.ExitCode.INTERRUPTED, output
+    assert lines[-1].startswith("stopped by SIGTERM"), output
+    assert " passed" not in output and " failed" not in output, output
+    assert "test_absorbs" in lines[-1], output
