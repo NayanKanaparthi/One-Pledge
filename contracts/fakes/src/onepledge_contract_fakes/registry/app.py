@@ -22,9 +22,11 @@ from onepledge_contract_fakes.registry.model import CaseStatus
 from onepledge_contract_fakes.registry.wire import CasePositionRequestModel, SubmissionRequestModel
 from onepledge_contract_fakes.validation import MAX_OFFSET, Issue, QueryParameters
 from onepledge_contract_fakes.web import (
+    header,
     new_service_app,
     parse_model_json,
     read_body,
+    repeated,
     route_template,
     validate_in_order,
 )
@@ -62,7 +64,7 @@ class _Guard:
         the size, the content type, the JSON or the fields of its request.
         """
         read = await read_body(request)
-        api_key = request.headers.get("x-api-key")
+        api_key = header(request, "X-API-Key")
         if self._controls is not None and request.method == "POST":
             self._controls.record(request.url.path, self._double.identify(api_key), read.body)
         self._inject(request)
@@ -77,7 +79,7 @@ class _Guard:
         """Like `enter` for the ledger reads, which also accept the auditor key."""
         read = await read_body(request)
         self._inject(request)
-        reader = self._double.reader_role(request.headers.get("x-api-key"))
+        reader = self._double.reader_role(header(request, "X-API-Key"))
         read.accept()
         query = QueryParameters(request.query_params.multi_items(), declared)
         if not declared:
@@ -122,9 +124,13 @@ def _mount_submissions(app: FastAPI, double: RegistryDouble, guard: _Guard) -> N
     @app.post("/v1/submissions")
     async def create_submission(request: Request) -> Response:
         entry = await guard.enter(request, has_body=True)
-        document = parse_json_request(entry.body, request.headers.get("content-type"))
-        key = request.headers.get("idempotency-key") or ""
-        header_details = _idempotency_key_details(request.headers.get("idempotency-key"))
+        document = parse_json_request(entry.body, header(request, "Content-Type"))
+        header_details: tuple[ErrorDetail, ...]
+        if repeated(request, "Idempotency-Key"):
+            key, header_details = "", (ErrorDetail("Idempotency-Key", Issue.DUPLICATE),)
+        else:
+            key = header(request, "Idempotency-Key") or ""
+            header_details = _idempotency_key_details(header(request, "Idempotency-Key"))
         model = validate_in_order(
             entry.query, lambda: parse_model_json(SubmissionRequestModel, entry.body), header_details
         )
@@ -143,7 +149,7 @@ def _mount_submissions(app: FastAPI, double: RegistryDouble, guard: _Guard) -> N
     @app.post("/v1/cases/{case_id}/resolution")
     async def post_case_position(case_id: str, request: Request) -> JSONResponse:
         entry = await guard.enter(request, has_body=True)
-        parse_json_request(entry.body, request.headers.get("content-type"))
+        parse_json_request(entry.body, header(request, "Content-Type"))
         model = validate_in_order(entry.query, lambda: parse_model_json(CasePositionRequestModel, entry.body))
         return JSONResponse(double.record_position(entry.caller, case_id, model.to_position()))
 

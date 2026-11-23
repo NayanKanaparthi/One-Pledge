@@ -7,6 +7,7 @@ import io
 import json
 import re
 from collections.abc import Callable, Iterator, MutableMapping
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -77,3 +78,36 @@ def test_a_client_that_hangs_up_mid_body_is_one_info_record_and_no_failure() -> 
     records = [json.loads(line) for line in stream.getvalue().splitlines() if line.startswith("{")]
     assert [(r["level"], r["event"]) for r in records] == [("info", "client_disconnected")]
     assert not [m for m in sent if m["type"] == "http.response.start"]
+
+
+# SPEC_DECISIONS 112.8: a repeated credential is 401; a repeated Idempotency-Key, Content-Type,
+# Content-Length or X-Request-ID is 422 DUPLICATE.
+def problem(response: httpx.Response) -> tuple[int, str, list[tuple[str, str]]]:
+    error = response.json()["error"]
+    return response.status_code, error["code"], [(d["field"], d["issue"]) for d in error.get("details", [])]
+
+
+@pytest.mark.integration
+def test_a_repeated_api_key_is_unauthenticated_even_when_both_are_valid(
+    call: Callable[..., httpx.Response], api_key: str, example_records: Path
+) -> None:
+    vin = (example_records / "titles.csv").read_text().splitlines()[1].split(",")[0]
+    response = call("GET", f"/v1/titles/{vin}", headers=[("X-API-Key", api_key), ("X-API-Key", api_key)])
+    assert problem(response) == (401, "UNAUTHENTICATED", [])
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("name", ["Idempotency-Key", "Content-Type", "Content-Length"])
+def test_another_repeated_header_is_duplicate_after_authentication(
+    call: Callable[..., httpx.Response], api_key: str, example_records: Path, name: str
+) -> None:
+    vin = (example_records / "titles.csv").read_text().splitlines()[1].split(",")[0]
+    response = call("GET", f"/v1/titles/{vin}", headers=[("X-API-Key", api_key), (name, "0"), (name, "0")])
+    assert problem(response) == (422, "VALIDATION_ERROR", [(name, "DUPLICATE")])
+    assert call("GET", f"/v1/titles/{vin}", headers=[(name, "0"), (name, "0")]).status_code == 401
+
+
+@pytest.mark.integration
+def test_a_repeated_request_id_is_duplicate(call: Callable[..., httpx.Response]) -> None:
+    response = call("GET", "/healthz", headers=[("X-Request-ID", CANONICAL), ("X-Request-ID", CANONICAL)])
+    assert problem(response) == (422, "VALIDATION_ERROR", [("X-Request-ID", "DUPLICATE")])

@@ -159,11 +159,30 @@ def check_test_control(request: Request, expected_key: str, has_body: bool = Fal
     Without a body the query is checked at once; with one, `validate_in_order` checks it after
     the body's Content-Type and JSON (SPEC_DECISIONS 66).
     """
-    check_test_control_key(request.headers.get(TEST_CONTROL_HEADER), expected_key)
+    check_test_control_key(header(request, TEST_CONTROL_HEADER), expected_key)
     query = QueryParameters(request.query_params.multi_items(), ())
     if not has_body:
         query.finish()
     return query
+
+
+# SPEC_DECISIONS 112.8: a repeated credential is 401, any other repeated header 422 DUPLICATE.
+AUTHENTICATION_HEADERS = frozenset({"authorization", "x-api-key", "x-test-control-key"})
+
+
+def repeated(request: Request, name: str) -> bool:
+    """Whether the request carries the header more than once."""
+    return len(request.headers.getlist(name)) > 1
+
+
+def header(request: Request, name: str) -> str | None:
+    """The one value of a header; a repeated credential is UNAUTHENTICATED, any other DUPLICATE."""
+    values = request.headers.getlist(name)
+    if len(values) > 1:
+        if name.lower() in AUTHENTICATION_HEADERS:
+            raise UnauthenticatedError
+        raise ValidationFailedError(details=(ErrorDetail(name, Issue.DUPLICATE),))
+    return values[0] if values else None
 
 
 def check_test_control_key(presented: str | None, expected: str) -> None:

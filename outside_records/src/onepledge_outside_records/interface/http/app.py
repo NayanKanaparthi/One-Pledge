@@ -27,7 +27,7 @@ from onepledge_outside_records.domain.records import (
     TitleRecord,
     VinText,
 )
-from onepledge_outside_records.interface.http.plumbing import new_service_app
+from onepledge_outside_records.interface.http.plumbing import header, new_service_app, refuse_repeated_headers
 from onepledge_outside_records.interface.http.query import MAX_OFFSET, QueryParameters
 
 
@@ -99,8 +99,9 @@ def create_app(reader: RecordsReader) -> FastAPI:
     app = new_service_app("OnePledge outside records")
 
     def client(request: Request) -> None:
-        found = authenticate.run(request.headers.get("x-api-key"))
+        found = authenticate.run(header(request, "X-API-Key"))
         request.scope["onepledge.client_name"] = found.name
+        refuse_repeated_headers(request)
 
     @app.get("/v1/titles/{vin}")
     def title(vin: str, request: Request) -> JSONResponse:

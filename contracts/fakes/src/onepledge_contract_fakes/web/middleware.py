@@ -50,6 +50,10 @@ def new_service_app(title: str) -> FastAPI:
     return app
 
 
+def _count(scope: Scope, name: bytes) -> int:
+    return sum(1 for key, _ in scope.get("headers", []) if bytes(key).lower() == name)
+
+
 def _request_id_from(scope: Scope) -> str:
     """The caller's X-Request-ID when it is a canonical UUID, otherwise a new one (SPEC_DECISIONS 75)."""
     for name, value in scope.get("headers", []):
@@ -62,7 +66,9 @@ def _request_id_from(scope: Scope) -> str:
 
 
 def _declared_length_problem(scope: Scope, limit: int) -> DomainError | None:
-    """A malformed `Content-Length` (422) or one above the limit (413), raised when the body is read."""
+    """A repeated or malformed `Content-Length` (422) or one over the limit (413), raised on reading."""
+    if _count(scope, b"content-length") > 1:
+        return ValidationFailedError(details=(ErrorDetail("Content-Length", Issue.DUPLICATE),))
     for name, value in scope.get("headers", []):
         if name.lower() == b"content-length":
             parsed = parse_integer_text(value.decode("latin-1"), 0, MAX_INTEGER)
@@ -107,6 +113,9 @@ class RequestContextMiddleware:
         sending = self._with_request_id(send, request_id, exchange)
         try:
             try:
+                if _count(scope, b"x-request-id") > 1:
+                    # A repeated request id is refused before routing (SPEC_DECISIONS 112.8).
+                    raise ValidationFailedError(details=(ErrorDetail("X-Request-ID", Issue.DUPLICATE),))
                 problem = _declared_length_problem(scope, self._max_body_bytes)
                 await self._app(scope, self._limited(receive, problem), sending)
             except DomainError as error:

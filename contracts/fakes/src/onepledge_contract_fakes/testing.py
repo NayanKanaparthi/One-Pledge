@@ -12,7 +12,7 @@ import json as _json
 import secrets
 import threading
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Self
 
@@ -124,9 +124,16 @@ class AsgiTestClient:
         self._client = httpx.AsyncClient(transport=transport, base_url=base_url)
 
     def send(
-        self, method: str, url: str, content: bytes | None = None, headers: Mapping[str, str] | None = None
+        self,
+        method: str,
+        url: str,
+        content: bytes | None = None,
+        headers: Mapping[str, str] | Sequence[tuple[str, str]] | None = None,
     ) -> httpx.Response:
-        """Send one request and return the complete response. Query strings go in `url`."""
+        """Send one request and return the complete response. Query strings go in `url`.
+
+        Headers given as a list of pairs may repeat a name.
+        """
         return self._runner.run(self._client.request(method, url, content=content, headers=headers))
 
     def get(self, url: str, headers: Mapping[str, str] | None = None) -> httpx.Response:

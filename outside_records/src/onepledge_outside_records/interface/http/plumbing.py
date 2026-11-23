@@ -22,9 +22,11 @@ from starlette.requests import ClientDisconnect
 
 from onepledge_outside_records.domain.errors import (
     DomainError,
+    ErrorDetail,
     MethodNotAllowedError,
     ResourceNotFoundError,
     ServiceUnavailableError,
+    UnauthenticatedError,
     ValidationFailedError,
 )
 from onepledge_outside_records.infrastructure.logging_setup import LogEvent, get_logger
@@ -176,6 +178,32 @@ def install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(Exception, unexpected_error)
 
 
+# SPEC_DECISIONS 112.8: a repeated credential is 401; any of these repeated is 422 DUPLICATE.
+AUTHENTICATION_HEADERS = ("Authorization", "X-API-Key", "X-Test-Control-Key")
+SINGLE_HEADERS = ("Idempotency-Key", "Content-Type", "Content-Length")
+
+
+def header(request: Request, name: str) -> str | None:
+    """The one value of a header; a repeated credential is UNAUTHENTICATED, any other DUPLICATE."""
+    values = request.headers.getlist(name)
+    if len(values) > 1:
+        if name in AUTHENTICATION_HEADERS:
+            raise UnauthenticatedError
+        raise ValidationFailedError((ErrorDetail(name, "DUPLICATE"),))
+    return values[0] if values else None
+
+
+def refuse_repeated_headers(request: Request) -> None:
+    """After authentication: a repeated credential is 401 and any other repeated header 422."""
+    if any(len(request.headers.getlist(name)) > 1 for name in AUTHENTICATION_HEADERS):
+        raise UnauthenticatedError
+    repeated = [
+        ErrorDetail(name, "DUPLICATE") for name in SINGLE_HEADERS if len(request.headers.getlist(name)) > 1
+    ]
+    if repeated:
+        raise ValidationFailedError(tuple(repeated))
+
+
 _CANONICAL_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
@@ -233,7 +261,12 @@ class AccessLogMiddleware:
 
         try:
             try:
+                if sum(1 for key, _ in scope.get("headers", []) if bytes(key).lower() == b"x-request-id") > 1:
+                    # A repeated request id is refused before routing (SPEC_DECISIONS 112.8).
+                    raise ValidationFailedError((ErrorDetail("X-Request-ID", "DUPLICATE"),))
                 await self._app(scope, receive, sending)
+            except DomainError as error:
+                await failure_response(scope, error)(scope, receive, sending)
             except ClientDisconnect:
                 # The client hung up before the request was complete: not a server failure, so
                 # one info record and no response, failure record or access record (decision 75).

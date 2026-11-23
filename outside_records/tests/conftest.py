@@ -10,7 +10,7 @@ import asyncio
 import os
 import secrets
 import shutil
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -179,8 +179,10 @@ class InProcessApi:
         transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
         self._client = httpx.AsyncClient(transport=transport, base_url="http://testserver")
 
-    def request(self, method: str, url: str, headers: Mapping[str, str] | None = None) -> httpx.Response:
-        """One request; the query string goes in `url`."""
+    def request(
+        self, method: str, url: str, headers: Mapping[str, str] | Sequence[tuple[str, str]] | None = None
+    ) -> httpx.Response:
+        """One request; the query string goes in `url`; headers as a list of pairs may repeat a name."""
         return self._runner.run(self._client.request(method, url, headers=headers))
 
     def close(self) -> None:

@@ -17,6 +17,11 @@ verified end to end now, and layer 2 has an executable reference of the draft co
   element whose base64 does not re-encode to the same text (non-zero padding bits) is
   `NOT_A_VALID_POINT`. A client that hangs up before its request is complete writes one
   `info` record `client_disconnected` and nothing else.
+- A request that repeats `Authorization`, `X-API-Key` or `X-Test-Control-Key` is 401
+  `UNAUTHENTICATED`; one that repeats `Idempotency-Key`, `Content-Type`, `Content-Length` or
+  `X-Request-ID` is 422 with `{"field": "<header>", "issue": "DUPLICATE"}` (SPEC_DECISIONS
+  112.8). A repeated `X-Request-ID` is refused before routing; the others at their step of
+  the check order.
 - Every 500 writes exactly one `error` log record carrying the response's `request_id`; any
   other 5xx writes one `warning` record. Every record of a 5xx response, the access record
   included, carries `error_code` (the code of the response body), `http_status`,

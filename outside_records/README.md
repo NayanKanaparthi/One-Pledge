@@ -37,6 +37,10 @@ synthetic and comes from `onepledge-datagen`.
   An `X-Request-ID` that is not a canonical lower case UUID is replaced by a new id, never
   rewritten, and a client that hangs up mid request writes one `info` record
   `client_disconnected` and nothing else (SPEC_DECISIONS 75).
+  A repeated `X-API-Key` (or `Authorization`, `X-Test-Control-Key`) is 401; after
+  authentication a repeated `Idempotency-Key`, `Content-Type` or `Content-Length` is 422
+  `DUPLICATE`, and a repeated `X-Request-ID` is 422 `DUPLICATE` before routing
+  (SPEC_DECISIONS 112.8).
   Every record of a 5xx response, the access record included, carries `error_code`,
   `http_status`, `request_id` and `exception_type` (SPEC_DECISIONS 66). Every exception
   while `db migrate` runs (a statement PostgreSQL refuses, a missing privilege, any

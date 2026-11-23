@@ -12,6 +12,7 @@ from onepledge_contract_fakes.registry.inspection import parse_tamper_request
 from onepledge_contract_fakes.web import (
     check_test_control,
     contract_routes,
+    header,
     validate_in_order,
 )
 
@@ -36,7 +37,7 @@ def mount_test_controls(app: FastAPI, double: RegistryDouble, controls: ControlS
     @app.post("/_test/fail-next")
     async def fail_next(request: Request) -> JSONResponse:
         query = check_test_control(request, key, has_body=True)
-        document = parse_json_request(await request.body(), request.headers.get("content-type"))
+        document = parse_json_request(await request.body(), header(request, "Content-Type"))
         spec = validate_in_order(
             query, lambda: parse_failure_spec(document, contract_routes(app), allow_after_commit=True)
         )
@@ -53,7 +54,7 @@ def mount_test_controls(app: FastAPI, double: RegistryDouble, controls: ControlS
     @app.post("/_test/tamper")
     async def tamper(request: Request) -> JSONResponse:
         query = check_test_control(request, key, has_body=True)
-        document = parse_json_request(await request.body(), request.headers.get("content-type"))
+        document = parse_json_request(await request.body(), header(request, "Content-Type"))
         tamper_request = validate_in_order(query, lambda: parse_tamper_request(document))
         return JSONResponse(double.test_controls.tamper(tamper_request))
 

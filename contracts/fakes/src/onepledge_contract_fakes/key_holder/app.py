@@ -18,6 +18,7 @@ from onepledge_contract_fakes.validation import CANONICAL_UUID_PATTERN, QueryPar
 from onepledge_contract_fakes.web import (
     check_test_control,
     contract_routes,
+    header,
     new_service_app,
     parse_model_json,
     read_body,
@@ -54,7 +55,7 @@ def create_key_holder_app(config: KeyHolderConfig, clock: Clock | None = None) -
     async def evaluate(request: Request) -> JSONResponse:
         # The order of SPEC_DECISIONS 66: authentication, size, Content-Type, JSON, unknown, fields.
         read = await read_body(request)
-        api_key = request.headers.get("x-api-key")
+        api_key = header(request, "X-API-Key")
         if controls is not None:
             controls.record(request.url.path, double.identify(api_key), read.body)
             status = controls.take(FailureWhen.BEFORE_PROCESSING, route_template(request))
@@ -62,7 +63,7 @@ def create_key_holder_app(config: KeyHolderConfig, clock: Clock | None = None) -
                 raise InjectedFailureError(status)
         member_id = double.authenticate(api_key)
         body = read.accept()
-        parse_json_request(body, request.headers.get("content-type"))
+        parse_json_request(body, header(request, "Content-Type"))
         query = QueryParameters(request.query_params.multi_items(), ())
         model = validate_in_order(query, lambda: parse_model_json(EvaluateRequestModel, body))
         command = EvaluationRequest(model.request_id, model.key_version, tuple(model.elements))
@@ -110,7 +111,7 @@ def _mount_controls(app: FastAPI, double: KeyHolderDouble, controls: ControlStat
     @app.post("/_test/fail-next")
     async def fail_next(request: Request) -> JSONResponse:
         query = check_test_control(request, key, has_body=True)
-        document = parse_json_request(await request.body(), request.headers.get("content-type"))
+        document = parse_json_request(await request.body(), header(request, "Content-Type"))
         spec = validate_in_order(
             query, lambda: parse_failure_spec(document, contract_routes(app), allow_after_commit=False)
         )

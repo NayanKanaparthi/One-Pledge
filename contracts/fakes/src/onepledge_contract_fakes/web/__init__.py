@@ -13,8 +13,10 @@ from onepledge_contract_fakes.web.requests import (
     check_test_control,
     check_test_control_key,
     details_from_pydantic,
+    header,
     parse_model_json,
     read_body,
+    repeated,
     validate_in_order,
 )
 from onepledge_contract_fakes.web.scope import (
@@ -48,10 +50,12 @@ __all__ = [
     "details_from_pydantic",
     "error_response",
     "failure_response",
+    "header",
     "install_error_handlers",
     "new_service_app",
     "parse_model_json",
     "read_body",
+    "repeated",
     "request_id_of",
     "route_template",
     "validate_in_order",
