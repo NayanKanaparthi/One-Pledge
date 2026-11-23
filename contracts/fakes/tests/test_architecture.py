@@ -12,6 +12,7 @@ from onepledge_testtools.declarations import (
     undeclared_test_requirements,
 )
 from onepledge_testtools.repository_rules import (
+    layout_problems,
     markdown_files,
     markdown_problems,
     source_tree_problems,
@@ -198,3 +199,8 @@ def test_the_tests_need_nothing_the_package_does_not_declare() -> None:
 def test_every_import_of_the_source_is_declared() -> None:
     """SPEC 2.1 and SPEC_DECISIONS 120: a runtime import is declared by the package that makes it."""
     assert undeclared_source_imports(PACKAGE_DIR, SOURCE) == []
+
+
+def test_the_readme_layout_names_what_exists_and_every_module() -> None:
+    """SPEC_DECISIONS 112.11: every path of the layout block exists and every module is named."""
+    assert layout_problems(PACKAGE_DIR / "README.md", REPOSITORY, [SOURCE]) == []

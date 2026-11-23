@@ -39,15 +39,26 @@ verified end to end now, and layer 2 has an executable reference of the draft co
 ```
 contracts/fakes/
   pyproject.toml  README.md  Dockerfile
-  src/onepledge_contract_fakes/
-    canonical_json.py  errors.py  settings.py  members.py  daily_cap.py  clock.py
-    controls.py  web.py  logging_setup.py  server.py  cli_output.py  testing.py
-    key_holder/        config, settings, double (KeyHolderDouble), app factory, cli
-    registry/          model, locks, matching (rules A, B, C), cases, ledger, signing,
-                       checkpoints, certificates, outbox, idempotency, stores, publisher,
-                       submissions, inspection (stats, dump, tamper), double (RegistryDouble),
-                       wire (request models), app factory, control_routes, settings, cli
-    contracts_check/   documents, schemas, vectors, checker, cli
+  src/
+    onepledge_contract_fakes/
+      canonical_json  errors  settings  members  daily_cap  clock  controls  testing
+      json_body         # the bounded JSON parser of request bodies and settings
+      validation        # the one text to integer rule, query parameters, canonical forms
+      binding           # the BIND_HOST and PORT probe at serve start
+      logging_setup  server  cli_output
+      web/              # HTTP plumbing shared by both doubles
+        scope           # header names, ASGI types, route helpers
+        requests        # body reading, bounded parse into models, check order, test controls
+        envelope        # the error envelope and the handlers
+        middleware      # request ids, body limit, failure and access records, app assembly
+      key_holder/
+        config  settings  double  app  cli   # KeyHolderDouble and its app factory
+      registry/
+        model  locks  matching  cases  ledger  signing  checkpoints  certificates
+        outbox  idempotency  stores  publisher  submissions  inspection  double
+        wire  app  control_routes  config  settings  cli   # RegistryDouble and its app
+      contracts_check/
+        documents  schemas  vectors  cleaning_cases  checker  cli   # onepledge-contracts
   tests/
 ```
 

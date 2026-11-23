@@ -9,6 +9,7 @@ import pytest
 from onepledge_testtools.declarations import undeclared_source_imports, undeclared_test_requirements
 from onepledge_testtools.repository_rules import (
     VIN_SHAPED,
+    _named_paths,
     markdown_files,
     markdown_problems,
     size_problems,
@@ -113,3 +114,20 @@ def test_the_vin_shaped_pattern_is_the_reviewers_grep() -> None:
 def test_the_tools_tests_need_nothing_the_tools_do_not_declare() -> None:
     assert undeclared_test_requirements(TOOLS, TOOLS / "tests") == []
     assert undeclared_source_imports(TOOLS, TOOLS / "src" / "onepledge_testtools") == []
+
+
+@pytest.mark.unit
+def test_a_layout_block_is_read_as_a_tree_with_comments() -> None:
+    block = [
+        "tools/",
+        "  pyproject.toml",
+        "  src/",
+        "    onepledge_testtools/   # the package",
+        "      processes  network   # helpers",
+        "      no_such_module",
+    ]
+    named = _named_paths(block, REPOSITORY)
+    package = REPOSITORY / "tools" / "src" / "onepledge_testtools"
+    assert REPOSITORY / "tools" / "pyproject.toml" in named
+    assert {package / "processes.py", package / "network.py"} <= set(named)
+    assert package / "no_such_module.py" in named and not (package / "no_such_module.py").exists()

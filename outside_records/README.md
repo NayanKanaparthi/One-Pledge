@@ -66,16 +66,29 @@ synthetic and comes from `onepledge-datagen`.
 ```
 outside_records/
   pyproject.toml  README.md  Dockerfile  alembic.ini
-  migrations/          env.py, versions/0001_schema.py (tables, checks, indexes),
-                       versions/0002_grants.py (SELECT for the app role)
-  src/onepledge_outside_records/
-    domain/            records (VinText, TitleRecord, Payment, Contract, PaymentQuery), errors,
-                       text_values (the one text to integer and date parser, ASCII digits only)
-    application/       ports, lookups (AuthenticateClient, GetTitle, ListPayments,
-                       GetContracts), administration (SeedRecords, RegisterClient)
-    infrastructure/    settings, logging_setup, csv_source, db/ (models, engines,
-                       provisioning, migrations, repositories)
-    interface/         cli, composition (the composition root), http/ (app, plumbing)
+  migrations/
+    env.py
+    versions/
+      0001_schema.py    # tables, checks, indexes
+      0002_grants.py    # the grant matrix for the app role
+  src/
+    onepledge_outside_records/
+      domain/
+        records         # VinText, TitleRecord, Payment, Contract, PaymentQuery
+        errors
+        text_values     # the one text to integer and date parser, ASCII digits only
+      application/
+        ports  lookups  administration
+      infrastructure/
+        settings  logging_setup  csv_source  binding
+        db/
+          models  engines  provisioning  migrations  repositories
+          role_check    # inspect_role and the grant matrix
+          failures      # the sentences naming the real cause of a database failure
+      interface/
+        cli  composition  output
+        http/
+          app  plumbing  query
   tests/
 ```
 

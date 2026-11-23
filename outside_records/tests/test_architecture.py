@@ -15,6 +15,7 @@ from onepledge_testtools.declarations import (
     undeclared_test_requirements,
 )
 from onepledge_testtools.repository_rules import (
+    layout_problems,
     markdown_files,
     markdown_problems,
     source_tree_problems,
@@ -240,3 +241,8 @@ def test_every_import_of_the_source_is_declared() -> None:
 def test_the_web_allow_list_is_what_the_package_declares() -> None:
     """Each web package the architecture test allows is a declared dependency (SPEC_DECISIONS 120)."""
     assert runtime_declared(PACKAGE_DIR) >= WEB_PACKAGES
+
+
+def test_the_readme_layout_names_what_exists_and_every_module() -> None:
+    """SPEC_DECISIONS 112.11: every path of the layout block exists and every module is named."""
+    assert layout_problems(PACKAGE_DIR / "README.md", REPOSITORY, [SOURCE, MIGRATIONS]) == []

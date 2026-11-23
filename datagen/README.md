@@ -144,17 +144,26 @@ kin, the `\d` class and `fromisoformat` anywhere else.
 ## Layout
 
 ```
-src/onepledge_datagen/
-  domain/          entities, catalog (banks, lenders, facilities, steps), VIN rules, money,
-                   calendar, amortisation, tape formats, seeded random streams, errors,
-                   text_values (integers and dates from text), bounded_json,
-                   oracle/ (cleaning, checks, lender names, registry, simulation)
-  application/     workspace, factories, planting kit, portfolio, planters/ (one class per
-                   case type), messiness, layout, records, reference, answer key, profiles,
-                   view, expectations, invariants, generate, verify, example contract
-  infrastructure/  CSV formats, JSON, the file codec and the data directory
-  interface/       cli.py and the console output helper
-tests/
+datagen/
+  pyproject.toml  README.md
+  src/
+    onepledge_datagen/
+      domain/           # pure rules: no I/O, no clock, seeded randomness only
+        entities  catalog  vin  money  calendar  amortisation  tape_format  text
+        randomness  errors  text_values  bounded_json  data_paths
+        oracle/         # the independent oracle of the answer key
+          cleaning  checks  lender_names  registry  simulation  model
+      application/
+        workspace  factories  kit  portfolio  messiness  layout  records  reference
+        answer_key  profiles  view  expectations  invariants  generate  verify
+        example_contract  model  ports
+        planters/       # one class per case type
+          base  altered  copies  invented  local_failures  lookalikes  race
+      infrastructure/
+        csv_files  codec  directory   # CSV formats, the file codec, the data directory
+      interface/
+        cli  output
+  tests/
 ```
 
 All randomness comes from `random.Random(f"{seed}:{stream}")` streams; there is no

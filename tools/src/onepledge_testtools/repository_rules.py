@@ -163,3 +163,70 @@ def markdown_problems(files: Iterable[Path], relative_to: Path) -> list[str]:
     for path in files:
         problems.extend(table_problems(str(path.relative_to(relative_to)), path.read_text(encoding="utf-8")))
     return problems
+
+
+_LAYOUT_HEADING = "## Layout"
+FENCES = 2  # the opening and the closing fence of a code block
+
+
+def _layout_block(text: str) -> list[str]:
+    """The lines of the first fenced block after the `## Layout` heading, or none."""
+    lines = text.splitlines()
+    if _LAYOUT_HEADING not in lines:
+        return []
+    start = lines.index(_LAYOUT_HEADING)
+    fences = [i for i in range(start, len(lines)) if lines[i].startswith("```")]
+    return lines[fences[0] + 1 : fences[1]] if len(fences) >= FENCES else []
+
+
+def _named_paths(block: list[str], repository: Path) -> list[Path]:
+    """Every path a layout block names, relative to the repository.
+
+    The first line is the package directory. Below it, each line holds names separated by
+    spaces, indented two spaces under the directory they belong to; text after `#` is a
+    comment. `name/` is a directory, `name.ext` a file, a bare `name` a module or package.
+    """
+    content = [line for line in block if line.split("#", 1)[0].strip()]
+    if not content:
+        return []
+    stack: list[tuple[int, Path]] = [(-1, repository / content[0].split()[0].rstrip("/"))]
+    named: list[Path] = [stack[0][1]]
+    for line in content[1:]:
+        indent = len(line) - len(line.lstrip(" "))
+        while len(stack) > 1 and stack[-1][0] >= indent:
+            stack.pop()
+        parent = stack[-1][1]
+        for token in line.split("#", 1)[0].split():
+            if token.endswith("/"):
+                directory = parent / token.rstrip("/")
+                named.append(directory)
+                stack.append((indent, directory))
+            elif "." in token:
+                named.append(parent / token)
+            else:
+                # A bare name is a module, or a file or package of exactly that name.
+                plain = parent / token
+                named.append(plain if plain.exists() else parent / f"{token}.py")
+    return named
+
+
+def layout_problems(readme: Path, repository: Path, sources: Iterable[Path]) -> list[str]:
+    """Where a README's layout block and the tree differ (SPEC_DECISIONS 112.11).
+
+    Every path the block names must exist, and every module of each source tree must be named.
+    """
+    named = _named_paths(_layout_block(readme.read_text(encoding="utf-8")), repository)
+    if not named:
+        return [f"{readme.relative_to(repository)} has no layout block"]
+    shown = str(readme.relative_to(repository))
+    problems = [
+        f"{shown} names {path.relative_to(repository)}, which does not exist"
+        for path in named
+        if not path.exists()
+    ]
+    listed = set(named)
+    for tree in sources:
+        for module in python_modules(tree):
+            if module.name != "__init__.py" and module not in listed:
+                problems.append(f"{shown} does not name {module.relative_to(repository)}")
+    return problems
