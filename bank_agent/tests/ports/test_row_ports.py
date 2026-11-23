@@ -7,6 +7,7 @@ from dataclasses import replace
 
 from bank_testkit.backends import PortWorld
 from bank_testkit.memory.bank import vins
+from bank_testkit.parity import parity
 from bank_testkit.records import at, item, raw_rows
 from bank_testkit.tapes import SUMMIT_HEADER
 from onepledge_bank_agent.application.ports import AcceptedItem, NewItem, StoredRawRow
@@ -27,6 +28,7 @@ def stored_rows(ports: PortWorld, submission_id: uuid.UUID, count: int) -> list[
 class TestRawRows:
     """`loans_raw`."""
 
+    @parity("RawRowRepository.add_many", "RawRowRepository.list_for")
     def test_rows_read_back_verbatim_in_row_number_order(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         rows = raw_rows(SUMMIT_HEADER, 3)
@@ -36,6 +38,7 @@ class TestRawRows:
         ]
         assert len({r.raw_id for r in found}) == 3
 
+    @parity("RawRowRepository.add_many", "RawRowRepository.list_for")
     def test_rows_belong_to_their_submission_and_an_empty_add_stores_nothing(self, ports: PortWorld) -> None:
         tape, other = ports.tape(at(1)), ports.tape(at(2))
         stored_rows(ports, tape.submission_id, 2)
@@ -50,6 +53,11 @@ class TestRawRows:
 class TestSubmissionItems:
     """`submission_items` and `cleaning_issues`."""
 
+    @parity(
+        "SubmissionItemRepository.accepted",
+        "SubmissionItemRepository.add_many",
+        "SubmissionItemRepository.release_requested",
+    )
     def test_accepted_and_release_items_are_read_by_disposition_in_row_order(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         rows = stored_rows(ports, tape.submission_id, 6)
@@ -78,6 +86,7 @@ class TestSubmissionItems:
             ]  # fmt: skip
             assert unit.items.accepted(ports.tape_of().submission_id) == []
 
+    @parity("SubmissionItemRepository.add_many", "SubmissionItemRepository.latest_submission_of")
     def test_the_latest_submission_of_a_loan_is_the_one_uploaded_last(self, ports: PortWorld) -> None:
         first, later = ports.tape(at(1)), ports.tape(at(3))
         ports.tape(at(5))
@@ -93,6 +102,11 @@ class TestSubmissionItems:
             assert unit.items.latest_submission_of(loan.loan_id) == later.submission_id
             assert unit.items.latest_submission_of(uuid.uuid4()) is None
 
+    @parity(
+        "SubmissionItemRepository.accepted",
+        "SubmissionItemRepository.add_many",
+        "SubmissionItemRepository.release_requested",
+    )
     def test_an_empty_add_stores_nothing(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         empty: list[NewItem] = []

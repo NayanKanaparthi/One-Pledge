@@ -10,6 +10,7 @@ import pytest
 
 from bank_testkit.backends import PortWorld
 from bank_testkit.memory.bank import vins
+from bank_testkit.parity import parity
 from bank_testkit.records import alert, at
 from onepledge_bank_agent.application.ports import UnitOfWork
 from onepledge_bank_agent.domain.alert import Alert
@@ -28,6 +29,7 @@ def add(ports: PortWorld, *alerts: Alert) -> None:
 class TestAlerts:
     """`alerts`."""
 
+    @parity("AlertRepository.find", "AlertRepository.get")
     def test_an_alert_reads_back_by_id_and_by_case_and_loan(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         loan, other = ports.loans(tape.submission_id, vins(2))
@@ -43,6 +45,7 @@ class TestAlerts:
         assert by_id is not None and by_id.record == made.record
         assert by_case is not None and by_case.record == made.record
 
+    @parity("AlertRepository.for_case")
     def test_a_cases_alerts_are_those_on_the_given_loans_in_id_order(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         loans = ports.loans(tape.submission_id, vins(3))
@@ -57,6 +60,7 @@ class TestAlerts:
         expected = sorted((made[0], made[2]), key=lambda a: a.record.alert_id)
         assert [a.record for a in found] == [a.record for a in expected]
 
+    @parity("AlertRepository.for_loan")
     def test_a_loans_alerts_are_listed_oldest_first(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         loan, other = ports.loans(tape.submission_id, vins(2))
@@ -71,6 +75,7 @@ class TestAlerts:
             assert unit.alerts.for_loan(uuid.uuid4()) == []
         assert [a.record for a in found] == [oldest.record, middle.record, newest.record]
 
+    @parity("AlertRepository.get", "AlertRepository.save")
     def test_save_stores_the_review_the_position_and_the_case_status(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         (loan,) = ports.loans(tape.submission_id, vins(1))
@@ -113,6 +118,7 @@ class TestAlertRefusals:
             (AlertStatus.ESCALATED, CaseStatus.CLEARED_DATA_ERROR),
         ],
     )
+    @parity("AlertRepository.save")
     def test_an_alert_closed_without_its_case_is_refused(
         self, ports: PortWorld, status: AlertStatus, case: CaseStatus
     ) -> None:
@@ -120,6 +126,7 @@ class TestAlertRefusals:
         forged = Alert(replace(made.record, status=status, case_status=case))
         self._refused(ports, lambda unit: unit.alerts.save(forged), "OP006")
 
+    @parity("AlertRepository.save")
     def test_a_closed_alert_never_changes_and_a_position_is_recorded_once(self, ports: PortWorld) -> None:
         made = self._stored(ports)
         made.start_review(ports.user, at(2))
@@ -137,6 +144,7 @@ class TestAlertRefusals:
             ports, lambda unit: unit.alerts.save(Alert(replace(made.record, review=noted))), "OP006"
         )
 
+    @parity("AlertRepository.add")
     def test_an_alert_is_created_new_and_once_per_case_and_loan(self, ports: PortWorld) -> None:
         made = self._stored(ports)
         reviewing = Alert(replace(alert(made.record.loan_id).record, status=AlertStatus.REVIEWING))

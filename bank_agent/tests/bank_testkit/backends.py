@@ -20,8 +20,17 @@ from bank_testkit.memory.stores import MemoryStore, MemoryUnits
 from bank_testkit.records import T0, lei, loan
 from bank_testkit.tapes import SUMMIT_LAYOUT
 from onepledge_bank_agent.application.ports import UnitOfWorkFactory
+from onepledge_bank_agent.domain.audit import Actor, AuditDraft
+from onepledge_bank_agent.domain.canonical_json import JsonValue
 from onepledge_bank_agent.domain.entities import Facility, Lender
-from onepledge_bank_agent.domain.enums import FacilityStatus, Role, TapeKind, TapeSource
+from onepledge_bank_agent.domain.enums import (
+    AuditAction,
+    AuditObjectType,
+    FacilityStatus,
+    Role,
+    TapeKind,
+    TapeSource,
+)
 from onepledge_bank_agent.domain.loan import Loan
 from onepledge_bank_agent.domain.tape import TapeFacts, TapeSubmission
 from onepledge_bank_agent.domain.values import Lei
@@ -42,9 +51,22 @@ class PortBackend:
 
 
 def memory_backend() -> PortBackend:
-    """The in-memory store; there is no users table, so a user is just a fresh id."""
-    units = MemoryUnits(MemoryStore())
-    return PortBackend("memory", units, units, uuid.uuid4)
+    """The in-memory store; a user is kept as PostgreSQL keeps it (`insert_user`): an active analyst
+    with its `USER_CREATED` entry."""
+    store = MemoryStore()
+    units = MemoryUnits(store)
+
+    def new_user() -> uuid.UUID:
+        user_id = uuid.uuid4()
+        detail: dict[str, JsonValue] = {"role": Role.ANALYST.value, "active": True}
+        with units() as unit:
+            unit.record(AuditDraft(AuditAction.USER_CREATED, Actor.system(), AuditObjectType.USER, user_id,
+                                   detail=detail))  # fmt: skip
+            unit.commit()
+        store.state.users[user_id] = (Role.ANALYST.value, True)  # after the commit, which replaces the state
+        return user_id
+
+    return PortBackend("memory", units, units, new_user)
 
 
 @contextmanager

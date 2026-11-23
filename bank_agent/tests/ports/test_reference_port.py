@@ -8,6 +8,7 @@ from dataclasses import replace
 import pytest
 
 from bank_testkit.backends import PortWorld
+from bank_testkit.parity import parity
 from bank_testkit.records import lei
 from onepledge_bank_agent.application.ports import Upserted
 from onepledge_bank_agent.domain.entities import Lender
@@ -19,6 +20,7 @@ from onepledge_bank_agent.domain.values import Lei
 class TestFacilities:
     """`lenders` and `facilities`."""
 
+    @parity("FacilityRepository.get")
     def test_a_facility_reads_back_with_its_lender(self, ports: PortWorld) -> None:
         with ports.units() as unit:
             found = unit.facilities.get(ports.facility.facility_id)
@@ -26,6 +28,9 @@ class TestFacilities:
         assert found is not None
         assert (found.facility, found.lender) == (ports.facility, ports.lender)
 
+    @parity(
+        "FacilityRepository.get", "FacilityRepository.upsert_facility", "FacilityRepository.upsert_lender"
+    )
     def test_an_upsert_says_whether_it_inserted_updated_or_changed_nothing(self, ports: PortWorld) -> None:
         other = Lender(uuid.uuid4(), "Coastal Motor Credit Inc", Lei(lei("00000ONEPLEDGECOA1")))
         renamed = replace(ports.lender, legal_name="Summit Auto Finance Holdings LLC")
@@ -46,6 +51,7 @@ class TestFacilities:
             "New name",
         )
 
+    @parity("FacilityRepository.get", "FacilityRepository.upsert_facility")
     def test_an_upsert_keeps_the_stored_status_and_a_new_facility_keeps_its_own(
         self, ports: PortWorld
     ) -> None:
@@ -62,6 +68,7 @@ class TestFacilities:
         assert inserted is not None and inserted.facility.status is FacilityStatus.SUSPENDED
 
     @pytest.mark.parametrize("clash", ["lei", "legal_name"])
+    @parity("FacilityRepository.upsert_lender")
     def test_a_lender_under_another_id_with_a_stored_lei_or_name_is_refused(
         self, ports: PortWorld, clash: str
     ) -> None:
@@ -74,6 +81,7 @@ class TestFacilities:
         with pytest.raises(ReferenceDataError), ports.backend.owner_units() as unit:
             unit.facilities.upsert_lender(twin)
 
+    @parity("FacilityRepository.get", "FacilityRepository.upsert_facility")
     def test_a_facility_under_another_id_with_a_stored_code_is_refused(self, ports: PortWorld) -> None:
         twin = replace(ports.new_facility(ports.facility.code), name="Twin line")
         with pytest.raises(ReferenceDataError), ports.backend.owner_units() as unit:

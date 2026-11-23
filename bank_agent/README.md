@@ -579,13 +579,19 @@ them the way the composition root wires the real ones. Nothing under `src/` impo
 them. They are held to the real repositories by `tests/ports/`: each class there is
 the only definition of one port's behaviour and runs twice, against memory (marker
 `unit`) and against PostgreSQL (marker `integration`), so a behaviour the two disagree
-on fails the suite.
+on fails the suite. Every test there names the port methods it covers with
+`@parity("Port.method")` (`bank_testkit/parity.py`), and `tests/unit/test_port_parity.py`
+fails when a public method of a repository port, of `HistoryReader` or of the unit of work
+has no case (SPEC_DECISIONS 127). The deep verification reads (`stage_rows` for every part,
+`request_rows`, `reference_rows`, `states`, `loan_values`) are compared row for row and in
+the digest order, with the empty and the multi-submission case.
 
 Integration tests need the PostgreSQL server at `PG_ADMIN_URL` (default
 `postgresql://postgres@localhost:55432/postgres`). Each test creates a uniquely named
 database (`optest_<UTC time>_<pid>_<8 hex>_bank_harbor`, SPEC_DECISIONS 76) and role pair
 through the product's own provisioning and migrations, and drops it afterwards, also when
-the run is stopped with SIGTERM; each session first sweeps `optest_` objects more than two
+the run is stopped with SIGTERM (no further test starts and the run exits non-zero saying
+so, SPEC_DECISIONS 126); each session first sweeps `optest_` objects more than two
 hours old, and `make test-sweep` drops all of them. Every test has a time limit (120
 seconds, 600 for `e2e`). Data sets come from the
 `onepledge-datagen` command; outside records runs in process on its own test database;

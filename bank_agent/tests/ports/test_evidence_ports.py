@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import replace
 
+import httpx
 import pytest
 
 from bank_testkit.backends import PortWorld
+from bank_testkit.longest import Longest
 from bank_testkit.memory.bank import vins
+from bank_testkit.parity import parity
 from bank_testkit.records import (
     answer,
     at,
@@ -20,6 +24,9 @@ from bank_testkit.records import (
     quarantined,
     request,
 )
+from bank_testkit.scripted_http import registry
+from onepledge_bank_agent.domain.canonical_json import canonical_json
+from onepledge_bank_agent.domain.certificate_rules import delivered_sha256
 from onepledge_bank_agent.domain.entities import RegistryRequest
 from onepledge_bank_agent.domain.enums import (
     CertificateFailure,
@@ -28,8 +35,11 @@ from onepledge_bank_agent.domain.enums import (
     QuarantineReason,
     RegistryItemResult,
 )
+from onepledge_bank_agent.domain.registry_records import QuarantinedMessage
 from onepledge_bank_agent.domain.store_errors import StoreRefusedError
 from onepledge_bank_agent.domain.tape import TapeSubmission
+from onepledge_bank_agent.domain.values import Sha256Hex
+from onepledge_bank_agent.infrastructure.settings import DEFAULT_RESPONSE_BYTES
 
 
 def requests(ports: PortWorld, count: int) -> list[RegistryRequest]:
@@ -62,6 +72,7 @@ def complete(ports: PortWorld, submission_id: uuid.UUID) -> None:
 class TestCertificates:
     """`certificates`: every delivery once, failed ones kept beside the verified one."""
 
+    @parity("CertificateRepository.add", "CertificateRepository.all")
     def test_each_delivery_is_stored_once_and_a_tampered_one_beside_it(self, ports: PortWorld) -> None:
         (made,) = requests(ports, 1)
         genuine = certificate(made.request_id, received=at(3))
@@ -83,6 +94,7 @@ class TestCertificates:
         with ports.units() as unit:
             assert unit.evidence.certificates.all() == [tampered, genuine, resigned], "oldest first"
 
+    @parity("CertificateRepository.add", "CertificateRepository.all")
     def test_a_second_verified_row_for_a_certificate_or_a_request_is_not_stored(
         self, ports: PortWorld
     ) -> None:
@@ -97,6 +109,11 @@ class TestCertificates:
         with ports.units() as unit:
             assert unit.evidence.certificates.all() == [proven]
 
+    @parity(
+        "CertificateRepository.add",
+        "CertificateRepository.any_unproven",
+        "CertificateRepository.verified_for_requests",
+    )
     def test_verified_certificates_are_found_by_request_and_unproven_ones_are_reported(
         self, ports: PortWorld
     ) -> None:
@@ -124,6 +141,13 @@ class TestCertificates:
             assert unit.evidence.certificates.verified_for_requests([]) == {}
         assert found == {first.request_id: proven_first}
 
+    @parity(
+        "CertificateRepository.add",
+        "CertificateRepository.missing_for_completed",
+        "RegistryRequestRepository.items",
+        "RegistryRequestRepository.mark_sent",
+        "RegistryRequestRepository.store_answer",
+    )
     def test_an_answered_request_of_a_completed_tape_without_its_verified_row_is_missing(
         self, ports: PortWorld
     ) -> None:
@@ -158,6 +182,13 @@ class TestCertificates:
 class TestCheckpoints:
     """`checkpoints_seen`: every checkpoint received, failed ones kept."""
 
+    @parity(
+        "CheckpointRepository.add",
+        "CheckpointRepository.all",
+        "CheckpointRepository.any_failed",
+        "CheckpointRepository.latest_verified",
+        "CheckpointRepository.verified_with_seq",
+    )
     def test_the_latest_verified_checkpoint_ignores_failed_ones(self, ports: PortWorld) -> None:
         second, first = checkpoint(2, received=at(2)), checkpoint(1, received=at(1))
         failed = checkpoint(3, failure=CheckpointFailure.CHAIN_BREAK, head="forged", received=at(3))
@@ -175,6 +206,7 @@ class TestCheckpoints:
             assert checkpoints.any_failed()
             assert checkpoints.all() == [first, second, failed]
 
+    @parity("CheckpointRepository.add", "CheckpointRepository.delivered")
     def test_a_delivery_is_recognised_by_its_seq_head_and_signature(self, ports: PortWorld) -> None:
         seen = checkpoint(4)
         with ports.units() as unit:
@@ -187,6 +219,7 @@ class TestCheckpoints:
             assert not delivered(4, checkpoint(4, head="other").head_hash.value, seen.signature)
             assert not delivered(4, seen.head_hash.value, "b3RoZXI=")
 
+    @parity("CheckpointRepository.add", "CheckpointRepository.all")
     def test_checkpoints_of_one_seq_are_listed_in_receipt_order(self, ports: PortWorld) -> None:
         later = checkpoint(6, failure=CheckpointFailure.FORK, head="fork", received=at(9))
         earlier = checkpoint(6, received=at(8))
@@ -201,6 +234,7 @@ class TestCheckpoints:
 class TestQuarantine:
     """`registry_messages_quarantined`: each message once, by its message id."""
 
+    @parity("QuarantineRepository.add", "QuarantineRepository.any_checkpoint", "QuarantineRepository.count")
     def test_a_message_is_held_once_by_its_id_and_checkpoints_are_noticed(self, ports: PortWorld) -> None:
         message_id = uuid.uuid4()
         with ports.units() as unit:
@@ -214,6 +248,7 @@ class TestQuarantine:
         with ports.units() as unit:
             assert (unit.evidence.quarantine.count(), unit.evidence.quarantine.any_checkpoint()) == (2, True)
 
+    @parity("QuarantineRepository.add", "QuarantineRepository.all")
     def test_every_held_message_is_listed_oldest_first(self, ports: PortWorld) -> None:
         later, earlier = quarantined(received=at(5)), quarantined(received=at(1))
         with ports.units() as unit:
@@ -224,6 +259,7 @@ class TestQuarantine:
         with ports.units() as unit:
             assert unit.evidence.quarantine.all() == [earlier, later]
 
+    @parity("QuarantineRepository.add", "QuarantineRepository.all")
     def test_a_withheld_payload_is_kept_as_its_hash_and_told_apart_from_a_json_null(
         self, ports: PortWorld
     ) -> None:
@@ -239,6 +275,7 @@ class TestQuarantine:
         with ports.units() as unit:
             assert unit.evidence.quarantine.all() == [withheld, sent_null]
 
+    @parity("QuarantineRepository.add")
     def test_an_oversized_payload_that_is_not_withheld_is_refused(self, ports: PortWorld) -> None:
         oversized = quarantined(reason=QuarantineReason.OVERSIZED)
         held = replace(oversized.quarantined, payload={"x": 1}, withheld=False)
@@ -248,9 +285,45 @@ class TestQuarantine:
         assert raised.value.sqlstate == "23514"
 
 
+class TestUnmatchedCaseUpdates:
+    """SPEC_DECISIONS 101: a case update held until its alert arrives, found by case and asset code."""
+
+    @parity("QuarantineRepository.add", "QuarantineRepository.unmatched_case_updates")
+    def test_only_unmatched_case_updates_of_that_case_and_code_are_found_newest_first(
+        self, ports: PortWorld
+    ) -> None:
+        case_id, code = uuid.uuid4(), "c" * 64
+
+        def held(
+            received: int,
+            case: uuid.UUID = case_id,
+            token: str = code,
+            *,
+            kind: str = "CASE_UPDATE",
+            reason: QuarantineReason = QuarantineReason.UNMATCHED,
+        ) -> QuarantinedMessage:
+            made = quarantined(message_type=kind, reason=reason, received=at(received))
+            payload = {"case_id": str(case), "asset_token": token, "status": "CONFIRMED", "resolved_seq": 9}
+            return replace(made, quarantined=replace(made.quarantined, payload=payload))
+
+        older, newer = held(1), held(2)
+        others = [
+            held(3, uuid.uuid4()), held(4, token="d" * 64), held(5, kind="ALERT"),
+            held(6, reason=QuarantineReason.SCHEMA_MISMATCH),
+        ]  # fmt: skip
+        with ports.units() as unit:
+            assert unit.evidence.quarantine.unmatched_case_updates(case_id, code) == []
+            for message in (older, *others, newer):
+                unit.evidence.quarantine.add(message)
+            unit.commit()
+        with ports.units() as unit:
+            assert unit.evidence.quarantine.unmatched_case_updates(case_id, code) == [newer, older]
+
+
 class TestIntegrityRuns:
     """`integrity_runs`."""
 
+    @parity("IntegrityRunRepository.add", "IntegrityRunRepository.ids", "IntegrityRunRepository.latest")
     def test_the_latest_run_is_the_one_that_ran_last(self, ports: PortWorld) -> None:
         later = integrity_run(at(5), ports.user, IntegrityRunStatus.BROKEN)
         earlier = integrity_run(at(1))
@@ -267,6 +340,7 @@ class TestIntegrityRuns:
 class TestEvidenceRefusals:
     """A second write of the same proof is refused or ignored the same way by both stores."""
 
+    @parity("CheckpointRepository.add", "CheckpointRepository.all")
     def test_the_same_checkpoint_delivery_twice_is_refused(self, ports: PortWorld) -> None:
         seen = checkpoint(8)
         with ports.units() as unit:
@@ -282,3 +356,33 @@ class TestEvidenceRefusals:
         assert second.value.refusal == "UNIQUE", "one verified checkpoint per seq"
         with ports.units() as unit:
             assert unit.evidence.checkpoints.all() == [seen]
+
+
+class TestContractBoundedCertificate:
+    """SPEC_DECISIONS 125: a certificate body is contract-bounded and stored whole."""
+
+    @parity("CertificateRepository.add", "CertificateRepository.all")
+    def test_a_certificate_of_500_items_in_the_longest_legal_form_is_stored_and_read_back(
+        self, ports: PortWorld
+    ) -> None:
+        longest = Longest("registry.yaml")
+        signed = longest.of("SignedCertificate")
+        assert list(longest.validator("SignedCertificate").iter_errors(signed)) == []
+        size = len(canonical_json(signed["body"]))
+        assert len(signed["body"]["items"]) == 500 and size <= DEFAULT_RESPONSE_BYTES
+        raw = json.dumps(signed).encode()
+        read = registry(lambda _: httpx.Response(200, content=raw)).certificate(uuid.uuid4())
+        assert read.body == signed["body"]
+        (made,) = requests(ports, 1)
+        delivered = delivered_sha256(read.body)
+        assert delivered is not None
+        kept = replace(
+            certificate(made.request_id), body=read.body, issued_at=read.issued_at,
+            signature=read.signature, signing_key_id=read.signing_key_id,
+            failure=CertificateFailure.BAD_SIGNATURE, delivered_body_sha256=Sha256Hex(delivered),
+        )  # fmt: skip
+        with ports.units() as unit:
+            assert unit.evidence.certificates.add(kept)
+            unit.commit()
+        with ports.units() as unit:
+            assert unit.evidence.certificates.all() == [kept]

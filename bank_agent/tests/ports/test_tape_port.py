@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from bank_testkit.backends import PortWorld
+from bank_testkit.parity import parity
 from bank_testkit.records import at
 from bank_testkit.tapes import SUMMIT_LAYOUT
 from onepledge_bank_agent.domain.enums import FailureCode, TapeKind, TapeStatus
@@ -53,6 +54,7 @@ RUNNING = (
 class TestTapes:
     """`tape_submissions`."""
 
+    @parity("TapeRepository.add", "TapeRepository.get", "TapeRepository.layout")
     def test_a_submission_and_its_layout_read_back_as_stored(self, ports: PortWorld) -> None:
         layout = TapeLayout(False, "a,b\n", ("a", "b"), "TRAILER 2\n")
         tape = ports.tape_of(at(1))
@@ -68,6 +70,7 @@ class TestTapes:
             assert unit.tapes.get(other.submission_id) is None
             assert unit.tapes.layout(other.submission_id) is None
 
+    @parity("TapeRepository.add", "TapeRepository.find_by_file")
     def test_the_file_lookup_keys_on_facility_kind_and_file_together(self, ports: PortWorld) -> None:
         sha = "e" * 64
         first = ports.tape_of(at(1), file_sha256=sha)
@@ -87,6 +90,7 @@ class TestTapes:
             assert unit.tapes.find_by_file(summit, "RELEASE", sha) is None
             assert unit.tapes.find_by_file(summit, "PLEDGE", "f" * 64) is None
 
+    @parity("HistoryReader.submission_ids", "TapeRepository.add")
     def test_a_second_insert_of_a_stored_file_raises_concurrent_upload(self, ports: PortWorld) -> None:
         sha = "d" * 64
         first = ports.tape_of(at(1), file_sha256=sha)
@@ -99,6 +103,7 @@ class TestTapes:
         with ports.units() as unit:
             assert unit.history.submission_ids() == [first.submission_id]
 
+    @parity("TapeRepository.get", "TapeRepository.save")
     def test_save_stores_every_progress_field_of_each_legal_move(self, ports: PortWorld) -> None:
         """Each move is saved on its own, as the stages save it (the database guard allows one step)."""
         tape = ports.tape(at(1))
@@ -128,6 +133,7 @@ class TestTapes:
         done = stored(ports, tape).progress
         assert done == tape.progress and done.completed_at == at(6)
 
+    @parity("TapeRepository.add", "TapeRepository.runnable")
     def test_runnable_follows_upload_order_and_skips_a_facilitys_later_tapes(self, ports: PortWorld) -> None:
         first, second = ports.tape_of(at(1)), ports.tape_of(at(2))
         elsewhere = ports.tape_of(at(3), facility_id=ports.other_facility.facility_id)
@@ -142,6 +148,7 @@ class TestTapes:
             assert unit.tapes.runnable(set(), at(0), 10) == []
             assert unit.tapes.runnable({TapeStatus.CLEANED}, at(0), 10) == []
 
+    @parity("TapeRepository.runnable")
     def test_a_backing_off_tape_is_not_runnable_yet_and_still_blocks_its_facility(
         self, ports: PortWorld
     ) -> None:
@@ -155,6 +162,7 @@ class TestTapes:
             assert unit.tapes.runnable({TapeStatus.RECEIVED}, due, 10) == [first.submission_id]
         assert second.submission_id not in self._runnable(ports, due)
 
+    @parity("TapeRepository.runnable", "TapeRepository.save")
     def test_failed_and_completed_tapes_no_longer_block_later_tapes(self, ports: PortWorld) -> None:
         first, second, third = ports.tape(at(1)), ports.tape(at(2)), ports.tape(at(3))
         first.fail(FailureCode.OUTSIDE_RECORDS_REJECTED, at(4))
@@ -168,6 +176,7 @@ class TestTapes:
         assert self._runnable(ports, at(7)) == [third.submission_id]
 
     @pytest.mark.parametrize("status", RUNNING)
+    @parity("TapeRepository.get", "TapeRepository.save")
     def test_every_legal_write_of_the_worker_is_stored_from_each_unfinished_status(
         self, ports: PortWorld, status: TapeStatus
     ) -> None:
@@ -218,12 +227,14 @@ class TestTapes:
 class TestTapeRefusals:
     """What both stores refuse for a tape (SPEC_DECISIONS 92): every one raises `StoreRefusedError`."""
 
+    @parity("TapeRepository.save")
     def test_a_save_two_steps_ahead_is_refused_with_the_tape_guards_code(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         ahead = TapeSubmission(tape.facts, replace(tape.progress, status=TapeStatus.CHECKED))
         self._refused(ports, ahead, "OP004")
         assert stored(ports, tape).status is TapeStatus.RECEIVED
 
+    @parity("TapeRepository.save")
     def test_a_forged_resume_and_a_rewritten_failure_are_refused(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         tape.fail(FailureCode.OUTSIDE_RECORDS_REJECTED, at(2))
@@ -244,6 +255,7 @@ class TestTapeRefusals:
         counted = TapeSubmission(tape.facts, replace(tape.progress, attempts=tape.progress.attempts + 1))
         self._refused(ports, counted, "OP004")
 
+    @parity("TapeRepository.save")
     def test_a_completed_tape_never_changes(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         for move in FORWARD:
@@ -252,6 +264,7 @@ class TestTapeRefusals:
         touched = TapeSubmission(tape.facts, replace(tape.progress, attempts=1))
         self._refused(ports, touched, "OP004")
 
+    @parity("TapeRepository.add")
     def test_a_tape_is_created_received_only(self, ports: PortWorld) -> None:
         made = ports.tape_of(at(1))
         cleaned = TapeSubmission(made.facts, replace(made.progress, status=TapeStatus.CLEANED))

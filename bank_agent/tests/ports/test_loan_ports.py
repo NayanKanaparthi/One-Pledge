@@ -10,6 +10,7 @@ import pytest
 
 from bank_testkit.backends import PortWorld
 from bank_testkit.memory.bank import vins
+from bank_testkit.parity import parity
 from bank_testkit.records import KEY_V1, KEY_V2, at, check_results, hex64, loan, tokens
 from onepledge_bank_agent.application.ports import UnitOfWork
 from onepledge_bank_agent.domain.enums import CheckOutcome, LoanState, TokenKind
@@ -35,6 +36,7 @@ def reread(ports: PortWorld, loan_row: Loan) -> Loan:
 class TestLoans:
     """`loans`."""
 
+    @parity("LoanRepository.get_many")
     def test_loans_read_back_by_id_and_unknown_ids_are_left_out(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         made = ports.loans(tape.submission_id, vins(2))
@@ -43,6 +45,7 @@ class TestLoans:
             assert unit.loans.get_many([]) == {}
         assert {i: f.record for i, f in found.items()} == {m.loan_id: m.record for m in made}
 
+    @parity("LoanRepository.live_by_vin")
     def test_live_loans_by_vin_are_the_facilitys_loans_not_released(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         held, released, other = vins(3)
@@ -62,6 +65,7 @@ class TestLoans:
             )
         assert {vin: found.loan_id for vin, found in live.items()} == {held: mine[0].loan_id}
 
+    @parity("LoanRepository.get_many", "LoanRepository.live_by_vin")
     def test_a_released_vin_may_be_pledged_again_as_a_new_loan(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         vin = vins(1)[0]
@@ -79,6 +83,7 @@ class TestLoans:
             first.loan_id: LoanState.RELEASED, again.loan_id: LoanState.PENDING,
         }  # fmt: skip
 
+    @parity("LoanRepository.get_many", "LoanRepository.save")
     def test_save_stores_state_terms_loan_number_and_balance(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         made = ports.loans(tape.submission_id, vins(1))[0]
@@ -101,6 +106,7 @@ class TestLoans:
 class TestChecks:
     """`local_checks`."""
 
+    @parity("CheckRepository.add", "CheckRepository.checked")
     def test_a_loan_is_checked_for_a_submission_once_its_four_results_are_stored(
         self, ports: PortWorld
     ) -> None:
@@ -115,6 +121,7 @@ class TestChecks:
             assert unit.checks.checked(later.submission_id, [done.loan_id]) == set()
             assert unit.checks.checked(tape.submission_id, []) == set()
 
+    @parity("CheckRepository.add", "CheckRepository.checked")
     def test_fewer_than_four_results_do_not_count_as_checked(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         partial = ports.loans(tape.submission_id, vins(1))[0]
@@ -128,6 +135,7 @@ class TestChecks:
 class TestTokens:
     """`loan_tokens`."""
 
+    @parity("TokenRepository.add_many", "TokenRepository.for_loans", "TokenRepository.loans_with_tokens")
     def test_tokens_read_back_in_key_version_then_kind_order(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         first, second, bare = ports.loans(tape.submission_id, vins(3))
@@ -149,6 +157,7 @@ class TestTokens:
         assert found[second.loan_id] == tuple(tokens("second", kinds=(TokenKind.ASSET, TokenKind.VIN)))
         assert bare.loan_id not in found
 
+    @parity("TokenRepository.add_many", "TokenRepository.for_loans")
     def test_a_stored_token_of_a_kind_and_version_is_left_unchanged(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         made = ports.loans(tape.submission_id, vins(1))[0]
@@ -167,6 +176,7 @@ class TestTokens:
                 original, Token(TokenKind.VIN, hex64("vin"), KEY_V1),
             )  # fmt: skip
 
+    @parity("TokenRepository.add_many", "TokenRepository.loans_with_asset_token")
     def test_loans_are_found_by_their_asset_token_only(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         code = hex64("shared")
@@ -199,6 +209,7 @@ def refused(ports: PortWorld, code: str, write: Callable[[UnitOfWork], object]) 
 class TestLoanAndCheckRefusals:
     """What both stores refuse for loans, checks and tokens (SPEC_DECISIONS 87, 92)."""
 
+    @parity("LoanRepository.save")
     def test_an_illegal_state_and_a_changed_vin_are_refused(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         (made,) = ports.loans(tape.submission_id, vins(1))
@@ -209,6 +220,7 @@ class TestLoanAndCheckRefusals:
         refused(ports, "OP003", lambda unit: unit.loans.save(Loan(replace(made.record, terms=other))))
         assert reread(ports, made).record == made.record
 
+    @parity("LoanRepository.save", "TokenRepository.add_many")
     def test_the_terms_of_a_tokenised_loan_and_a_released_loan_are_frozen(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         (made,) = ports.loans(tape.submission_id, vins(1))
@@ -224,6 +236,7 @@ class TestLoanAndCheckRefusals:
         rebalanced = Loan(replace(made.record, current_balance=Money(1)))
         refused(ports, "OP002", lambda unit: unit.loans.save(rebalanced))
 
+    @parity("LoanRepository.add_many")
     def test_a_loan_is_created_pending_and_a_live_vin_only_once(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         (made,) = ports.loans(tape.submission_id, vins(1))
@@ -233,6 +246,7 @@ class TestLoanAndCheckRefusals:
         twin = loan(ports.facility.facility_id, tape.submission_id, made.terms.vin.value)
         refused(ports, "UNIQUE", lambda unit: unit.loans.add_many([twin]))
 
+    @parity("CheckRepository.add", "CheckRepository.checked")
     def test_a_second_write_of_the_same_check_is_refused(self, ports: PortWorld) -> None:
         tape = ports.tape(at(1))
         (made,) = ports.loans(tape.submission_id, vins(1))

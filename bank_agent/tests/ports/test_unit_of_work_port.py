@@ -9,6 +9,7 @@ import pytest
 
 from bank_testkit.backends import PortWorld
 from bank_testkit.memory.bank import vins
+from bank_testkit.parity import parity
 from bank_testkit.records import at
 from bank_testkit.tapes import SUMMIT_LAYOUT
 from onepledge_bank_agent.domain.audit import Actor, AuditDraft, first_broken_seq
@@ -29,6 +30,7 @@ class FailedScopeError(Exception):
 class TestUnitOfWork:
     """Commit, rollback and the hash chained audit append."""
 
+    @parity("TapeRepository.add", "TapeRepository.get", "UnitOfWork.commit")
     def test_a_committed_write_is_visible_to_the_next_unit(self, ports: PortWorld) -> None:
         tape = ports.tape_of(at(1))
         with ports.units() as unit:
@@ -39,6 +41,14 @@ class TestUnitOfWork:
             stored = unit.tapes.get(tape.submission_id)
         assert stored is not None and stored.facts == tape.facts
 
+    @parity(
+        "HistoryReader.audit_size",
+        "HistoryReader.submission_ids",
+        "LoanRepository.get_many",
+        "LoanRepository.save",
+        "TapeRepository.add",
+        "UnitOfWork.record",
+    )
     def test_leaving_without_commit_discards_every_write_and_every_queued_audit_entry(
         self, ports: PortWorld
     ) -> None:
@@ -58,6 +68,7 @@ class TestUnitOfWork:
             assert stored.record == loans_before[0].record
             assert unit.history.audit_size() == before
 
+    @parity("HistoryReader.submission_ids", "TapeRepository.add", "TapeRepository.get", "UnitOfWork.record")
     def test_an_exception_inside_the_scope_rolls_back(self, ports: PortWorld) -> None:
         tape = ports.tape_of(at(1))
         with pytest.raises(FailedScopeError), ports.units() as unit:
@@ -68,6 +79,9 @@ class TestUnitOfWork:
             assert unit.tapes.get(tape.submission_id) is None
             assert unit.history.submission_ids() == []
 
+    @parity(
+        "HistoryReader.audit_entries", "HistoryReader.audit_size", "UnitOfWork.commit", "UnitOfWork.record"
+    )
     def test_committed_audit_entries_are_chained_in_order_without_gaps(self, ports: PortWorld) -> None:
         with ports.units() as unit:
             count, highest = unit.history.audit_size()
