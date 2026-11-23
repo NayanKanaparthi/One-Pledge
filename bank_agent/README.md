@@ -149,55 +149,87 @@ What a reviewer can check, and where:
 ```
 bank_agent/
   pyproject.toml  README.md  alembic.ini
-  migrations/          env.py; versions/0001_schema.py (the 18 tables of SPEC 12.1 with
-                       named checks and indexes), 0002_guards.py (triggers), 0003_grants.py,
-                       0004_checkpoint_body.py (the signed checkpoint body),
-                       0005_state_guards.py (tape guard, insert guards, alert guard),
-                       0006_quarantine.py (the 19th table), 0007_certificate_evidence.py
-                       (failed certificates kept beside verified ones),
-                       0008_outbox_poison.py (registry_outbox_attempts, removed by 0013),
-                       0009_grant_matrix.py (the grant matrix), 0010_column_guards.py
-                       (status and case status pairs, column by column guards),
-                       0011_withheld_payload.py (a quarantined payload kept as its hash),
-                       0012_round_trip.py (range checks on times another party supplied),
-                       0013_outbox_ledger.py (registry_outbox_messages and
-                       registry_outbox_state replace registry_outbox_attempts: 21
-                       tables, 22 with alembic_version), 0014_no_delete.py (no row is
-                       deleted; answered requests are frozen), 0015_function_privileges.py
-                       (no function executable by PUBLIC)
-  src/onepledge_bank_agent/
-    domain/            values (Vin, Money, Lei, ...), enums, errors (one DomainError tree and
-                       the fixed message table), tape and loan state machines, alert,
-                       entities, tape_file (CSV intake rules), cleaning/ (one module per
-                       field family), dispositions, checks (the four local checks),
-                       lender_names, access_policy (SPEC 18.2), canonical_json, audit;
-                       tokenization (token inputs and the token rule), idempotency,
-                       explanation (TemplateAlertExplainer), registry_records,
-                       registry_results (result application rules), certificate_rules,
-                       checkpoint_rules, signatures (the SignatureVerifier port),
-                       raw_evidence (deep verification of raw rows), integrity (report)
-    application/       ports, evidence_ports, registry_ports (repositories, unit of work,
-                       clock, ids, log, clients), IngestTape, CleanTape, RunLocalChecks,
-                       TokenizeLoans, SubmitStage (halt rule, SubmitPledge, ReleaseLoans,
-                       request planning, RegistrySender), CollectCertificates,
-                       VerifyCertificate, SyncRegistryOutbox (alert and case handlers),
-                       VerifyCheckpoint, ReviewAlert, ResubmitLoan, CreateReleaseInstruction,
-                       RetryTape, RunDeepVerification, GetIntegrityReport,
-                       RecordStartupConfiguration, AdvanceSubmission (stages registered in
-                       order), RunPipelineWorker, SeedReferenceData, faults
-    infrastructure/    settings, logging, audit (hash chained writer), clock, ids,
-                       seed_reference_file, crypto/ (blinder: the only oprf importer;
-                       signatures: Ed25519), db/ (models, engines, provisioning, migrations,
-                       unit of work, advisory locks, database control inspector, one
-                       repository per port), http/ (base client with timeouts and retries,
-                       outside records, key holder and registry clients, strict answers)
-    interface/         composition (the one composition root), cli/ (commands, output)
+  migrations/
+    env.py
+    versions/
+      0001_schema.py      # the 18 tables of SPEC 12.1 with named checks and indexes
+      0002_guards.py      # immutability and audit chain triggers
+      0003_grants.py
+      0004_checkpoint_body.py  # the signed checkpoint body
+      0005_state_guards.py     # tape guard, insert guards, alert guard
+      0006_quarantine.py       # the 19th table
+      0007_certificate_evidence.py  # failed certificates kept beside verified ones
+      0008_outbox_poison.py    # registry_outbox_attempts, removed by 0013
+      0009_grant_matrix.py     # the grant matrix
+      0010_column_guards.py    # status pairs, column by column guards
+      0011_withheld_payload.py  # a quarantined payload kept as its hash
+      0012_round_trip.py       # range checks on times another party supplied
+      0013_outbox_ledger.py    # registry_outbox_messages and registry_outbox_state: 21 tables
+      0014_no_delete.py        # no row is deleted; answered requests are frozen
+      0015_function_privileges.py  # no function executable by PUBLIC
+  src/
+    onepledge_bank_agent/
+      domain/
+        values  vin  enums  errors  dependency_errors  store_errors  text_rules  storable
+        tape  tape_file  loan  alert  entities  dispositions  checks  lender_names
+        cleaning/
+          model  header  rows  amounts  dates  text_fields  vin_field
+        access_policy     # SPEC 18.2
+        canonical_json  audit  tokenization  idempotency  outside_records
+        explanation       # TemplateAlertExplainer
+        registry_records  registry_results  outbox  certificate_rules  checkpoint_rules
+        signatures        # the SignatureVerifier port
+        raw_evidence  evidence_reconciliation
+        stage_digests  replay  # deep verification of every decision (SPEC_DECISIONS 107)
+        integrity  integrity_document  # the report and its one JSON and text source
+      application/
+        ports  evidence_ports  registry_ports  runtime  faults  events  error_records
+        audit_entries  authorisation  section_reads
+        ingest_tape  clean_tape  run_local_checks  tokenize_loans
+        submit_stage      # the halt rule and the stage of SubmitPledge and ReleaseLoans
+        submit_pledge  release_loans  tape_requests  request_planning  requester
+        registry_sender  result_application  registry_audit
+        collect_certificates  verify_certificate  verify_checkpoint
+        sync_registry_outbox  outbox_handlers  outbox_outcomes  alert_maker
+        review_alert  resubmit_loan  create_release_instruction  retry_tape
+        run_deep_verification  evidence_checks  deep_evidence
+        get_integrity_report  integrity_sections
+        record_startup  record_schema_migration  seed_reference
+        advance_submission  # the stages, registered in order
+        run_pipeline_worker
+      infrastructure/
+        settings  setting_reader  logging  request_context  operator_errors
+        audit             # the hash chained writer
+        clock  ids  stop_signal  encodings  binding  bounded_json  seed_reference_file
+        crypto/
+          blinder         # the only oprf importer
+          signatures      # Ed25519
+        db/
+          engines  session  connection_settings  provisioning  migrations  locks
+          errors  failures  refusals  readable  probe
+          role_check  role_points  role_guard  # the role inspection of SPEC_DECISIONS 103
+          controls        # the database control inspector
+          guard_columns  guard_manifest
+          schema_manifest  schema_manifest.json  # SPEC_DECISIONS 105
+          models/
+            base  tapes  loans  registry  evidence  reference
+          repositories/   # one repository per port
+            tapes  raw_rows  items  checks  loans  tokens  requests  alerts  facilities
+            certificates  checkpoints  quarantine  integrity_runs  evidence_stores
+            audit_log  outbox_ledger  history  stage_rows  mapping
+        http/
+          base            # timeouts and retries
+          answers  classification  clients
+          outside_records  key_holder_client  registry_client  registry_wire
+      interface/
+        composition       # the one composition root
+        cli/
+          main  parser  commands  registry_commands  output  startup
   tests/
-    unit/  integration/  contract/  ports/ (one behavioural class per repository port,
-                                            run against memory and PostgreSQL)
-    bank_testkit/ (fixtures, in-process outside records, the registry and key holder
-                   doubles in process, three banks, an independent cleaning and check
-                   oracle; memory/: the in-memory ports and scripted dependency fakes)
+    unit/  integration/  contract/
+    ports/                # one behavioural class per repository port, memory and PostgreSQL
+    bank_testkit/         # fixtures, in-process doubles, three banks, the cleaning oracle
+      memory/             # the in-memory ports and scripted dependency fakes
 ```
 
 Each layer imports only the layers below it; SQL, HTTP and logging libraries appear only

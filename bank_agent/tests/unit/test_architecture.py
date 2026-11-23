@@ -17,6 +17,7 @@ import pytest
 from onepledge_bank_agent.application.evidence_ports import EvidenceStores
 from onepledge_bank_agent.application.ports import UnitOfWork
 from onepledge_testtools.repository_rules import (
+    layout_problems,
     markdown_files,
     markdown_problems,
     python_modules,
@@ -31,6 +32,7 @@ OWN = "onepledge_bank_agent"
 SOURCE = PACKAGE / "src" / OWN
 MIGRATIONS = PACKAGE / "migrations"
 TESTS = PACKAGE / "tests"
+REPOSITORY = PACKAGE.parent
 OTHER_PACKAGES = frozenset(
     {"onepledge_datagen", "onepledge_outside_records", "onepledge_contract_fakes", "onepledge_evaluation"}
 )
@@ -365,3 +367,8 @@ def test_the_evidence_group_holds_exactly_the_insert_only_proof_stores() -> None
     assert _properties(EvidenceStores) == proof_stores
     assert not proof_stores & _properties(UnitOfWork)
     assert {"alerts", "requests", "tapes", "loans"} <= _properties(UnitOfWork), "mutable stores stay outside"
+
+
+def test_the_readme_layout_names_what_exists_and_every_module() -> None:
+    """SPEC_DECISIONS 112.11: every path of the layout block exists and every module is named."""
+    assert layout_problems(PACKAGE / "README.md", REPOSITORY, [SOURCE, MIGRATIONS]) == []
