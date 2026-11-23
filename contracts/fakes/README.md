@@ -63,7 +63,7 @@ contracts/fakes/
         outbox  idempotency  stores  publisher  submissions  inspection  double
         wire  app  control_routes  config  settings  cli   # RegistryDouble and its app
       contracts_check/
-        documents  schemas  vectors  cleaning_cases  checker  cli   # onepledge-contracts
+        documents  references  schemas  vectors  cleaning_cases  checker  cli   # onepledge-contracts
   tests/
 ```
 
@@ -95,7 +95,13 @@ command line is not valid. See the usage text."}}` on stdout, the usage text on 
 exit 2. No message ends in a colon (SPEC_DECISIONS 78).
 
 `onepledge-contracts check` (run from the repository root, or `make contracts-check`)
-validates the four OpenAPI 3.1 files with `openapi-spec-validator`, validates every entry
+first resolves every `$ref` of each OpenAPI file itself (SPEC_DECISIONS 111): a reference
+must be local (`#/...`) and point at an existing node, otherwise it prints `FAIL openapi
+FILE: ... the reference at POINTER does not resolve` (or `names another file`) and one
+`SKIP` line for that file's other checks. It then validates the four files with
+`openapi-spec-validator` behind one boundary that turns anything the library raises into
+one problem of that file, validates every example an operation names against the schema
+reached through that operation (`operations`), validates every entry
 of `contracts/examples/index.json` against its component schema (JSON Schema 2020-12 with
 `date`, `date-time` and `uuid` format checks), checks that every `externalValue` resolves
 and every example file is indexed, and recomputes `examples/vectors/tokenization.json` and

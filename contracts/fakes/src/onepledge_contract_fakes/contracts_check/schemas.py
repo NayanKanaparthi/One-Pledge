@@ -145,6 +145,10 @@ class ContractSchemas:
         """Whether `components.schemas` defines this name."""
         return schema_name in self._components.get("schemas", {})
 
+    def schema_errors(self, schema: Mapping[str, Any], instance: object) -> list[str]:
+        """Problems of an instance against a schema of this document (references resolve inside it)."""
+        return self._errors(schema, instance)
+
     def component_errors(self, schema_name: str, instance: object) -> list[str]:
         """Problems of an instance against `#/components/schemas/<schema_name>`."""
         return self._errors({"$ref": f"#/components/schemas/{schema_name}"}, instance)

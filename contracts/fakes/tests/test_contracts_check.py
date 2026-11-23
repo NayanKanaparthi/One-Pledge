@@ -14,6 +14,7 @@ import pytest
 from onepledge_contract_fakes.cli_output import CliOutput
 from onepledge_contract_fakes.contracts_check.checker import ContractsChecker
 from onepledge_contract_fakes.contracts_check.cli import main
+from onepledge_contract_fakes.contracts_check.references import resolve
 
 pytestmark = pytest.mark.contract
 
@@ -444,3 +445,102 @@ def test_a_hostile_file_is_one_problem_that_names_it(
     lines = out.getvalue().splitlines()
     assert lines.count(f"    {problem}") == 1, out.getvalue()
     assert "Unexpected error" not in out.getvalue() + err.getvalue()
+
+
+# SPEC_DECISIONS 111: every $ref is resolved by the checker itself, local references only, and the
+# third party validator is contained; review 4 failure 3 and quality finding 1.
+def _ref(name: str, old: str, new: str) -> Callable[[Path], None]:
+    def change(root: Path) -> None:
+        target = root / name
+        text = target.read_text()
+        assert old in text, old
+        target.write_text(text.replace(old, new, 1))
+
+    return change
+
+
+BROKEN_REFERENCES: dict[str, tuple[Callable[[Path], None], str]] = {
+    "outside_title": (
+        _ref(
+            "outside_records.yaml",
+            "'#/components/schemas/TitleRecord'",
+            "'#/components/schemas/TitleRecordX'",
+        ),
+        "outside_records.yaml",
+    ),
+    "key_holder_element": (
+        _ref("key_holder.yaml", "'#/components/schemas/Element'", "'#/components/schemas/Elemen'"),
+        "key_holder.yaml",
+    ),
+    "registry_token": (
+        _ref("registry.yaml", "'#/components/schemas/Token'", "'#/components/schemas/Tokn'"),
+        "registry.yaml",
+    ),
+    "registry_error_response": (
+        _ref("registry.yaml", "'#/components/responses/Error'", "'#/components/responses/Erro'"),
+        "registry.yaml",
+    ),
+    "submission_request_body": (
+        _ref(
+            "registry.yaml",
+            "'#/components/schemas/SubmissionRequest'",
+            "'#/components/schemas/SubmissionReques'",
+        ),
+        "registry.yaml",
+    ),
+    "other_file": (
+        _ref("bank_agent.yaml", "'#/components/schemas/", "'other.yaml#/components/schemas/"),
+        "bank_agent.yaml",
+    ),
+}
+
+
+@pytest.mark.parametrize("variant", sorted(BROKEN_REFERENCES))
+def test_a_reference_that_does_not_resolve_fails_naming_the_file(
+    contracts_dir: Path, tmp_path: Path, variant: str
+) -> None:
+    broken = copy_contracts(contracts_dir, tmp_path)
+    change, name = BROKEN_REFERENCES[variant]
+    change(broken)
+    out, err = io.StringIO(), io.StringIO()
+    code = main(["check", "--wide", "--contracts-dir", str(broken)], CliOutput(out, err))
+    text = out.getvalue()
+    assert code == 1, text
+    assert "Unexpected error" not in text + err.getvalue()
+    assert f"contracts-check: FAIL openapi {name}: " in text, text
+    problems = [line.strip() for line in text.splitlines() if line.startswith("    ")]
+    assert any(line.startswith(f"{name}: the reference at /") for line in problems), problems
+    assert "contracts-check: SKIP " in text, text
+    assert text.splitlines()[-1].startswith("contracts-check: FAILED, ")
+
+
+def test_an_operation_pointing_at_the_wrong_schema_fails(contracts_dir: Path, tmp_path: Path) -> None:
+    broken = copy_contracts(contracts_dir, tmp_path)
+    _ref("registry.yaml", "'#/components/schemas/SubmissionRequest'", "'#/components/schemas/Token'")(broken)
+    out, err = io.StringIO(), io.StringIO()
+    code = main(["check", "--wide", "--contracts-dir", str(broken)], CliOutput(out, err))
+    lines = out.getvalue().splitlines()
+    assert code == 1, lines
+    assert "contracts-check: OK   openapi registry.yaml: valid OpenAPI 3.1" in lines
+    failed = [line for line in lines if line.startswith("contracts-check: FAIL operations: ")]
+    assert failed, lines
+    assert any("submission.pledge.request.json (POST /v1/submissions request)" in line for line in lines)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("pointer", "expected"),
+    [
+        ("#/a/1/c", 2),
+        ("#/x~1y/~0z", 3),
+        ("#/a/2", None),
+        ("#/a/-1", None),
+        ("#/a/01", None),
+        ("#/a/" + chr(0x661), None),
+        ("#/missing", None),
+        ("#/a/0/b/deeper", None),
+    ],
+)
+def test_a_reference_resolves_only_to_an_existing_node(pointer: str, expected: object) -> None:
+    document = {"a": [{"b": 1}, {"c": 2}], "x/y": {"~z": 3}}
+    assert resolve(document, pointer) == expected

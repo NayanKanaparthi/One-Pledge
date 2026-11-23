@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,11 @@ from onepledge_contract_fakes.contracts_check.documents import (
     confined,
     load_json,
     load_yaml_mapping,
+)
+from onepledge_contract_fakes.contracts_check.references import (
+    contained,
+    operation_examples,
+    reference_problems,
 )
 from onepledge_contract_fakes.contracts_check.schemas import ContractSchemas, plain_problem
 from onepledge_contract_fakes.contracts_check.vectors import (
@@ -82,6 +88,10 @@ def _external_values(node: object) -> Iterator[str]:
 INDEX = "examples/index.json"
 
 
+def _openapi_problems(name: str, spec: Mapping[str, Any]) -> list[str]:
+    return [f"{name}: {plain_problem(issue)}" for issue in OpenAPIV31SpecValidator(spec).iter_errors()]
+
+
 class ContractsChecker:
     """Runs every check over one contracts directory."""
 
@@ -91,34 +101,48 @@ class ContractsChecker:
 
     def run(self) -> CheckReport:
         """Run the checks in order and collect their outcomes."""
-        specs, outcomes = self._load_and_validate_specs()
+        specs, outcomes, unresolved = self._load_and_validate_specs()
         index = self._load_index(outcomes)
-        examples, invalid = self._check_examples(specs, index)
+        examples, invalid = self._check_examples(specs, index, unresolved)
         outcomes.append(examples)
+        outcomes.append(self._check_operation_examples(specs, invalid))
         outcomes.append(self._check_references(specs, index))
         outcomes.extend(self._check_vectors(invalid))
         outcomes.append(self._check_cleaning_cases())
         return CheckReport(tuple(outcomes), len(CONTRACT_FILES), len(index))
 
-    def _load_and_validate_specs(self) -> tuple[dict[str, Mapping[str, Any]], list[CheckOutcome]]:
+    def _load_and_validate_specs(
+        self,
+    ) -> tuple[dict[str, Mapping[str, Any]], list[CheckOutcome], set[str]]:
+        """Each file loaded, its references resolved by the checker, then validated as OpenAPI 3.1.
+
+        A file with a reference that does not resolve is not handed to any library: its other
+        checks are skipped with one SKIP line (SPEC_DECISIONS 111).
+        """
         specs: dict[str, Mapping[str, Any]] = {}
         outcomes: list[CheckOutcome] = []
+        unresolved: set[str] = set()
         for name in CONTRACT_FILES:
             outcome = CheckOutcome(f"openapi {name}", "valid OpenAPI 3.1")
+            outcomes.append(outcome)
             try:
                 spec = load_yaml_mapping(self._dir / name, name)
             except DocumentError as error:
                 outcome.problems.append(error.message)
-                outcomes.append(outcome)
                 continue
             if spec.get("openapi") != OPENAPI_VERSION:
                 outcome.problems.append(f"{name} does not declare openapi: {OPENAPI_VERSION}")
-            outcome.problems.extend(
-                f"{name}: {plain_problem(issue)}" for issue in OpenAPIV31SpecValidator(spec).iter_errors()
-            )
+            references = reference_problems(name, spec)
+            if references:
+                outcome.problems.extend(references)
+                unresolved.add(name)
+                skipped = CheckOutcome(f"checks of {name}", "")
+                skipped.skipped_because = f"{name}: not checked further, a reference in it does not resolve"
+                outcomes.append(skipped)
+                continue
+            outcome.problems.extend(contained(name, partial(_openapi_problems, name, spec)))
             specs[name] = spec
-            outcomes.append(outcome)
-        return specs, outcomes
+        return specs, outcomes, unresolved
 
     def _load_index(self, outcomes: list[CheckOutcome]) -> list[Mapping[str, Any]]:
         try:
@@ -135,7 +159,7 @@ class ContractsChecker:
         return [entry for entry in entries if isinstance(entry, dict)]
 
     def _check_examples(
-        self, specs: Mapping[str, Mapping[str, Any]], index: list[Mapping[str, Any]]
+        self, specs: Mapping[str, Mapping[str, Any]], index: list[Mapping[str, Any]], unresolved: set[str]
     ) -> tuple[CheckOutcome, set[str]]:
         """The examples outcome and the example files found invalid (vectors that read them are skipped)."""
         outcome = CheckOutcome("examples", f"{plural(len(index), 'example')} validate against their schemas")
@@ -143,6 +167,9 @@ class ContractsChecker:
         validators = {name: ContractSchemas(spec, name) for name, spec in specs.items()}
         for entry in index:
             file_name, contract, schema = entry.get("file"), entry.get("contract"), entry.get("schema")
+            if str(contract) in unresolved:
+                invalid.add(str(file_name))  # Its contract is skipped, with one SKIP line.
+                continue
             validator = validators.get(str(contract))
             if validator is None or not isinstance(schema, str) or not validator.has_component(schema):
                 outcome.problems.append(f"examples/{file_name}: unknown contract or schema in the index")
@@ -155,11 +182,39 @@ class ContractsChecker:
                 outcome.problems.append(error.message)
                 invalid.add(str(file_name))
                 continue
-            problems = validator.component_errors(schema, instance)
+            check = partial(validator.component_errors, schema, instance)
+            problems = contained(str(contract), check)
             if problems:
                 invalid.add(str(file_name))
             outcome.problems.extend(f"examples/{file_name}: {problem}" for problem in problems)
         return outcome, invalid
+
+    def _check_operation_examples(
+        self, specs: Mapping[str, Mapping[str, Any]], invalid: set[str]
+    ) -> CheckOutcome:
+        """Each example an operation names validates against the schema reached through it.
+
+        An example the examples check already found invalid is not reported a second time.
+        """
+        found = [(name, example) for name, spec in specs.items() for example in operation_examples(spec)]
+        outcome = CheckOutcome(
+            "operations", f"{plural(len(found), 'operation example')} validate through the operation"
+        )
+        for name, example in found:
+            if example.file.removeprefix("examples/") in invalid:
+                continue
+            if not isinstance(example.schema, Mapping):
+                outcome.problems.append(f"{name}: {example.where} names {example.file} but no schema")
+                continue
+            try:
+                instance = load_json(confined(self._dir, example.file, name), example.file)
+            except DocumentError:
+                # The references check reports an example file that cannot be read, once.
+                continue
+            schemas = ContractSchemas(specs[name], name)
+            problems = contained(name, partial(schemas.schema_errors, example.schema, instance))
+            outcome.problems.extend(f"{example.file} ({example.where}): {problem}" for problem in problems)
+        return outcome
 
     def _check_references(
         self, specs: Mapping[str, Mapping[str, Any]], index: list[Mapping[str, Any]]
