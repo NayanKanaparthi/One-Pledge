@@ -21,6 +21,7 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, SecretStr
 
 from onepledge_bank_agent.domain.text_rules import ascii_upper
+from onepledge_bank_agent.infrastructure.binding import BindProbe, check_binding, socket_probe
 from onepledge_bank_agent.infrastructure.operator_errors import CONFIGURATION_ERROR, OperatorError
 from onepledge_bank_agent.infrastructure.setting_reader import (
     LOG_LEVEL_RULE,
@@ -223,8 +224,9 @@ class ServeSettings(BaseModel):
     """Settings of `serve` (WP4): the runtime settings and the address to listen on.
 
     The only settings that read BIND_HOST, an IPv4 or IPv6 literal (a name, `localhost`
-    included, is malformed), and PORT. Whether the address belongs to this machine is
-    probed by `serve` at startup (SPEC_DECISIONS 73, point 3), not here.
+    included, is malformed), and PORT. Whether the address belongs to this machine and the
+    port is free is probed by `check_binding()`, which `serve` calls at startup before it
+    opens anything (SPEC_DECISIONS 73, point 3), not while loading.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -241,6 +243,11 @@ class ServeSettings(BaseModel):
         if read.text("PORT") is None:
             raise _missing("PORT")
         return cls(runtime=runtime, bind_host=read.bind_host(), port=read.integer("PORT", 0, 1, MAX_PORT))
+
+    def check_binding(self, probe: BindProbe = socket_probe) -> None:
+        """The machine address probe of SPEC_DECISIONS 73 point 3, which `serve` runs before it opens
+        anything: BIND_HOST must be an address of this machine and PORT free on it (`binding.py`)."""
+        check_binding(self.bind_host, self.port, probe)
 
 
 class AdminSettings(BaseModel):
