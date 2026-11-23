@@ -201,3 +201,56 @@ def test_every_import_of_the_source_is_declared() -> None:
 def test_the_readme_layout_names_what_exists_and_every_module() -> None:
     """SPEC_DECISIONS 112.11: every path of the layout block exists and every module is named."""
     assert layout_problems(PACKAGE_DIR / "README.md", REPOSITORY, [SOURCE]) == []
+
+
+# SPEC_DECISIONS 133: text is ordered by code point, never by a locale.
+LOCALE_COMPARISONS = frozenset({"strcoll", "strxfrm"})
+
+
+def locale_comparisons(source: str) -> list[str]:
+    """Each use of `locale.strcoll` or `locale.strxfrm`, and each `cmp_to_key` over them."""
+    found: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr in LOCALE_COMPARISONS
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "locale"
+        ):
+            found.append(f"line {node.lineno}: locale.{node.attr}")
+        elif isinstance(node, ast.ImportFrom) and node.module == "locale":
+            found.extend(
+                f"line {node.lineno}: from locale import {alias.name}"
+                for alias in node.names
+                if alias.name in LOCALE_COMPARISONS | {"*"}
+            )
+        elif (
+            isinstance(node, ast.Call)
+            and "cmp_to_key" in ast.unparse(node.func)
+            and any(name in ast.unparse(node) for name in LOCALE_COMPARISONS)
+        ):
+            found.append(f"line {node.lineno}: cmp_to_key over a locale comparison")
+    return found
+
+
+@pytest.mark.parametrize(
+    "sample",
+    [
+        "import locale\nsorted(names, key=locale.strxfrm)\n",
+        "import locale\nlocale.strcoll(a, b)\n",
+        "from locale import strcoll\n",
+        "from functools import cmp_to_key\nfrom locale import strcoll\nsorted(x, key=cmp_to_key(strcoll))\n",
+        "import functools, locale\nsorted(x, key=functools.cmp_to_key(locale.strcoll))\n",
+    ],
+)
+def test_the_locale_check_finds_each_form(sample: str) -> None:
+    assert locale_comparisons(sample) != []
+
+
+def test_no_text_is_compared_or_ordered_by_a_locale() -> None:
+    found = {
+        str(path.relative_to(SOURCE)): problems
+        for path in sorted(SOURCE.rglob("*.py"))
+        if (problems := locale_comparisons(path.read_text(encoding="utf-8")))
+    }
+    assert found == {}
