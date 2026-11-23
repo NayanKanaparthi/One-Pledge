@@ -2172,6 +2172,25 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DatabaseControl'
+        violations:
+          type: array
+          maxItems: 200
+          description: The role violations behind a false control, newest first, at most 200.
+          items:
+            type: object
+            additionalProperties: false
+            required: [control, code, object]
+            properties:
+              control:
+                $ref: '#/components/schemas/Code'
+              code:
+                $ref: '#/components/schemas/Code'
+              object:
+                type: [string, 'null']
+                maxLength: 200
+        violations_total:
+          type: integer
+          minimum: 0
     RegistryMessagesSection:
       type: object
       additionalProperties: false
@@ -2183,6 +2202,50 @@ components:
           type: integer
           minimum: 0
           description: Registry outbox messages of a known type whose payload did not match the contract. They are kept as evidence and acknowledged.
+        messages:
+          type: array
+          maxItems: 200
+          description: The quarantined messages, newest first, at most 200.
+          items:
+            type: object
+            additionalProperties: false
+            required: [quarantine_id, message_id, message_type, reason, received_at, payload_withheld, open]
+            properties:
+              quarantine_id:
+                type: string
+                format: uuid
+              message_id:
+                type: [string, 'null']
+                format: uuid
+              message_type:
+                type: string
+                maxLength: 32
+              reason:
+                $ref: '#/components/schemas/Code'
+              received_at:
+                type: string
+                format: date-time
+              payload_withheld:
+                type: boolean
+              open:
+                type: boolean
+        outbox:
+          type: object
+          additionalProperties: false
+          required: [last_complete_sync_at, blind, blind_since, reason]
+          properties:
+            last_complete_sync_at:
+              type: [string, 'null']
+              format: date-time
+            blind:
+              type: boolean
+            blind_since:
+              type: [string, 'null']
+              format: date-time
+            reason:
+              oneOf:
+                - $ref: '#/components/schemas/Code'
+                - type: 'null'
     IntegrityReport:
       type: object
       additionalProperties: false
@@ -2233,7 +2296,14 @@ components:
                 type: [string, 'null']
               problem:
                 type: string
-                enum: [ROW_MISSING, ROW_UNAUDITED, SEQUENCE_GAP]
+                enum: [ROW_MISSING, ROW_UNAUDITED, SEQUENCE_GAP, DIGEST_MISMATCH, DERIVATION_MISMATCH, STATE_MISMATCH, UNREADABLE]
+              stage:
+                oneOf:
+                  - $ref: '#/components/schemas/TapeStatus'
+                  - type: 'null'
+        problems_total:
+          type: integer
+          minimum: 0
     SyncResult:
       type: object
       additionalProperties: false

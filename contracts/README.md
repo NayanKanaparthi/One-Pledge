@@ -50,6 +50,7 @@ These are choices layer 1 made because the plan did not settle them. Each is imp
 | 9 | Outside records keep the planned paths with the VIN in the URL. Both sides must not log paths or query strings for that API. A body based lookup would be cleaner and can be added later as an additive change. | Vedant |
 | 10 | The bank agent adds endpoints beyond the plan's Contract A list: `/v1/auth/me`, `GET /v1/tapes`, `/v1/tapes/{id}/items`, `/v1/tapes/{id}/retry`, `/v1/releases`, `/v1/loans/search`, `/v1/loans/{id}`, `/v1/loans/{id}/lineage`, `/v1/loans/{id}/resubmit`, `/v1/alerts/{id}`, `/v1/certificates/{id}`, `/v1/integrity/verify`, `/v1/registry/sync`, `/v1/audit-log`, `/v1/users`, `/healthz`, `/readyz`. | Vedant |
 | 11 | ADMIN cannot read loan, tape, alert or certificate data (segregation of duties). | Vedant |
+| 12 | The integrity report grew the sections and fields of SPEC_DECISIONS 95 and 123: the `evidence` section with its problems, stages and total, the certificate failure reason `CERTIFICATE_MISSING`, the role violations of `database_controls`, and the quarantined messages and outbox state of `registry_messages`. | Vedant |
 
 ## Validate locally
 
