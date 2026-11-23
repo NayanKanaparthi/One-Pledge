@@ -17,6 +17,13 @@ verified end to end now, and layer 2 has an executable reference of the draft co
   element whose base64 does not re-encode to the same text (non-zero padding bits) is
   `NOT_A_VALID_POINT`. A client that hangs up before its request is complete writes one
   `info` record `client_disconnected` and nothing else.
+- Nothing is kept or answered outside the round-trip bounds of SPEC_DECISIONS 100
+  (`bounds`): a timestamp the doubles write lies from 2000-01-01T00:00:00Z up to but not
+  including 2100-01-01 (anything else is a defect of the double, never written); a key
+  version, pinned at the key holder, submitted to the registry or set in `FAKE_KH_KEYS` and
+  `FAKE_KH_ACTIVE_VERSION`, is at most 2,147,483,647 (`OUT_OF_RANGE`); a submitted
+  `key_version` is at most 255 characters (`TOO_LONG`); a tamper `certificate_id` is a
+  canonical UUID.
 - A request that repeats `Authorization`, `X-API-Key` or `X-Test-Control-Key` is 401
   `UNAUTHENTICATED`; one that repeats `Idempotency-Key`, `Content-Type`, `Content-Length` or
   `X-Request-ID` is 422 with `{"field": "<header>", "issue": "DUPLICATE"}` (SPEC_DECISIONS
@@ -49,6 +56,7 @@ contracts/fakes/
       canonical_json  errors  settings  members  daily_cap  clock  controls  testing
       json_body         # the bounded JSON parser of request bodies and settings
       validation        # the one text to integer rule, query parameters, canonical forms
+      bounds            # the round-trip bounds of decision 100: timestamps, int, text
       binding           # the BIND_HOST and PORT probe at serve start
       logging_setup  server  cli_output
       web/              # HTTP plumbing shared by both doubles

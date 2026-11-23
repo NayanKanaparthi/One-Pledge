@@ -12,6 +12,7 @@ dependencies = [
   "starlette>=0.37",
   "uvicorn>=0.29",
   "pydantic>=2.6",
+  "pydantic-core>=2.14",
   "oprf>=5.0",
   "cryptography>=42",
   "structlog>=24.1",

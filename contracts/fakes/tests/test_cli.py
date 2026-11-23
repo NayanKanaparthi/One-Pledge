@@ -115,12 +115,18 @@ ONE = base64.b64encode((1).to_bytes(32, "little")).decode()
 @pytest.mark.parametrize(
     ("env", "sentence"),
     [
-        (key_holder_env(json.dumps({"\u00b2": SCALAR})), "FAKE_KH_KEYS must map positive integer versions"),
+        (
+            key_holder_env(json.dumps({"\u00b2": SCALAR})),
+            "FAKE_KH_KEYS must map versions from 1 to 2,147,483,647 to base64 strings.",
+        ),
         (
             key_holder_env(json.dumps({"\u0663": SCALAR}), "3"),
-            "FAKE_KH_KEYS must map positive integer versions",
+            "FAKE_KH_KEYS must map versions from 1 to 2,147,483,647 to base64 strings.",
         ),
-        (key_holder_env(json.dumps({"9" * 5000: SCALAR})), "FAKE_KH_KEYS must map positive integer versions"),
+        (
+            key_holder_env(json.dumps({"9" * 5000: SCALAR})),
+            "FAKE_KH_KEYS must map versions from 1 to 2,147,483,647 to base64 strings.",
+        ),
         (key_holder_env('{"1": ' + "9" * 5000 + "}"), "FAKE_KH_KEYS must be valid JSON"),
         (
             key_holder_env(json.dumps({"1": SCALAR}), "9" * 5000),

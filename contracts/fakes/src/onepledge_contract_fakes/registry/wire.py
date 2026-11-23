@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic_core import PydanticCustomError
 
+from onepledge_contract_fakes.bounds import INT_MAX, MAX_TEXT
 from onepledge_contract_fakes.registry.model import (
     FIELD_KINDS,
     Position,
@@ -13,7 +15,7 @@ from onepledge_contract_fakes.registry.model import (
     SubmissionItem,
     SubmissionKind,
 )
-from onepledge_contract_fakes.validation import CANONICAL_UUID_PATTERN
+from onepledge_contract_fakes.validation import CANONICAL_UUID_PATTERN, Issue, parse_integer_text
 
 CODE_PATTERN = r"^[0-9a-f]{64}$"
 KEY_VERSION_PATTERN = r"^[1-9][0-9]*\.[1-9][0-9]*$"
@@ -54,8 +56,16 @@ class SubmissionRequestModel(BaseModel):
 
     schema_version: int
     kind: Literal["BACK_BOOK", "PLEDGE", "RELEASE"]
-    key_version: Annotated[str, Field(pattern=KEY_VERSION_PATTERN)]
+    key_version: Annotated[str, Field(pattern=KEY_VERSION_PATTERN, max_length=MAX_TEXT)]
     items: Annotated[list[SubmissionItemModel], Field(min_length=1, max_length=MAX_ITEMS)]
+
+    @field_validator("key_version")
+    @classmethod
+    def _key_version_parts_fit_an_int_column(cls, value: str) -> str:
+        """Each of the two key versions is stored in an `int` column (SPEC_DECISIONS 100)."""
+        if any(isinstance(parse_integer_text(part, 1, INT_MAX), Issue) for part in value.split(".")):
+            raise PydanticCustomError("less_than_equal", "a key version is out of range")
+        return value
 
     @field_validator("schema_version")
     @classmethod

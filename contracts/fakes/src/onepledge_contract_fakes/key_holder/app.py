@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from onepledge_contract_fakes.bounds import INT_MAX
 from onepledge_contract_fakes.clock import Clock, SystemClock
 from onepledge_contract_fakes.controls import ControlState, FailureWhen, parse_failure_spec
 from onepledge_contract_fakes.errors import InjectedFailureError
@@ -36,7 +37,7 @@ class EvaluateRequestModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     request_id: Annotated[str, Field(pattern=CANONICAL_UUID_PATTERN)]
-    key_version: Annotated[int, Field(ge=1)] | None = None
+    key_version: Annotated[int, Field(ge=1, le=INT_MAX)] | None = None
     elements: Annotated[
         list[Annotated[str, Field(pattern=ELEMENT_PATTERN, min_length=44, max_length=44)]],
         Field(min_length=1, max_length=MAX_ELEMENTS),

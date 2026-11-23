@@ -18,7 +18,7 @@ from onepledge_contract_fakes.registry.model import CaseStatus
 from onepledge_contract_fakes.registry.publisher import Publisher
 from onepledge_contract_fakes.registry.stores import RegistryStores
 from onepledge_contract_fakes.registry.submissions import SubmissionRecord
-from onepledge_contract_fakes.validation import Issue, JsonFields
+from onepledge_contract_fakes.validation import Issue, JsonFields, is_canonical_uuid
 
 # Ledger sequence numbers fit the 18 digit integer rule of every layer 1 service.
 MAX_SEQ = 10**18 - 1
@@ -56,6 +56,8 @@ def parse_tamper_request(document: object) -> TamperRequest:
     mode = fields.choice("mode", [m.value for m in TamperMode])
     seq = fields.integer("seq", 1, MAX_SEQ) if "seq" in optional else None
     certificate_id = fields.string("certificate_id") if "certificate_id" in optional else None
+    if certificate_id is not None and not is_canonical_uuid(certificate_id):
+        fields.reject("certificate_id", Issue.PATTERN_MISMATCH)
     fields.finish()
     if mode is None:
         raise InvariantViolationError

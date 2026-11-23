@@ -9,6 +9,9 @@ import uuid
 from datetime import UTC, datetime
 from typing import Protocol
 
+from onepledge_contract_fakes.bounds import timestamp_in_bounds
+from onepledge_contract_fakes.errors import InvariantViolationError
+
 
 class Clock(Protocol):
     """Source of the current time, timezone aware UTC."""
@@ -43,5 +46,11 @@ class RandomIds:
 
 
 def rfc3339(moment: datetime) -> str:
-    """Render a UTC time as RFC 3339 with a `Z` suffix and second precision."""
+    """Render a UTC time as RFC 3339 with a `Z` suffix and second precision.
+
+    A double never answers a timestamp outside the bounds of SPEC_DECISIONS 100, or one with
+    no offset: either would be a defect of the double or of its clock, not of the caller.
+    """
+    if not timestamp_in_bounds(moment):
+        raise InvariantViolationError
     return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

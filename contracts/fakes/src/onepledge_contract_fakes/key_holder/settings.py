@@ -7,10 +7,11 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, SecretBytes, SecretStr
 
+from onepledge_contract_fakes.bounds import INT_MAX
 from onepledge_contract_fakes.errors import ConfigurationError
 from onepledge_contract_fakes.key_holder.config import KeyHolderConfig
 from onepledge_contract_fakes.settings import EnvironmentReader, MemberCredential, read_environment
-from onepledge_contract_fakes.validation import MAX_INTEGER, Issue, parse_integer_text
+from onepledge_contract_fakes.validation import Issue, parse_integer_text
 
 DEFAULT_DAILY_ELEMENT_CAP = 1_000_000
 _KEYS = "FAKE_KH_KEYS"
@@ -44,7 +45,7 @@ class KeyHolderSettings(BaseModel):
             raise ConfigurationError("HOLDER_ID", "must be kh1 or kh2")
         holder: Literal["kh1", "kh2"] = "kh1" if holder_id == "kh1" else "kh2"
         scalars = _scalars(env)
-        active = env.integer("FAKE_KH_ACTIVE_VERSION", minimum=1)
+        active = env.integer("FAKE_KH_ACTIVE_VERSION", minimum=1, maximum=INT_MAX)
         if active not in scalars:
             raise ConfigurationError("FAKE_KH_ACTIVE_VERSION", "must name a version present in FAKE_KH_KEYS")
         controls = env.boolean("FAKE_TEST_CONTROLS", default=False)
@@ -81,9 +82,10 @@ def _scalars(env: EnvironmentReader) -> dict[int, bytes]:
         raise ConfigurationError(_KEYS, "must be a non-empty JSON object of versions to scalars")
     scalars: dict[int, bytes] = {}
     for version_text, value in document.items():
-        version = parse_integer_text(version_text, 1, MAX_INTEGER)
+        # A key version is an `int` column wherever it is stored (SPEC_DECISIONS 100).
+        version = parse_integer_text(version_text, 1, INT_MAX)
         if isinstance(version, Issue) or not isinstance(value, str):
-            raise ConfigurationError(_KEYS, "must map positive integer versions to base64 strings")
+            raise ConfigurationError(_KEYS, f"must map versions from 1 to {INT_MAX:,} to base64 strings")
         if version in scalars:
             raise ConfigurationError(_KEYS, f"lists version {version} twice")
         scalar = EnvironmentReader({_KEYS: value}).secret_base64_32(_KEYS)
