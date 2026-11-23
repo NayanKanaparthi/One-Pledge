@@ -15,6 +15,7 @@ from fastapi import FastAPI
 
 from onepledge_outside_records.infrastructure.binding import check_binding
 from onepledge_outside_records.infrastructure.db.failures import DATABASE_ERRORS, startup_check_refused
+from onepledge_outside_records.infrastructure.db.migrations import installed_head
 from onepledge_outside_records.infrastructure.settings import ServeSettings, load_serve_settings
 from onepledge_outside_records.interface.composition import Composition
 from onepledge_outside_records.interface.http.app import create_app
@@ -54,7 +55,7 @@ def start(composition: Composition) -> Started:
     reader = composition.reader(settings)
     startup_check(reachable, reader.ensure_reachable)
     startup_check(session, reader.ensure_session_parameters)
-    startup_check(schema, reader.ensure_readable)
+    startup_check(schema, lambda: reader.ensure_at_head(installed_head()))
     startup_check(role, reader.ensure_read_only)
     startup_check(bind, lambda: check_binding(settings.bind_host, port))
     reader.guard_new_connections()

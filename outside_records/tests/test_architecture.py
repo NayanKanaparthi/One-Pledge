@@ -218,14 +218,15 @@ def test_no_source_line_is_vin_shaped() -> None:
     assert vin_shaped_lines(SOURCE) == []
 
 
-def test_the_grant_matrix_is_spec_6_1_select_on_the_four_tables_and_nothing_else() -> None:
+def test_the_grant_matrix_is_select_on_the_four_tables_and_alembic_version_and_nothing_else() -> None:
+    """SPEC 6.1 as amended by SPEC_DECISIONS 132: SELECT on five tables."""
     select = frozenset({"SELECT"})
     assert dict(GRANT_MATRIX) == {
         "title_records": select,
         "payments": select,
         "contracts": select,
         "api_clients": select,
-        "alembic_version": frozenset(),
+        "alembic_version": select,
     }
 
 

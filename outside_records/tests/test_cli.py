@@ -95,7 +95,10 @@ def test_the_whole_command_sequence_on_a_fresh_database(
         assert all(line["service"] == "outside_records" for line in json_lines(err))
         assert out == f"Provisioned database {name} with roles {name}_owner and {name}_app.\n"
     code, out, err = run(["db", "migrate"], **env)
-    assert (code, out) == (0, "Migrated the outside records database to revision 0003_contract_checks.\n")
+    assert (code, out) == (
+        0,
+        "Migrated the outside records database to revision 0004_alembic_version_grant.\n",
+    )
     assert all(line["service"] == "outside_records" for line in json_lines(err))
     code, out, _ = run(["seed", "--data-dir", str(example_dir)], **env)
     titles, payments, contracts = (
@@ -129,7 +132,7 @@ def test_json_results_are_one_document_and_logs_stay_on_stderr(
         {"ok": True, "database": name, "owner_role": f"{name}_owner", "app_role": f"{name}_app"},
     )
     code, out, err = run(["db", "migrate", "--json"], **env)
-    assert (code, json.loads(out)) == (0, {"ok": True, "revision": "0003_contract_checks"})
+    assert (code, json.loads(out)) == (0, {"ok": True, "revision": "0004_alembic_version_grant"})
     assert json_lines(err)
     code, out, err = run(["db", "migrate", "--json", "--quiet"], **env)
     assert (code, json.loads(out)["ok"], err) == (0, True, "")
@@ -362,7 +365,12 @@ def test_migrate_writes_one_record_per_applied_revision(run: Run, provisioned_da
     assert code == 0
     lines = json_lines(err)
     applied = [line for line in lines if line["event"] == "schema_migration_applied"]
-    assert [line["revision"] for line in applied] == ["0001_schema", "0002_grants", "0003_contract_checks"]
+    assert [line["revision"] for line in applied] == [
+        "0001_schema",
+        "0002_grants",
+        "0003_contract_checks",
+        "0004_alembic_version_grant",
+    ]
     assert not [line for line in lines if line["event"] == "library_log"]
     assert all(set(line) <= {"ts", "level", "event", "service", "revision", "logger"} for line in lines)
     code, _, err = run(["db", "migrate"], **provisioned_database.environment(LOG_LEVEL="INFO"))

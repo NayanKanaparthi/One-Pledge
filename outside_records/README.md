@@ -7,8 +7,9 @@ synthetic and comes from `onepledge-datagen`.
 
 - Three lookups, each behind an `X-API-Key`: `GET /v1/titles/{vin}`,
   `GET /v1/payments?vin=...`, `GET /v1/contracts/{vin}`. `GET /healthz` needs no key.
-- The API process connects as `{db}_app`, which has `SELECT` on the four tables and
-  nothing else, so it cannot write even if the code tried. `serve` checks this at startup
+- The API process connects as `{db}_app`, which has `SELECT` on the four data tables and
+  on `alembic_version` (SPEC 6.1 as amended by SPEC_DECISIONS 132) and nothing else, so it
+  cannot write even if the code tried. `serve` checks this at startup
   with `inspect_role()` (SPEC_DECISIONS 72, 103) and refuses to start, with one sentence
   naming `DATABASE_URL`, the first violation code and the advice that fits it, unless all
   ten points hold: no superuser,
@@ -39,8 +40,13 @@ synthetic and comes from `onepledge-datagen`.
   pooled connection whose `session_replication_role` is not `origin`. `DATABASE_URL` and
   `MIGRATION_DATABASE_URL` may not carry query parameters.
 - `serve` starts through named checks, in order: settings, database reachable, session
-  parameters, schema in place, role inspection, bind probe (SPEC_DECISIONS 104). Each has
-  its own sentence, and a statement the database refuses inside one is "The database
+  parameters, schema in place, role inspection, bind probe (SPEC_DECISIONS 104). "Schema
+  in place" reads `alembic_version` and passes only at the head revision of the installed
+  migrations: "The outside records tables are missing; run db migrate first." or "The
+  database D is at revision R, not at H as this program expects; run db migrate with this
+  program, or run the program that matches the database." (SPEC_DECISIONS 128, 132); a
+  role without `SELECT` on `alembic_version` is left to the role inspection, which names it
+  `TABLE_PRIVILEGE_MISSING`. Each check has its own sentence, and a statement the database refuses inside one is "The database
   refused a statement of the startup check NAME (SQLSTATE X); ...", never the last resort.
 - `db migrate`, `seed` and `clients add` refuse to run when the role of
   `MIGRATION_DATABASE_URL` does not own the database ("is not the owner of the database;
@@ -101,6 +107,7 @@ outside_records/
       0001_schema.py    # tables, checks, indexes
       0002_grants.py    # the grant matrix for the app role
       0003_contract_checks.py  # the contract's rules as check constraints
+      0004_alembic_version_grant.py  # SELECT on alembic_version for the app role
   src/
     onepledge_outside_records/
       domain/
@@ -194,7 +201,7 @@ the variables in the table below.
 |---|---|---|
 | `DATABASE_URL` | `serve`, `db provision` | `postgresql://{db}_app:PASSWORD@HOST:PORT/{db}`, the read-only app role. |
 | `MIGRATION_DATABASE_URL` | `db provision`, `db migrate`, `seed`, `clients add` | `postgresql://{db}_owner:PASSWORD@HOST:PORT/{db}`, the owner role. Never read by `serve`. |
-| `DB_APP_ROLE` | `db migrate` | The role that receives `SELECT` on the four tables; must be `{db}_app` for the database of `MIGRATION_DATABASE_URL`. |
+| `DB_APP_ROLE` | `db migrate` | The role that receives `SELECT` on the four data tables and `alembic_version`; must be `{db}_app` for the database of `MIGRATION_DATABASE_URL`. |
 | `PG_ADMIN_URL` | `db provision` | Superuser URL. Provisioning only. |
 | `PORT` | `serve` | TCP port, 1 to 65535 in ASCII digits (8200 in the local stack: `ONEPLEDGE_PORT_BASE` plus 200). |
 | `BIND_HOST` | `serve` | An IPv4 or IPv6 literal of this machine (a name such as `localhost` is refused). Default `127.0.0.1`; `0.0.0.0` in the container. `serve` binds a socket to it before anything else and refuses with one line that names the variable, never its value (SPEC_DECISIONS 73). |

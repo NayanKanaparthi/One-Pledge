@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 import traceback
 from collections.abc import Callable
 from importlib import resources
 
-from alembic import command
+from alembic import command, context, op
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext, MigrationInfo
 from alembic.script import ScriptDirectory
@@ -54,6 +55,30 @@ def alembic_config(migration_url: str, app_role: str) -> Config:
     return config
 
 
+_ROLE_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+
+
+def granted_role() -> str:
+    """Inside a grants migration: the app role DB_APP_ROLE names, which must exist."""
+    role = context.config.attributes.get("app_role")
+    if not isinstance(role, str) or not _ROLE_NAME.fullmatch(role):
+        raise CommandError("DB_APP_ROLE must name the app role created by db provision.")
+    found = op.get_bind().execute(text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role})
+    if found.first() is None:
+        raise CommandError("The role named by DB_APP_ROLE does not exist; run db provision first.")
+    return role
+
+
+def installed_head() -> str:
+    """The head revision of the migrations installed next to this program (SPEC 12.5)."""
+    config = Config()
+    config.set_main_option("script_location", str(resources.files(MIGRATIONS_PACKAGE)))
+    head = ScriptDirectory.from_config(config).get_current_head()
+    if head is None:
+        raise OperatorError("The packaged migrations have no head revision.", "OPERATION_FAILED")
+    return head
+
+
 class MigrationRunner:
     """Upgrades or downgrades the outside records schema."""
 
@@ -75,10 +100,7 @@ class MigrationRunner:
 
     def head_revision(self) -> str:
         """The newest revision of the packaged migrations."""
-        head = ScriptDirectory.from_config(self._config).get_current_head()
-        if head is None:
-            raise OperatorError("The packaged migrations have no head revision.", "OPERATION_FAILED")
-        return head
+        return installed_head()
 
     def downgrade(self, revision: str = "base") -> None:
         """Migrate down to `revision`, as the owner of the schema only."""

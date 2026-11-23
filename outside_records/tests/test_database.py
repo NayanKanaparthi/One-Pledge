@@ -92,7 +92,7 @@ def test_migrations_go_up_down_and_up_again(provisioned_database: Database) -> N
         assert set(TABLES) <= table_names(engine)
         with engine.connect() as connection:
             version: str = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert version == runner.head_revision() == "0003_contract_checks"
+        assert version == runner.head_revision() == "0004_alembic_version_grant"
     finally:
         engine.dispose()
 

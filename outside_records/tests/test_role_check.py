@@ -266,10 +266,23 @@ CASES = (
         Violation.TABLE_PRIVILEGE_EXTRA,
         "public.payments INSERT",
     ),
+    # SPEC_DECISIONS 132: SELECT on alembic_version is in the matrix; nothing else is.
     Case(
-        "alembic_version",
-        ("GRANT SELECT ON public.alembic_version TO {app}",),
+        "alembic_version_insert",
+        ("GRANT INSERT ON public.alembic_version TO {app}",),
         Violation.TABLE_PRIVILEGE_EXTRA,
+        "public.alembic_version INSERT",
+    ),
+    Case(
+        "alembic_version_column",
+        ("GRANT UPDATE (version_num) ON public.alembic_version TO {app}",),
+        Violation.COLUMN_PRIVILEGE,
+        "public.alembic_version.version_num UPDATE",
+    ),
+    Case(
+        "alembic_version_select_revoked",
+        ("REVOKE SELECT ON public.alembic_version FROM {app}",),
+        Violation.TABLE_PRIVILEGE_MISSING,
         "public.alembic_version SELECT",
     ),
     Case(

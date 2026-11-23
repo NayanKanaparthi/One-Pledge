@@ -20,7 +20,7 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from onepledge_outside_records.domain.errors import OperatorError
 from onepledge_outside_records.infrastructure.db.engines import make_engine
-from onepledge_outside_records.infrastructure.db.migrations import MigrationRunner
+from onepledge_outside_records.infrastructure.db.migrations import MigrationRunner, installed_head
 from onepledge_outside_records.infrastructure.db.session import SESSION_PARAMETERS, refuse_replica_sessions
 from onepledge_outside_records.interface.cli import main
 from onepledge_outside_records.interface.output import UNEXPECTED_ERROR, Console
@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from conftest import Database
 
 VARIABLES = ("PG_ADMIN_URL", "DATABASE_URL", "MIGRATION_DATABASE_URL", "DB_APP_ROLE", "PORT", "BIND_HOST")
+HEAD = installed_head()
 SETTING_REFUSAL = (
     "The role of DATABASE_URL is not least-privilege (ROLE_HAS_SETTING); remove the role's settings.\n"
 )
@@ -189,3 +190,51 @@ def test_a_pooled_connection_whose_session_would_not_fire_triggers_is_refused(
             pass
     finally:
         engine.dispose()
+
+
+# SPEC_DECISIONS 128 and 132: the schema check reads the revision and passes only at head.
+@pytest.mark.integration
+@pytest.mark.timeout(60)
+def test_a_database_never_migrated_says_its_tables_are_missing(
+    provisioned_database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+    for name, value in provisioned_database.environment(PORT=str(free_port())).items():
+        monkeypatch.setenv(name, value)
+    out, err = io.StringIO(), UnwrappingStream()
+    assert main(["serve"], Console(out, err)) == 1
+    assert err.getvalue() == "The outside records tables are missing; run db migrate first.\n"
+
+
+@pytest.mark.integration
+@pytest.mark.timeout(60)
+@pytest.mark.parametrize("recorded", ["0001_schema", "9999_from_a_newer_program"])
+def test_a_database_at_another_revision_names_both_revisions(
+    serve: Callable[..., tuple[int, str, str]],
+    migrated: Database,
+    admin: psycopg.Connection[Any],
+    recorded: str,
+) -> None:
+    admin.execute("UPDATE alembic_version SET version_num = %s", (recorded,))
+    assert serve() == (
+        1,
+        "",
+        f"The database {migrated.target.database} is at revision {recorded}, not at {HEAD} as this "
+        "program expects; run db migrate with this program, or run the program that matches the "
+        "database.\n",
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.timeout(60)
+def test_a_database_before_the_revision_grant_is_a_missing_privilege_of_the_role(
+    serve: Callable[..., tuple[int, str, str]], migrated: Database
+) -> None:
+    MigrationRunner(migrated.owner_url, migrated.app_role).downgrade("0003_contract_checks")
+    assert serve() == (
+        1,
+        "",
+        "The role of DATABASE_URL is not least-privilege (TABLE_PRIVILEGE_MISSING); the database was "
+        "not provisioned or migrated correctly; run db migrate as the owner.\n",
+    )

@@ -96,6 +96,10 @@ _MISSING_TABLES = text(
 )
 
 
+_REVISION_READABLE = text("SELECT has_table_privilege(current_user, 'public.alembic_version', 'SELECT')")
+_REVISION = text("SELECT (SELECT version_num FROM alembic_version LIMIT 1), current_database()")
+
+
 class SqlRecordsReader:
     """Reads records and clients. Built on the app role engine, which can only SELECT."""
 
@@ -123,12 +127,29 @@ class SqlRecordsReader:
                 "CONFIGURATION_ERROR",
             )
 
-    def ensure_readable(self) -> None:
-        """The outside records tables are in place, or say what to do."""
+    def ensure_at_head(self, head: str) -> None:
+        """The schema is in place at the head revision of the installed migrations (SPEC 12.5,
+        SPEC_DECISIONS 128 and 132): tables missing, or another revision, each has its sentence.
+
+        Without SELECT on `alembic_version` the revision is not read here: the role inspection
+        that follows names the missing privilege, which `db migrate` restores.
+        """
         with self._open() as connection:
             missing: int = connection.execute(_MISSING_TABLES, {"tables": sorted(GRANT_MATRIX)}).scalar_one()
-        if missing:
+            if missing:
+                raise tables_missing()
+            readable: bool = connection.execute(_REVISION_READABLE).scalar_one()
+            if not readable:
+                return
+            current, database = connection.execute(_REVISION).one()
+        if current is None:
             raise tables_missing()
+        if current != head:
+            raise OperatorError(
+                f"The database {database} is at revision {current}, not at {head} as this program "
+                "expects; run db migrate with this program, or run the program that matches the database.",
+                "NOT_MIGRATED",
+            )
 
     def ensure_read_only(self) -> None:
         """Refuse to serve as a role that is not least-privilege (SPEC 6.1, SPEC_DECISIONS 72, 103).

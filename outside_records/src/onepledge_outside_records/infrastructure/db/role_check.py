@@ -20,15 +20,16 @@ from onepledge_outside_records.domain.errors import OperatorError
 from onepledge_outside_records.infrastructure.db import role_points
 
 SCHEMA = "public"
-# Table of the schema to the privileges the app role holds on it. A table of `public` that is
-# not listed here is a violation; `alembic_version` is listed with no privilege at all.
+# Table of the schema to the privileges the app role holds on it (SPEC 6.1 as amended by
+# SPEC_DECISIONS 132): SELECT on the four data tables and on `alembic_version`, whose revision
+# the schema startup check reads. A table of `public` that is not listed here is a violation.
 GRANT_MATRIX: Mapping[str, frozenset[str]] = MappingProxyType(
     {
         "title_records": frozenset({"SELECT"}),
         "payments": frozenset({"SELECT"}),
         "contracts": frozenset({"SELECT"}),
         "api_clients": frozenset({"SELECT"}),
-        "alembic_version": frozenset(),
+        "alembic_version": frozenset({"SELECT"}),
     }
 )
 # Compared at table level only: a privilege held on a column is COLUMN_PRIVILEGE, never "held"
