@@ -11,6 +11,7 @@ from onepledge_bank_agent.infrastructure.settings import (
     ServeSettings,
     Tunables,
 )
+from onepledge_testtools.network import WILDCARD_IPV4
 
 pytestmark = pytest.mark.unit
 
@@ -166,7 +167,7 @@ def test_each_scope_ignores_the_other_scopes_variables_even_when_malformed() -> 
     ("value", "bound"),
     [
         ("127.0.0.1", "127.0.0.1"),
-        ("0.0.0.0", "0.0.0.0"),  # noqa: S104 - the wildcard is an accepted value under test
+        (WILDCARD_IPV4, WILDCARD_IPV4),
         ("::", "::"),
         ("::1", "::1"),
         (" 10.0.0.7\n", "10.0.0.7"),

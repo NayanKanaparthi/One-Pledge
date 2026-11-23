@@ -10,7 +10,10 @@ from collections.abc import Mapping, Sequence
 
 import pytest
 
+from onepledge_testtools import processes
+
 PASSED_THROUGH = ("PATH", "HOME", "LANG", "PYTHONPATH", "VIRTUAL_ENV")
+PROGRAM_TIMEOUT_SECONDS = 120
 
 
 def run_program(
@@ -25,9 +28,7 @@ def run_program(
     else:
         variables = {key: os.environ[key] for key in PASSED_THROUGH if key in os.environ}
         variables.update(environment)
-    return subprocess.run(  # noqa: S603 - an installed program of this repository, arguments from the test
-        [command, *arguments], capture_output=True, text=True, env=variables, check=False, timeout=120
-    )
+    return processes.run([command, *arguments], variables, timeout=PROGRAM_TIMEOUT_SECONDS)
 
 
 WIDTH = 100

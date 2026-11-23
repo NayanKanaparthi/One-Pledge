@@ -10,6 +10,7 @@ import hashlib
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
+from typing import TypedDict, Unpack
 
 from onepledge_bank_agent.application.evidence_ports import IntegrityRun, PlannedItem
 from onepledge_bank_agent.application.ports import NewItem
@@ -169,17 +170,23 @@ def answer(
     )  # fmt: skip
 
 
-def certificate(  # noqa: PLR0913 - every field a port test varies is a keyword
-    request_id: uuid.UUID,
-    certificate_id: uuid.UUID | None = None,
-    *,
-    failure: CertificateFailure | None = None,
-    body: Mapping[str, JsonValue] | None = None,
-    signature: str = "c2lnbmF0dXJl",
-    received: datetime = T0,
+class CertificateChanges(TypedDict, total=False):
+    """The fields of a received certificate a port test varies."""
+
+    failure: CertificateFailure | None
+    body: Mapping[str, JsonValue]
+    signature: str
+    received: datetime
+
+
+def certificate(
+    request_id: uuid.UUID, certificate_id: uuid.UUID | None = None, **changes: Unpack[CertificateChanges]
 ) -> Certificate:
     """A received certificate with the bank's verdict; the delivered hash is computed from the body."""
-    delivered = body if body is not None else {"certificate": "genuine"}
+    failure = changes.get("failure")
+    signature = changes.get("signature", "c2lnbmF0dXJl")
+    received = changes.get("received", T0)
+    delivered = changes.get("body", {"certificate": "genuine"})
     digest = delivered_sha256(delivered)
     assert digest is not None, "a canonical body"
     return Certificate(

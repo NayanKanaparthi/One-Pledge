@@ -25,7 +25,7 @@ from onepledge_outside_records.infrastructure.db.repositories import (
     SqlRecordsWriter,
 )
 from onepledge_outside_records.interface.http.app import create_app
-from onepledge_testtools.scratch_databases import new_name
+from onepledge_testtools.scratch_databases import deferred_signals, new_name
 
 OUTSIDE_BASE_URL = "http://outside-records.test"
 
@@ -70,8 +70,9 @@ class InProcessOutsideRecords:
         owner = f"postgresql://{name}_owner:{secrets.token_urlsafe(18)}@{server}/{name}"
         app = f"postgresql://{name}_app:{secrets.token_urlsafe(18)}@{server}/{name}"
         self._target = DatabaseTarget.from_urls(owner, app)
-        DatabaseProvisioner(ADMIN_URL).provision(self._target)
-        MigrationRunner(owner, f"{name}_app").upgrade()
+        with deferred_signals():  # SPEC_DECISIONS 115: the object being made is known and dropped
+            DatabaseProvisioner(ADMIN_URL).provision(self._target)
+            MigrationRunner(owner, f"{name}_app").upgrade()
         self._owner_engine = make_engine(owner)
         self._app_engine = make_engine(app)
         SeedRecords(CsvRecordsSource(), SqlRecordsWriter(self._owner_engine)).run(data_dir)

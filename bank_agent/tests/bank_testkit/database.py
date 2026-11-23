@@ -18,7 +18,7 @@ from onepledge_bank_agent.infrastructure.db.migrations import MigrationRunner
 from onepledge_bank_agent.infrastructure.db.provisioning import DatabaseProvisioner
 from onepledge_bank_agent.infrastructure.logging import StructlogOperationalLog
 from onepledge_bank_agent.infrastructure.settings import RuntimeSettings
-from onepledge_testtools.scratch_databases import new_name
+from onepledge_testtools.scratch_databases import deferred_signals, new_name
 
 ADMIN_URL = os.environ.get("PG_ADMIN_URL", "postgresql://postgres@localhost:55432/postgres")
 
@@ -90,9 +90,12 @@ def new_bank_database(code: str = "harbor") -> BankDatabase:
 
 
 def provision_and_migrate(database: BankDatabase) -> None:
-    """Provision the roles and database and migrate to head, as `make db-up` and `make migrate` will."""
-    DatabaseProvisioner(database.admin_url).provision(database.target)
-    migration_runner(database).upgrade()
+    """Provision the roles and database and migrate to head, as `make db-up` and `make migrate` will.
+    SIGTERM and SIGINT wait until provisioning is over, so the session's last step can drop what was
+    made (SPEC_DECISIONS 115)."""
+    with deferred_signals():
+        DatabaseProvisioner(database.admin_url).provision(database.target)
+        migration_runner(database).upgrade()
 
 
 def drop(database: BankDatabase) -> None:

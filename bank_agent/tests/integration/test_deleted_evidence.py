@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from psycopg import sql
 
 from bank_testkit.banks import manifest_steps
 from bank_testkit.data import seed_reference
@@ -36,6 +37,7 @@ pytestmark = pytest.mark.integration
 
 BANK = "HARBOR"
 MISSING = EvidenceProblemKind.ROW_MISSING
+OPERATORS = {"=": sql.SQL("="), ">=": sql.SQL(">="), ">": sql.SQL(">")}
 
 
 @dataclass
@@ -47,12 +49,19 @@ class Bank:
         with self.database.connect("admin") as connection:
             return [tuple(row) for row in connection.execute(query)]
 
-    def delete(self, table: str, where: str = "true") -> None:
-        """Delete rows as a superuser who switches the table's triggers off first."""
+    def delete(self, table: str, where: tuple[str, str, object] | None = None) -> None:
+        """Delete rows as a superuser who switches the table's triggers off first: all of them, or those
+        where `column OPERATOR value`; the statement is composed from fixed parts and identifiers."""
+        statement = sql.SQL("DELETE FROM {}").format(sql.Identifier(table))
+        parameters: tuple[object, ...] = ()
+        if where is not None:
+            column, operator, value = where
+            condition = sql.SQL(" WHERE {} {} %s").format(sql.Identifier(column), OPERATORS[operator])
+            statement, parameters = statement + condition, (value,)
         with self.database.connect("admin") as connection:
-            connection.execute(f"ALTER TABLE {table} DISABLE TRIGGER ALL")
-            connection.execute(f"DELETE FROM {table} WHERE {where}")  # noqa: S608 - test literals only
-            connection.execute(f"ALTER TABLE {table} ENABLE TRIGGER ALL")
+            connection.execute(sql.SQL("ALTER TABLE {} DISABLE TRIGGER ALL").format(sql.Identifier(table)))
+            connection.execute(statement, parameters)
+            connection.execute(sql.SQL("ALTER TABLE {} ENABLE TRIGGER ALL").format(sql.Identifier(table)))
 
 
 @pytest.fixture
@@ -87,7 +96,7 @@ def checkpoint_rows(bank: Bank) -> list[tuple[uuid.UUID, int]]:
 
 def test_one_deleted_certificate_is_missing_live_and_missing_from_the_audit_log(bank: Bank) -> None:
     (row_id, certificate_id, _), *_ = certificate_rows(bank)
-    bank.delete("certificates", f"certificate_row_id = '{row_id}'")
+    bank.delete("certificates", ("certificate_row_id", "=", row_id))
     live = bank.agent.report()
     assert live.status is IntegrityRunStatus.BROKEN
     assert live.certificates.status is SectionStatus.BROKEN
@@ -115,7 +124,7 @@ def test_one_deleted_checkpoint_is_missing_and_leaves_a_gap(bank: Bank) -> None:
     held = checkpoint_rows(bank)
     assert len(held) >= 3
     middle_id, middle_seq = held[len(held) // 2]
-    bank.delete("checkpoints_seen", f"checkpoint_id = '{middle_id}'")
+    bank.delete("checkpoints_seen", ("checkpoint_id", "=", middle_id))
     deep = bank.agent.verify()
     assert deep.status is IntegrityRunStatus.BROKEN
     assert problems(deep, "checkpoints_seen") == {
@@ -129,7 +138,7 @@ def test_the_newest_six_deleted_checkpoints_are_each_missing(bank: Bank) -> None
     held = checkpoint_rows(bank)
     assert len(held) > 6
     newest = held[-6:]
-    bank.delete("checkpoints_seen", f"checkpoint_seq >= {newest[0][1]}")
+    bank.delete("checkpoints_seen", ("checkpoint_seq", ">=", newest[0][1]))
     deep = bank.agent.verify()
     assert deep.evidence.status is SectionStatus.BROKEN
     assert problems(deep, "checkpoints_seen") == {(str(i), MISSING) for i, _ in newest}
@@ -169,7 +178,7 @@ def test_all_deleted_audit_rows_lose_the_tail_and_every_proof_is_unaudited(bank:
 def test_the_newest_deleted_audit_rows_lose_the_tail(bank: Bank) -> None:
     last_seq = stored_tail(bank)
     run_entry = bank.rows("SELECT object_id FROM audit_log WHERE action = 'INTEGRITY_VERIFICATION_RUN'")
-    bank.delete("audit_log", f"seq > {last_seq - 5}")
+    bank.delete("audit_log", ("seq", ">", last_seq - 5))
     deep = bank.agent.verify()
     assert (deep.audit_log.status, deep.audit_log.first_bad_seq) == (SectionStatus.BROKEN, last_seq)
     assert EvidenceProblem("integrity_runs", str(run_entry[0][0]), EvidenceProblemKind.ROW_UNAUDITED) in (

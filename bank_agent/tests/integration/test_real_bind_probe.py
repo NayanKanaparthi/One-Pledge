@@ -15,6 +15,7 @@ import pytest
 
 from onepledge_bank_agent.infrastructure.operator_errors import OperatorError
 from onepledge_bank_agent.infrastructure.settings import ServeSettings
+from onepledge_testtools.network import WILDCARD_IPV4
 
 pytestmark = pytest.mark.integration
 
@@ -46,7 +47,7 @@ def outcome(host: str, port: int) -> str:
     ("host", "allowed"),
     [
         ("127.0.0.1", {STARTED}),
-        ("0.0.0.0", {STARTED}),  # noqa: S104 - the wildcard is an accepted value under test
+        (WILDCARD_IPV4, {STARTED}),
         ("8.8.8.8", {NOT_LOCAL}),
         ("::", {STARTED, NO_IPV6}),
         ("::1", {STARTED, NO_IPV6}),
