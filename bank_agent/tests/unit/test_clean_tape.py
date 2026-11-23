@@ -11,6 +11,7 @@ import pytest
 from bank_testkit.tapes import summit_row, summit_tape
 from bank_testkit.world import CrashError, World
 from onepledge_bank_agent.application.clean_tape import CleanTape
+from onepledge_bank_agent.application.deep_evidence import stage_digests
 from onepledge_bank_agent.application.faults import FaultPoint
 from onepledge_bank_agent.application.ingest_tape import IngestCommand, IngestTape
 from onepledge_bank_agent.application.ports import StoredRawRow
@@ -109,9 +110,13 @@ def test_a_new_tape_creates_pending_loans_items_issues_and_audits(world: World) 
     }
     assert len(changes) == 2
     (advanced,) = world.audit(AuditAction.TAPE_STAGE_ADVANCED)
+    with world.units() as unit:
+        digests = stage_digests(unit.history, submission, TapeStatus.CLEANED)
+    assert set(digests) == {"items_sha256", "issues_sha256"}, "SPEC_DECISIONS 107 a"
     assert dict(advanced.detail) == {
         "from": "RECEIVED", "to": "CLEANED", "rows": 4, "rows_rejected": 2, "rows_fixed": 1,
         "accepted_new": 2, "accepted_represented": 0, "already_locked": 0, "release_requested": 0,
+        **digests,
     }  # fmt: skip
 
 

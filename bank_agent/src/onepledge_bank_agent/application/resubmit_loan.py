@@ -15,6 +15,7 @@ import uuid
 from dataclasses import dataclass
 
 from onepledge_bank_agent.application.authorisation import Authoriser
+from onepledge_bank_agent.application.deep_evidence import request_digest
 from onepledge_bank_agent.application.ports import UnitOfWork, UnitOfWorkFactory
 from onepledge_bank_agent.application.registry_sender import RegistrySender
 from onepledge_bank_agent.application.request_planning import Candidate, RequestScope, planned_request
@@ -90,6 +91,7 @@ class ResubmitLoan:
                         "state": loan.state.value,
                         "certificate_id": str(certificate.certificate_id),
                         "certificate_verified": certificate.verified,
+                        **request_digest(unit.history, request.request_id),
                         **command.requester.detail(),
                     },
                     command.requester.request_id,

@@ -50,7 +50,7 @@ class TestHistory:
             assert unit.history.tape(uuid.uuid4()) is None
         facts = tape.facts
         assert found == StoredTape(
-            facts.submission_id, TapeSource.FILE_UPLOAD, facts.facility_id, facts.as_of_date,
+            facts.submission_id, TapeSource.FILE_UPLOAD, facts.kind, facts.facility_id, facts.as_of_date,
             facts.file_sha256, facts.rows_sha256, facts.row_count, SUMMIT_LAYOUT,
             tuple(StoredRow(r.row_number, r.text, r.cells, dict(r.payload), r.row_sha256) for r in rows),
         )  # fmt: skip

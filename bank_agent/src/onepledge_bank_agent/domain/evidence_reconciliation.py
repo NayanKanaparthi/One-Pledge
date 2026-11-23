@@ -29,6 +29,7 @@ PROOF_TABLES: Mapping[str, str] = MappingProxyType(
         AuditAction.INTEGRITY_VERIFICATION_RUN.value: "integrity_runs",
         AuditAction.TAPE_UPLOADED.value: "tape_submissions",
         AuditAction.RELEASE_REQUESTED.value: "tape_submissions",
+        AuditAction.ALERT_RECEIVED.value: "alerts",
     }
 )
 """The action that records the creation of a row, and the row's table."""

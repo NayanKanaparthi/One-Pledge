@@ -18,7 +18,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from onepledge_bank_agent.domain.enums import CertificateFailure, CheckpointFailure, IntegrityRunStatus
+from onepledge_bank_agent.domain.enums import (
+    CertificateFailure,
+    CheckpointFailure,
+    IntegrityRunStatus,
+    TapeStatus,
+)
 
 
 class SectionStatus(StrEnum):
@@ -114,11 +119,13 @@ class EvidenceProblemKind(StrEnum):
 
 @dataclass(frozen=True, order=True)
 class EvidenceProblem:
-    """One evidence finding: the table, the row (a primary key, or the missing seq), and the problem."""
+    """One evidence finding: the table, the row (a primary key, or the missing seq), the problem, and
+    for a stage digest the stage whose entry holds it (SPEC_DECISIONS 107, 123)."""
 
     table: str
     row_id: str | None
     problem: EvidenceProblemKind
+    stage: TapeStatus | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)

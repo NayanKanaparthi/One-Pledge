@@ -1,13 +1,20 @@
-"""The absence checks of deep verification (SPEC_DECISIONS 89, b and c), read in one unit of work.
+"""The evidence checks of deep verification (SPEC_DECISIONS 89 b and c, 107), read in one unit of work.
 
-`evidence_problems` reconciles every proof table and the loan and tape anchors with the
+`evidence_problems` reconciles every proof table and the loan, tape and alert anchors with the
 audit log (`domain/evidence_reconciliation.py`), finds holes in the stored checkpoint
-sequence and tapes whose raw rows are fewer than their `row_count`. `audit_tail` is the end
-of the log now, which the next deep verification requires to still be there.
+sequence and tapes whose raw rows are fewer than their `row_count`, then recomputes every stage
+digest, derives cleaning and loan terms again and replays loans, tapes, alerts and users
+(`deep_evidence.py`). `audit_tail` is the end of the log now, which the next deep verification
+requires to still be there.
 """
 
 from __future__ import annotations
 
+from onepledge_bank_agent.application.deep_evidence import (
+    derivation_problems,
+    digest_problems,
+    replay_problems,
+)
 from onepledge_bank_agent.application.ports import UnitOfWork
 from onepledge_bank_agent.domain.audit import AuditEntry
 from onepledge_bank_agent.domain.evidence_reconciliation import (
@@ -24,7 +31,8 @@ CHECKPOINTS = "checkpoints_seen"
 
 
 def evidence_problems(unit: UnitOfWork, entries: list[AuditEntry]) -> list[EvidenceProblem]:
-    """Every ROW_MISSING, ROW_UNAUDITED and SEQUENCE_GAP the stored evidence shows now."""
+    """Every ROW_MISSING, ROW_UNAUDITED, SEQUENCE_GAP, DIGEST_MISMATCH, DERIVATION_MISMATCH and
+    STATE_MISMATCH the stored evidence shows now."""
     checkpoints = unit.evidence.checkpoints.all()
     submissions = unit.history.submission_ids()
     rows = {
@@ -34,6 +42,7 @@ def evidence_problems(unit: UnitOfWork, entries: list[AuditEntry]) -> list[Evide
         "integrity_runs": unit.evidence.runs.ids(),
         "tape_submissions": set(submissions),
         "loans": unit.history.loan_ids(),
+        "alerts": set(unit.history.states("alerts")),
     }
     problems = reconcile(audited_ids(entries), rows)
     problems += sequence_gaps(CHECKPOINTS, [row.checkpoint_seq for row in checkpoints])
@@ -41,6 +50,9 @@ def evidence_problems(unit: UnitOfWork, entries: list[AuditEntry]) -> list[Evide
         tape = unit.history.tape(submission_id)
         if tape is not None and len(tape.rows) < tape.row_count:
             problems.append(EvidenceProblem(RAW_ROWS, str(submission_id), EvidenceProblemKind.ROW_MISSING))
+    problems += digest_problems(unit.history, entries)
+    problems += derivation_problems(unit.history)
+    problems += replay_problems(unit.history, entries)
     return problems
 
 

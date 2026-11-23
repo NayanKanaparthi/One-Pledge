@@ -24,6 +24,8 @@ from onepledge_bank_agent.domain.outbox import LedgerEntry, OutboxState
 from onepledge_bank_agent.domain.raw_evidence import StoredTape
 from onepledge_bank_agent.domain.registry_records import ItemOutcome, QuarantinedMessage, RegistryAnswer
 from onepledge_bank_agent.domain.registry_results import StoredResult
+from onepledge_bank_agent.domain.replay import State
+from onepledge_bank_agent.domain.stage_digests import DigestRow, StagePart
 
 
 @dataclass(frozen=True)
@@ -300,6 +302,26 @@ class HistoryReader(Protocol):
 
     def loan_ids(self) -> set[uuid.UUID]:
         """The id of every loan."""
+        ...
+
+    def stage_rows(self, submission_id: uuid.UUID, part: StagePart) -> list[DigestRow]:
+        """The rows one stage digest of a submission covers, as stored (SPEC_DECISIONS 107 a)."""
+        ...
+
+    def request_rows(self, request_ids: Sequence[uuid.UUID]) -> list[DigestRow]:
+        """These registry requests with their answers and items, as stored."""
+        ...
+
+    def reference_rows(self) -> dict[str, list[DigestRow]]:
+        """`lenders` and `facilities`, as stored."""
+        ...
+
+    def states(self, table: str) -> dict[uuid.UUID, State]:
+        """The columns the audit replay follows, for `loans`, `tape_submissions`, `alerts` or `users`."""
+        ...
+
+    def loan_values(self) -> dict[uuid.UUID, DigestRow]:
+        """Each loan's vin, borrower, origination date, amount, balance and lender loan number."""
         ...
 
 

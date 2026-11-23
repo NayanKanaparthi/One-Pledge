@@ -110,10 +110,26 @@ What a reviewer can check, and where:
   certificate and no verified one, a CHECKPOINT message is quarantined, or the bank is
   blind: its last complete outbox sync is missing or older than `OUTBOX_BLIND_HALT_SECONDS`
   (SPEC_DECISIONS 101; the only condition that clears by itself, and before refusing for it
-  the rule runs one sync to catch up); turning the rule off is audited at every start. Deep verification recomputes the audit chain, every raw row and file
-  hash, every certificate and checkpoint signature and the registry's whole hash chain
-  from seq 1, so it finds an edit by a superuser and a history rewrite before the
-  latest checkpoint, and says where.
+  the rule runs one sync to catch up); turning the rule off is audited at every start. Deep
+  verification recomputes the audit chain, every raw row and file hash, every certificate
+  and checkpoint signature and the registry's whole hash chain from seq 1, so it finds an
+  edit by a superuser and a history rewrite before the latest checkpoint, and says where.
+- **Every decision the bank acts on is checked again** (SPEC_DECISIONS 107,
+  `application/deep_evidence.py`). The entry for each stage carries digests of what it
+  produced (`items_sha256`, `issues_sha256` for CLEANED; `checks_sha256` for CHECKED;
+  `tokens_sha256`, `requests_sha256` for SUBMITTED, every answer and result column and the
+  hash of each stored response body); `LOAN_RESUBMITTED` carries its request's digest and
+  `REFERENCE_DATA_SEEDED` those of `lenders` and `facilities`. Deep verification recomputes
+  them (`DIGEST_MISMATCH` with table, submission and stage), cleans every raw row again and
+  derives every loan's terms and balance from its latest accepted row (`DERIVATION_MISMATCH`
+  with the row or the loan), and replays loans, tapes, alerts and users from their audit
+  entries (`STATE_MISMATCH`). What remains outside its reach: a superuser who rewrites data and
+  then the audit chain from that point on, the integrity runs and every later entry
+  consistently (an off-host copy of the head hash would detect it); a user's password hash,
+  display name and email (only role and active are replayed); `login_attempts` and the outbox
+  ledger tables, operational records that are not reconciled; and whether an outside source
+  still answers what a local check's evidence records (a later edit of the stored result is
+  found; the source is not asked again).
 
 ## Layout
 

@@ -78,6 +78,8 @@ class AlertMaker:
                     "match_kind": match.match_kind.value,
                     "match_basis": match.match_basis.value,
                     "source": source.value,
+                    "status": alert.status.value,
+                    "case_status": alert.record.case_status.value,
                 },
             )
         )

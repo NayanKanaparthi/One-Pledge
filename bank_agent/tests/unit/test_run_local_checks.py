@@ -12,6 +12,7 @@ from bank_testkit.memory.outside_records import MemoryOutsideRecords
 from bank_testkit.tapes import summit_row, summit_tape
 from bank_testkit.world import CrashError, World
 from onepledge_bank_agent.application.clean_tape import CleanTape
+from onepledge_bank_agent.application.deep_evidence import stage_digests
 from onepledge_bank_agent.application.faults import FaultPoint
 from onepledge_bank_agent.application.ingest_tape import IngestCommand, IngestTape
 from onepledge_bank_agent.application.run_local_checks import OutsideRecordsClients, RunLocalChecks
@@ -88,12 +89,16 @@ def test_every_accepted_loan_gets_four_results_and_a_failure_holds_it(world: Wor
         submission
     )
     advanced = world.audit(AuditAction.TAPE_STAGE_ADVANCED)[-1]
+    with world.units() as unit:
+        digests = stage_digests(unit.history, submission, TapeStatus.CHECKED)
     assert dict(advanced.detail) == {
         "from": "CLEANED",
         "to": "CHECKED",
         "loans_checked": 4,
         "loans_held_local": 1,
+        **digests,
     }
+    assert set(digests) == {"checks_sha256"}
     committed = [fields for _, event, fields in world.log.events if event == "check_chunk_committed"]
     assert committed == [
         {"submission_id": str(submission), "batch_index": 0, "count": 2},

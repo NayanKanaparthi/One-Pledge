@@ -121,6 +121,16 @@ def cli_for(monkeypatch: pytest.MonkeyPatch, environment: dict[str, str]) -> Cli
     return invoke
 
 
+REFERENCE_DIGESTS = ("content_sha256", "lenders_sha256", "facilities_sha256")
+
+
+def split_digests(detail: object) -> tuple[dict[str, object], tuple[object, ...]]:
+    """A REFERENCE_DATA_SEEDED detail without its digests, and the digests."""
+    assert isinstance(detail, dict)
+    rest = {key: value for key, value in detail.items() if key not in REFERENCE_DIGESTS}
+    return rest, tuple(detail[key] for key in REFERENCE_DIGESTS)
+
+
 def audit_actions(database: BankDatabase) -> list[tuple[object, ...]]:
     with database.connect("admin") as connection:
         return connection.execute(
@@ -249,7 +259,9 @@ def test_seed_reference_loads_the_bank_reference_data_audits_it_and_is_idempoten
     assert [(a, o, t) for a, o, t, _ in entries] == [
         ("REFERENCE_DATA_SEEDED", "REFERENCE_DATA", "SYSTEM")
     ] * 3
-    assert [detail for _, _, _, detail in entries] == [
+    details = [split_digests(detail) for _, _, _, detail in entries]
+    assert len({digests for _, digests in details}) == 1, "SPEC_DECISIONS 107: same tables, same digests"
+    assert [detail for detail, _ in details] == [
         {
             "via": "cli", "source_sha256": digest,
             "lenders": {"inserted": lenders, "updated": 0, "unchanged": 0},

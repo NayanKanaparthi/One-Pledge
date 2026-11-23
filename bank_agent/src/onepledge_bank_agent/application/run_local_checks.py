@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from onepledge_bank_agent.application.audit_entries import loan_state_changed, stage_advanced
+from onepledge_bank_agent.application.deep_evidence import stage_digests
 from onepledge_bank_agent.application.events import LogEvent
 from onepledge_bank_agent.application.faults import FaultPoint
 from onepledge_bank_agent.application.ports import (
@@ -136,5 +137,6 @@ class RunLocalChecks:
             before = tape.mark_checked(self._clock.now())
             unit.tapes.save(tape)
             counts = {"loans_checked": len(loan_ids), "loans_held_local": held}
-            unit.record(stage_advanced(submission_id, before, tape.status, counts))
+            digests = stage_digests(unit.history, submission_id, tape.status)
+            unit.record(stage_advanced(submission_id, before, tape.status, {**counts, **digests}))
             unit.commit()

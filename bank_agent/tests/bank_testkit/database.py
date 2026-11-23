@@ -12,10 +12,16 @@ from datetime import UTC, datetime
 import psycopg
 from sqlalchemy.engine import make_url
 
-from onepledge_bank_agent.domain.enums import Role
-from onepledge_bank_agent.infrastructure.db.engines import DatabaseTarget
+from onepledge_bank_agent.domain.audit import Actor, AuditDraft
+from onepledge_bank_agent.domain.canonical_json import JsonValue
+from onepledge_bank_agent.domain.enums import AuditAction, AuditObjectType, Role
+from onepledge_bank_agent.infrastructure.audit import HashChainedAuditWriter
+from onepledge_bank_agent.infrastructure.clock import SystemClock
+from onepledge_bank_agent.infrastructure.db.engines import DatabaseTarget, make_engine
 from onepledge_bank_agent.infrastructure.db.migrations import MigrationRunner
 from onepledge_bank_agent.infrastructure.db.provisioning import DatabaseProvisioner
+from onepledge_bank_agent.infrastructure.db.session import SqlUnitOfWorkFactory
+from onepledge_bank_agent.infrastructure.ids import RandomIds
 from onepledge_bank_agent.infrastructure.logging import StructlogOperationalLog
 from onepledge_bank_agent.infrastructure.settings import RuntimeSettings
 from onepledge_testtools.scratch_databases import deferred_signals, new_name
@@ -104,7 +110,8 @@ def drop(database: BankDatabase) -> None:
 
 
 def insert_user(database: BankDatabase, role: Role, email: str | None = None) -> uuid.UUID:
-    """A bank user row (users and login are built in a later work package; the table exists now)."""
+    """A bank user row and its `USER_CREATED` entry with role and active (SPEC_DECISIONS 107; users and
+    login are built in a later work package; the table exists now)."""
     user_id = uuid.uuid4()
     now = datetime.now(UTC)
     with database.connect("app") as connection:
@@ -121,4 +128,14 @@ def insert_user(database: BankDatabase, role: Role, email: str | None = None) ->
                 now,
             ),
         )
+    engine = make_engine(database.app_url)
+    try:
+        units = SqlUnitOfWorkFactory(engine, HashChainedAuditWriter(SystemClock(), RandomIds()), RandomIds())
+        with units() as unit:
+            detail: dict[str, JsonValue] = {"role": role.value, "active": True}
+            unit.record(AuditDraft(AuditAction.USER_CREATED, Actor.system(), AuditObjectType.USER, user_id,
+                                   detail=detail))  # fmt: skip
+            unit.commit()
+    finally:
+        engine.dispose()
     return user_id

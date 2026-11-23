@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from onepledge_bank_agent.application.audit_entries import stage_advanced
+from onepledge_bank_agent.application.deep_evidence import stage_digests
 from onepledge_bank_agent.application.events import LogEvent
 from onepledge_bank_agent.application.faults import FaultPoint
 from onepledge_bank_agent.application.ports import UnitOfWork, UnitOfWorkFactory
@@ -114,5 +115,6 @@ class TapeRequests:
                 "items_submitted": sum(request.item_count for request in requests),
                 **{f"items_{name.lower()}": count for name, count in sorted(results.items())},
             }
-            unit.record(stage_advanced(submission_id, before, tape.status, counts))
+            digests = stage_digests(unit.history, submission_id, tape.status)
+            unit.record(stage_advanced(submission_id, before, tape.status, {**counts, **digests}))
             unit.commit()

@@ -16,7 +16,7 @@ from dataclasses import dataclass, replace
 from datetime import date
 
 from onepledge_bank_agent.domain.canonical_json import JsonValue, canonical_json, sha256_hex
-from onepledge_bank_agent.domain.enums import TapeSource
+from onepledge_bank_agent.domain.enums import TapeKind, TapeSource
 from onepledge_bank_agent.domain.errors import DomainError
 from onepledge_bank_agent.domain.tape_file import (
     RawRow,
@@ -50,6 +50,7 @@ class StoredTape:
 
     submission_id: uuid.UUID
     source: TapeSource
+    kind: TapeKind
     facility_id: uuid.UUID
     as_of_date: date
     file_sha256: str

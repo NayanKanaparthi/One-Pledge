@@ -38,9 +38,10 @@ def loan_state_changed(
 
 
 def stage_advanced(
-    submission_id: uuid.UUID, before: TapeStatus, after: TapeStatus, counts: Mapping[str, int]
+    submission_id: uuid.UUID, before: TapeStatus, after: TapeStatus, counts: Mapping[str, int | str]
 ) -> AuditDraft:
-    """`TAPE_STAGE_ADVANCED` with from, to and the counts of that stage."""
+    """`TAPE_STAGE_ADVANCED` with from, to, the counts of that stage and the digests of what it produced
+    (SPEC_DECISIONS 107 a)."""
     detail: dict[str, JsonValue] = {"from": before.value, "to": after.value, **counts}
     return AuditDraft(
         AuditAction.TAPE_STAGE_ADVANCED,

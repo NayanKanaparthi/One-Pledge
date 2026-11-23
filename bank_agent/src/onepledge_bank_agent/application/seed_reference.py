@@ -10,9 +10,11 @@ nothing changed (SPEC_DECISIONS 30).
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from onepledge_bank_agent.application.deep_evidence import reference_digests
 from onepledge_bank_agent.application.ports import ReferenceSource, UnitOfWorkFactory, Upserted
 from onepledge_bank_agent.domain.audit import Actor, AuditDraft
 from onepledge_bank_agent.domain.canonical_json import JsonValue
@@ -69,11 +71,11 @@ class SeedReferenceData:
                 [unit.facilities.upsert_facility(facility) for facility in data.facilities]
             )
             result = SeedResult(lenders, facilities, data.source_sha256)
-            unit.record(self._seeded(result))
+            unit.record(self._seeded(result, reference_digests(unit.history)))
             unit.commit()
         return result
 
-    def _seeded(self, result: SeedResult) -> AuditDraft:
+    def _seeded(self, result: SeedResult, digests: Mapping[str, str]) -> AuditDraft:
         return AuditDraft(
             AuditAction.REFERENCE_DATA_SEEDED,
             Actor.system(),
@@ -85,5 +87,6 @@ class SeedReferenceData:
                 "source_sha256": result.source_sha256,
                 "lenders": result.lenders.as_detail(),
                 "facilities": result.facilities.as_detail(),
+                **digests,
             },
         )

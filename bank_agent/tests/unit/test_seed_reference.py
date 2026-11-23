@@ -11,6 +11,7 @@ import pytest
 
 from bank_testkit.memory import MemoryStore, MemoryUnits
 from bank_testkit.records import lei
+from onepledge_bank_agent.application.deep_evidence import reference_digests
 from onepledge_bank_agent.application.ports import ReferenceData
 from onepledge_bank_agent.application.seed_reference import SeedReferenceData, UpsertCounts
 from onepledge_bank_agent.domain.audit import Actor, AuditDraft
@@ -82,10 +83,14 @@ def test_every_run_is_audited_with_the_file_hash_and_the_counts() -> None:
         AuditObjectType.REFERENCE_DATA,
         None,
     )
+    with MemoryUnits(store)() as unit:
+        digests = reference_digests(unit.history)
+    assert set(digests) == {"content_sha256", "lenders_sha256", "facilities_sha256"}, "SPEC_DECISIONS 107"
     assert dict(first.detail) == {
         "via": "cli", "source_sha256": "c" * 64,
         "lenders": {"inserted": 1, "updated": 0, "unchanged": 0},
         "facilities": {"inserted": 1, "updated": 0, "unchanged": 0},
+        **digests,
     }  # fmt: skip
     assert second.detail["facilities"] == {"inserted": 0, "updated": 0, "unchanged": 1}, (
         "audited unchanged too"

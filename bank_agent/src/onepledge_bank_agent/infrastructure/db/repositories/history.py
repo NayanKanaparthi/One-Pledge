@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from onepledge_bank_agent.domain.audit import AuditEntry
-from onepledge_bank_agent.domain.enums import TapeSource
+from onepledge_bank_agent.domain.enums import TapeKind, TapeSource
 from onepledge_bank_agent.domain.raw_evidence import StoredRow, StoredTape
+from onepledge_bank_agent.domain.replay import State
+from onepledge_bank_agent.domain.stage_digests import DigestRow, StagePart
 from onepledge_bank_agent.domain.tape_file import TapeLayout
 from onepledge_bank_agent.infrastructure.db.models import LoanRow, RawRowRow, TapeSubmissionRow
+from onepledge_bank_agent.infrastructure.db.repositories import stage_rows
 from onepledge_bank_agent.infrastructure.db.repositories.audit_log import SqlAuditLogRepository
 
 
@@ -61,6 +64,7 @@ class SqlHistoryReader:
         return StoredTape(
             submission_id=tape.submission_id,
             source=TapeSource(tape.source),
+            kind=TapeKind(tape.kind),
             facility_id=tape.facility_id,
             as_of_date=tape.as_of_date,
             file_sha256=tape.file_sha256,
@@ -73,3 +77,23 @@ class SqlHistoryReader:
     def loan_ids(self) -> set[uuid.UUID]:
         """The id of every loan."""
         return set(self._session.execute(select(LoanRow.loan_id)).scalars())
+
+    def stage_rows(self, submission_id: uuid.UUID, part: StagePart) -> list[DigestRow]:
+        """The rows one stage digest covers."""
+        return stage_rows.stage_rows(self._session, submission_id, part)
+
+    def request_rows(self, request_ids: Sequence[uuid.UUID]) -> list[DigestRow]:
+        """Requests with their answers and items."""
+        return stage_rows.requests(self._session, request_ids)
+
+    def reference_rows(self) -> dict[str, list[DigestRow]]:
+        """Lenders and facilities."""
+        return stage_rows.reference(self._session)
+
+    def states(self, table: str) -> dict[uuid.UUID, State]:
+        """The replayed columns of one table."""
+        return stage_rows.states(self._session, table)
+
+    def loan_values(self) -> dict[uuid.UUID, DigestRow]:
+        """The derived columns of every loan."""
+        return stage_rows.loan_values(self._session)

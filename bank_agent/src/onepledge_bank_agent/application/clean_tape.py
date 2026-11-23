@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from datetime import datetime
 
 from onepledge_bank_agent.application.audit_entries import loan_state_changed, stage_advanced
+from onepledge_bank_agent.application.deep_evidence import stage_digests
 from onepledge_bank_agent.application.faults import FaultPoint
 from onepledge_bank_agent.application.ports import NewItem, StoredRawRow, UnitOfWork, UnitOfWorkFactory
 from onepledge_bank_agent.application.runtime import Runtime
@@ -70,7 +71,8 @@ class CleanTape:
             unit.tapes.save(tape)
             for change, reason in changes:
                 unit.record(loan_state_changed(change, submission_id, reason))
-            unit.record(stage_advanced(submission_id, before, tape.status, _counts(decisions)))
+            digests = stage_digests(unit.history, submission_id, tape.status)
+            unit.record(stage_advanced(submission_id, before, tape.status, {**_counts(decisions), **digests}))
             self._faults.reached(FaultPoint.CLEAN_BEFORE_COMMIT)
             unit.commit()
 

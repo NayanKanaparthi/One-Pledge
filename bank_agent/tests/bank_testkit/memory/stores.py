@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import copy
 import uuid
-from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from types import TracebackType
 from typing import Self
 
 from bank_testkit.memory import guards
+from bank_testkit.memory.history import MemoryHistory
 from onepledge_bank_agent.application.evidence_ports import IntegrityRun, ItemRecord, PlannedItem
 from onepledge_bank_agent.application.ports import AcceptedItem, NewItem, StoredRawRow, Upserted
 from onepledge_bank_agent.domain.alert import Alert
@@ -42,12 +43,11 @@ from onepledge_bank_agent.domain.errors import ConcurrentUploadError, ReferenceD
 from onepledge_bank_agent.domain.integrity import DatabaseControl
 from onepledge_bank_agent.domain.loan import Loan
 from onepledge_bank_agent.domain.outbox import LedgerEntry, OutboxOutcome, OutboxState
-from onepledge_bank_agent.domain.raw_evidence import StoredRow, StoredTape
 from onepledge_bank_agent.domain.registry_records import ItemOutcome, QuarantinedMessage, RegistryAnswer
 from onepledge_bank_agent.domain.registry_results import StoredResult
 from onepledge_bank_agent.domain.store_errors import UNIQUE, StoreRefusedError
 from onepledge_bank_agent.domain.tape import UNFINISHED, TapeSubmission
-from onepledge_bank_agent.domain.tape_file import RawRow, TapeLayout, raw_payload
+from onepledge_bank_agent.domain.tape_file import RawRow, TapeLayout
 from onepledge_bank_agent.domain.values import CheckResult, Token
 
 
@@ -74,6 +74,9 @@ class MemoryState:
     facilities: dict[uuid.UUID, Facility] = field(default_factory=dict)
     audit: list[AuditDraft] = field(default_factory=list)
     audit_log: list[AuditEntry] = field(default_factory=list)
+    responded: dict[uuid.UUID, datetime] = field(default_factory=dict)
+    results: dict[tuple[uuid.UUID, uuid.UUID], tuple[object, ...]] = field(default_factory=dict)
+    users: dict[uuid.UUID, tuple[str, bool]] = field(default_factory=dict)
     outbox_ledger: dict[uuid.UUID, LedgerEntry] = field(default_factory=dict)
     outbox_state: OutboxState = field(default_factory=OutboxState)
 
@@ -332,6 +335,7 @@ class _Requests:
         if request.response_status is not None:  # migration 0014: an answered request is frozen
             raise StoreRefusedError("OP007", "OP007", "registry_requests_guard")
         self._state.answers[request_id] = answer
+        self._state.responded[request_id] = at
         self._state.requests[request_id] = replace(
             request,
             response_status=answer.status,
@@ -344,6 +348,10 @@ class _Requests:
         held = [i for i in self._state.request_items[request_id] if i.item_ref == outcome.item_ref]
         if any(item.result is not None for item in held):  # migration 0014: a result is set once
             raise StoreRefusedError("OP007", "OP007", "registry_request_items_guard")
+        self._state.results[(request_id, outcome.item_ref)] = (
+            stored.result, outcome.already_held, outcome.match_kind, outcome.match_basis,
+            outcome.kinds_matched, outcome.case_id, outcome.lock_id, stored.reason,
+        )  # fmt: skip
         self._state.request_items[request_id] = [
             replace(item, result=stored.result, registry_case_id=outcome.case_id)
             if item.item_ref == outcome.item_ref
@@ -598,41 +606,6 @@ class _EvidenceStores:
         return _IntegrityRuns(self._state)
 
 
-class _History:
-    """The stored tapes, and the committed drafts chained the way the SQL writer chains them."""
-
-    def __init__(self, state: MemoryState) -> None:
-        self._state = state
-
-    def audit_entries(self) -> Iterator[AuditEntry]:
-        return iter(sorted(self._state.audit_log, key=lambda entry: entry.seq))
-
-    def audit_size(self) -> tuple[int, int]:
-        return len(self._state.audit_log), max((entry.seq for entry in self._state.audit_log), default=0)
-
-    def submission_ids(self) -> list[uuid.UUID]:
-        ordered = sorted(self._state.tapes.values(), key=lambda t: (t.facts.uploaded_at, t.submission_id))
-        return [t.submission_id for t in ordered]
-
-    def loan_ids(self) -> set[uuid.UUID]:
-        return set(self._state.loans)
-
-    def tape(self, submission_id: uuid.UUID) -> StoredTape | None:
-        tape = self._state.tapes.get(submission_id)
-        layout = self._state.layouts.get(submission_id)
-        if tape is None or layout is None:
-            return None
-        rows = tuple(
-            StoredRow(r.row_number, r.text, r.cells, raw_payload(layout.header_cells, r.cells), r.row_sha256)
-            for r in sorted(self._state.raw_rows.get(submission_id, []), key=lambda r: r.row_number)
-        )
-        facts = tape.facts
-        return StoredTape(
-            facts.submission_id, facts.source, facts.facility_id, facts.as_of_date, facts.file_sha256,
-            facts.rows_sha256, facts.row_count, layout, rows,
-        )  # fmt: skip
-
-
 class MemoryControls:
     """Database controls as set by the test; all in force by default."""
 
@@ -714,7 +687,7 @@ class MemoryUnitOfWork:
         self.outbox_ledger = _OutboxLedger(self._state)
         self.outbox_state = _OutboxState(self._state)
         self.evidence = _EvidenceStores(self._state)
-        self.history = _History(self._state)
+        self.history = MemoryHistory(self._state)
         return self
 
     def __exit__(
