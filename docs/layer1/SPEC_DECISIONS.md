@@ -1364,3 +1364,391 @@ This commit does not touch the YAML files. The WP1 implementer makes exactly the
 | K18 | Canonical UUID and base64 rules and the `client_disconnected` record built into the HTTP layer when WP4 writes it; canonical validation of ids in registry answers and messages now | 75 |
 
 Order: W12 and W13 before K14 and K6 (the bank agent needs the new table cases and the contract fields). Everything else is independent.
+
+---
+
+# Round 6 (2026-11-23): WP1 review 4 and bank agent review 3
+
+Inputs: `docs/layer1/reviews/WP1-review-4.md` and `docs/layer1/reviews/BANK-review-3.md`, both on commit `ea71d82`. Decisions 97 to 124. Change tables per implementer and the rubric readings are at the end. Each ruling is written for a class of defect, with the instances from the reviews as its tests. Where a decision here differs from an earlier one it says which it replaces. No ruling lowers a gate.
+
+## A. Confirmations and housekeeping
+
+### 97. Every failure is confirmed
+
+- WP1 review 4: DATA-06, DX-05, CODE-01, CODE-05, PRES-03 fail as graded.
+- Bank review 3: SEC-12, BANK-08, AUD-05, CODE-01, TEST-01 fail as graded.
+- The four readings the WP1 reviewer was unsure of are settled: the `noqa` limit is for the whole repository (decision 119); an undeclared import fails CODE-05 even when another package happens to install it (decision 120); the 100 column rule covers every line any layer 1 tool prints for a human, including usage errors and `make help` (decision 121); defects found beyond a procedure attach by rule 8 as before.
+
+### 98. The edit to SPEC 9.2 in commit `bfa675b` is rendering only
+
+That commit put a backslash before the pipe inside six code spans so the table renders. It changes no rule. The canonical value strings contain one pipe character, U+007C, and no backslash: `"AUTO|" + V`, `B + "|" + str(C)`, and so on. `contracts/examples/vectors/tokenization.json` is the authority for the exact bytes. No other edit to `SPEC.md` or `RUBRIC.md` is permitted without a decision.
+
+### 99. A conflict between a decision and a contract is reported, never tested around
+
+The bank agent's `TEXT_ONLY` list exempted findings from the "both forms" test because the contract had no field for them. When a decision cannot be met because a contract file, SPEC or another decision stands in the way, the implementer stops and reports it in the hand-back. A test that carries an exemption list for a rule of this file fails TEST-02.
+
+## B. Values, messages and answers from outside the bank
+
+### 100. The round-trip rule: nothing is stored that every reader cannot read back (bank F1) (all services)
+
+**The class.** A value arriving from outside (a registry message or answer, a key holder answer, an outside records answer, a tape cell, an API request, a file) may be stored only if it lies inside the intersection of three ranges: what the contract allows, what the PostgreSQL column type holds, and what the Python type that reads it holds. A value outside any of the three is refused before storage.
+
+Bounds, applied in one place per service (the wire model for each source):
+
+| Kind of value | Accepted |
+|---|---|
+| Timestamp | RFC 3339 with an explicit offset or `Z`; at most 6 fraction digits; after conversion to UTC, from `2000-01-01T00:00:00Z` up to but not including `2100-01-01T00:00:00Z`. The conversion is checked, not assumed: an offset that pushes a boundary value outside is refused. |
+| Date | `2000-01-01` to `2099-12-31`. |
+| Integer for a `bigint` column | Within the column's meaning and never outside `-9223372036854775808` to `9223372036854775807`; sequence numbers and positions `1` to `9223372036854775807`. For an `int` column, never above `2147483647`. |
+| Text | Valid Unicode with no U+0000, no lone surrogate, no control character unless the field's rule allows one, and a length bound taken from the contract (255 characters where the contract gives none). |
+| JSON stored as `jsonb` | Passed the bounded parser of decision 38; every string inside it satisfies the text rule; every number is an integer inside the `bigint` range; serialised size at most 64 KiB. |
+| UUID, hash, token, base64 | Canonical forms of decision 75 and the contract patterns. |
+
+What a violation becomes: an outbox message is poison with reason `VALUE_OUT_OF_RANGE` (decision 101); an answer of a shared service is `MALFORMED_RESPONSE` (decision 49); a tape cell is rejected by cleaning; an API request is 422.
+
+Enforcement, three layers, all required:
+
+1. **Before storage.** Repositories accept domain types only (for example a `StorableTimestamp` value object), never a raw `datetime`, `int` or `str` from a wire model. The value objects check the bounds. An architecture test asserts no repository method takes a wire model.
+2. **In the database.** Every timestamp or date column that holds a value supplied by another party gets a check constraint with the same bounds (`checkpoints_seen.signed_at`, `certificates.issued_at`, and every other such column the implementer finds; the README table of additions lists them). Evidence tables can then never hold a value the bank cannot read.
+3. **In every reader.** The integrity report, deep verification and every list endpoint read each section and each row inside its own guard. A row or section that cannot be read is reported, not raised: the section is BROKEN with an `evidence` problem `UNREADABLE` naming the table and, where known, the row id, and every other section is still produced. `GET /v1/integrity`, `integrity report` and `integrity verify` cannot fail as a whole because of stored data.
+
+Tests: a Hypothesis round-trip test per stored type that writes the edge values through the repository and reads them back equal; the three reproductions of bank review 3 F1 (a checkpoint with `9999-12-31T23:59:59-12:00`, one with `0001-01-01T00:00:00+12:00`, a certificate with the latter `issued_at`), each refused before storage with the stated outcome; and, on a database where such a row was forced in by a superuser with the constraint dropped, a report that still renders with that section BROKEN.
+
+### 101. The outbox can neither block nor lose a message (replaces decision 85; bank F2, F3, quality 4 and 5)
+
+Decision 85's intent stands. Its structure is replaced, because three paths escaped it: a page that could not be parsed, a message that could not be acknowledged, and a deferral count that turned a short outage into a permanent halt.
+
+**Level 1: the page.** The answer to `GET /v1/outbox` is read under decision 102 and parsed by the bounded parser. It must be an object with a `messages` array and a boolean `has_more`. If it is not (not JSON, the bare token `NaN`, wrong shape, too large), the bank cannot act on anything in it: the sync ends as **incomplete** with a permanent class reason. Nothing is acknowledged.
+
+**Level 2: each element of `messages`,** in order:
+
+| The element | Outcome |
+|---|---|
+| is not an object, or has no canonical UUID `message_id` | **Unacknowledgeable.** Recorded once per distinct element: a quarantine row with `message_id` null, reason `UNACKNOWLEDGEABLE`, `payload_sha256` of the element's canonical JSON (unique on that hash, so a redelivery adds nothing), and one audit entry. Processing continues with the next element. The sync is incomplete. |
+| has a usable id and its `type` is a string matching `^[A-Z][A-Z0-9_]{0,31}$` that is not ALERT, CASE_UPDATE or CHECKPOINT | **Ignored** (SPEC 14.1): audited `REGISTRY_MESSAGE_IGNORED` once, acknowledged. |
+| has a usable id and anything else is wrong: `type` null, not a string, empty, too long or holding other characters; `position` or `created_at` invalid; payload failing the schema or decision 100 | **Poison.** Quarantined (stored `message_type` is the type when it matches the pattern above, else the literal `UNREADABLE`), audited, acknowledged. |
+| is valid | Handled (level 3). |
+
+**Level 3: handling a valid message** has the three outcomes of decision 85 (applied, deferred, poison), with these changes:
+
+- **Deferral is never converted into poison.** Rule 4 of decision 85 and the reason `REPEATED_FAILURE` are withdrawn. A message is deferred only for a lost or timed out database connection, a serialisation failure or deadlock, or a transient class of decision 49 on a registry call the handler needs. It stays deferred until the cause passes. What protects the bank meanwhile is the blind rule below, which clears by itself.
+- **A deferred CHECKPOINT does not hold back other kinds.** Later ALERT and CASE_UPDATE messages in the same and later pages are still handled and acknowledged. Later CHECKPOINT messages wait behind it, because checkpoints must be verified in order.
+- **A CASE_UPDATE that matches no alert** is not dropped: it is quarantined with reason `UNMATCHED` (payload kept), audited `CASE_UPDATE_UNMATCHED` (outcome FAILURE), acknowledged. When an ALERT for the same `case_id` and asset token is created later, the handler applies the newest such case update to the new alert in the same transaction, audits `ALERT_CASE_UPDATED` with `detail.from_quarantine_id`, and marks the message's ledger row (below) `APPLIED_LATE`. An unmatched ALERT stays as SPEC 14.2 says.
+- **A database refusal** inside a handler (`StoreRefusedError`, any constraint or guard SQLSTATE) is poison with reason `REFUSED_BY_DATABASE` and the SQLSTATE in the audit detail, never a deferral.
+
+**Acknowledgement.** After a message is applied, ignored or quarantined, the bank acknowledges it. A transient failure of the acknowledgement is retried on the next sync. A permanent refusal (for example 404 for a message the registry itself delivered) is recorded once (audit `REGISTRY_ACK_REFUSED`, outcome FAILURE) and makes the sync incomplete. In both cases a redelivered message is recognised and is not handled or audited a second time.
+
+**The message ledger.** Table `registry_outbox_attempts` of decision 85 is replaced by `registry_outbox_messages`: `message_id uuid` PK, `message_type text`, `first_seen_at`, `handled_at` null, `outcome` null or one of `APPLIED`, `IGNORED`, `QUARANTINED`, `APPLIED_LATE`, `ack_status` one of `PENDING`, `ACKED`, `REFUSED`, `last_reason text` null, `updated_at`. One row per message with a usable id, written in the handler's transaction. App role SELECT, INSERT, UPDATE; guard: `message_id`, `message_type`, `first_seen_at` immutable, `outcome` set once except `QUARANTINED` to `APPLIED_LATE`, a row never deleted. This is what makes "handled once" and "nothing unrecorded" checkable.
+
+**Complete and blind.** A sync is **complete** when it reached `has_more: false`, every element had a usable id, every message was applied, ignored or quarantined, and every one was acknowledged. Single-row table `registry_outbox_state` records `last_complete_sync_at`, `incomplete_since` and `last_reason`. The bank is **blind** when `last_complete_sync_at` is null or older than `OUTBOX_BLIND_HALT_SECONDS` (new tunable, default 300).
+
+- Being blind is the fourth condition that activates the halt rule (decision 56): the bank sends no submission and no case position to a registry whose checkpoints it is not reading. It is the only halt condition that clears by itself: the next complete sync ends it.
+- Entering and leaving the blind state are each audited once (`REGISTRY_OUTBOX_BLIND`, `REGISTRY_OUTBOX_RECOVERED`), not once per poll.
+- While blind, the integrity report shows `registry_messages` BROKEN with the reason and since when (decision 108).
+- A bank that has never completed a sync is blind. It therefore reads the outbox to its end before its first submission, which is the right order.
+
+**Sync and stages.** Whatever the sync does, the worker goes on to run stages (decision 85 rule 5 stands). `worker --once` exits 0 and reports `ok: true` only when its sync was complete, the bank is not halted, and no tape ended FAILED during the run; otherwise it still does all the work it can, reports each problem in its result, and exits 1. This amends SPEC 13.1. `registry sync` exits 0 only for a complete sync.
+
+**Quarantine reasons** are now: `SCHEMA_MISMATCH`, `VALUE_OUT_OF_RANGE`, `CONTRADICTS_STORED_STATE`, `REFUSED_BY_DATABASE`, `REJECTED_BY_DEPENDENCY`, `UNACKNOWLEDGEABLE`, `UNMATCHED`, `OVERSIZED`, `UNEXPECTED_ERROR`. `registry_messages_quarantined` gains `payload_withheld boolean not null` (true whenever `payload` is null because it could not or must not be stored); the audit detail carries the same flag. Migration 0011's relaxation is accepted with that addition.
+
+**Which quarantined rows are open.** A quarantined row is open unless its ledger row is `APPLIED_LATE`. Open rows make `registry_messages` BROKEN. A quarantined CHECKPOINT still activates the halt rule for good (decision 56); nothing else in this decision creates a permanent halt.
+
+Tests, each asserting what is stored, audited and acknowledged, that the next message is applied, that a waiting tape advances through every stage before submit, and the exit code:
+
+- `type` null, `7`, empty, 65 characters, holding U+0000; `message_id` missing and not a UUID; an element that is a string; a page holding `NaN`; a page that is an array;
+- the acknowledgement answered 404, and answered 503 three times then 204;
+- `/v1/ledger/events` answering 503 for ten syncs with the outbox healthy: the checkpoint stays deferred, alerts behind it are delivered, the bank becomes blind after the limit, nothing is quarantined, and one good sync restores everything with no permanent halt;
+- the CASE_UPDATE of review F3, then its ALERT arriving later;
+- with one unacknowledgeable element waiting at a bank, `REWRITE_HISTORY` on the registry: that bank is blind, a release instruction created afterwards fails with `REGISTRY_INTEGRITY_BROKEN` and sends nothing;
+- a handler write refused by a trigger raising `23514`: `REFUSED_BY_DATABASE` with that SQLSTATE (kills the surviving mutation of bank quality finding 8).
+
+### 102. Every answer from a shared service is bounded (bank F7) (every HTTP client in layer 1)
+
+One rule for the bank agent's four clients and for every client WP5 writes:
+
+1. **Size.** `HTTP_MAX_RESPONSE_BYTES`, default 4,194,304. A `Content-Length` above it is refused before the body is read. The body is always read as a stream and the read is abandoned as soon as the bytes received exceed the limit, whether or not a length was declared.
+2. **Encoding.** The client sends `Accept-Encoding: identity`. An answer with any other `Content-Encoding` is refused without decoding.
+3. **Time.** A total deadline per call, `HTTP_TOTAL_TIMEOUT_SECONDS`, default 30, on top of the connect and read timeouts, so a body that trickles cannot hold a worker.
+4. **Class.** Any of these is permanent, `MALFORMED_RESPONSE` (decision 49). For the outbox it makes the sync incomplete (decision 101).
+
+Tests per client: a body one byte over the limit with and without `Content-Length`, a gzip answer, a body sent one byte per second. Memory use of the reproduction of F7 (400 MB of padding) stays under 50 MB above the idle process.
+
+## C. Privileges and controls
+
+### 103. Least privilege, completed (adds to decision 72; bank quality 1 and 6, WP1 quality 9)
+
+Decision 72's six points stand, with point 5 tightened and four points added. `inspect_role()` returns these further violation codes, and the startup guard and the report keep using that one function.
+
+5. **Tables, tightened.** No column-level privilege exists at all for the role or for `PUBLIC` on any table in `public` (`COLUMN_PRIVILEGE`). The expected privileges are then compared at table level only, so a privilege held on one column never counts as held.
+7. **Session and role settings.** The service sets its own session parameters on every new connection (`search_path`, `statement_timeout`, `lock_timeout`, `idle_in_transaction_session_timeout`) and does not rely on role or database defaults. The role has no row in `pg_db_role_setting` for any database (`ROLE_HAS_SETTING`); no database-wide setting of `session_replication_role` exists; the role holds no privilege on any configuration parameter (`PARAMETER_PRIVILEGE`); and in the connected session `session_replication_role` is `origin` (`TRIGGERS_DISABLED_FOR_SESSION`). The last check also runs on every new pooled connection, which is refused if it fails.
+8. **Functions.** No function in a non-system schema is `SECURITY DEFINER` (`SECURITY_DEFINER_FUNCTION`). The role holds `EXECUTE` on no function in a non-system schema, directly or through `PUBLIC` (`FUNCTION_PRIVILEGE`); the migrations revoke `EXECUTE` on the guard functions from `PUBLIC` (trigger functions do not need it to fire).
+9. **Default privileges.** `pg_default_acl` has no entry in the database that grants anything to the role or to `PUBLIC` (`DEFAULT_PRIVILEGE`).
+10. **Grant options.** The role holds nothing `WITH GRANT OPTION` on any object (`GRANT_OPTION`).
+
+`DATABASE_URL` and `MIGRATION_DATABASE_URL` must not carry query parameters; the settings loader refuses them with one line naming the variable (this is the first case of WP1 review 4, failure 2).
+
+New integrity control `TRIGGERS_FIRE_FOR_APP_ROLE`: true only when point 7 holds. `APP_ROLE_GRANTS_EXACT` covers points 1 to 6 and 8 to 10.
+
+Sentences. The refusal names `DATABASE_URL`, the first violation code, and advice that fits the code, from one table: an attribute, membership, ownership or extra privilege says "use the app role as provisioned"; `TABLE_PRIVILEGE_MISSING` and `TABLE_NOT_IN_MATRIX` say "the database was not provisioned or migrated correctly; run db migrate as the owner"; a setting or parameter violation says "remove the role's settings".
+
+`db migrate` refuses to run unless `DB_APP_ROLE` is exactly `{database}_app` and is not the owner (WP1 quality 4). The mirror check distinguishes "the role of MIGRATION_DATABASE_URL is not the owner" from "a table in the schema is owned by another role; the schema was changed outside db migrate" (WP1 quality 5).
+
+Tests: every new code with a hand-made violation, for outside records and for the bank agent, including `ALTER ROLE ... IN DATABASE ... SET session_replication_role = replica`, `GRANT SET ON PARAMETER`, a `SECURITY DEFINER` function executable by `PUBLIC`, `ALTER DEFAULT PRIVILEGES`, `SELECT ... WITH GRANT OPTION`, a column-level `SELECT`, `ALTER ROLE ... SET statement_timeout`, `ALTER ROLE ... SET search_path`. Each refuses startup with its own code and turns the matching control false.
+
+### 104. Startup is a list of named checks, and none ends in the last resort sentence (WP1 F2) (all services)
+
+Startup runs a fixed sequence of named checks (settings, database reachable, session parameters set, schema at head, role inspection, bind probe). Each check has its own failure sentence. Any database error raised inside a check is caught at the check's boundary and reported as that check's failure with the SQLSTATE: "The database refused a statement of the startup check NAME (SQLSTATE X). ..." An ordinary condition of the environment never reaches the last resort handler. Tests cover the three reproductions of WP1 review 4, failure 2, on every service that has a database.
+
+### 105. The schema is compared against a manifest, not sampled (extends decision 90; bank quality 2, schema part)
+
+The guard manifest becomes a schema manifest: tables, columns with types and nullability, every constraint with its definition, every index, every trigger with `tgtype` and function, every function with its source hash, and the expected emptiness of rules (no `pg_rewrite` entry other than a view's), row security policies and extra objects. One canonical rendering of the live catalogue is hashed and compared with the expected hash; the test that migrates a fresh database to head keeps the expected value honest.
+
+New control `SCHEMA_MATCHES_MANIFEST`. When false the report lists the differing object names. A dropped check constraint, an added rule, an added trigger, a changed column type each turn it false. The existing trigger controls keep their meaning.
+
+## D. Evidence: what is guarded, what is detected, what remains
+
+### 106. No row is ever deleted, and an answered request is frozen (bank quality 3)
+
+**Deletion.** No table of the bank database permits `DELETE` or `TRUNCATE` for anyone. The insert-only tables already refuse them. Every other table (`lenders`, `facilities`, `users`, `login_attempts`, `tape_submissions`, `loans`, `registry_requests`, `registry_request_items`, `alerts`, `registry_outbox_messages`, `registry_outbox_state`) gets a statement level trigger refusing both with SQLSTATE `OP008`. Users are deactivated, never removed.
+
+**Answered requests.** `registry_requests` and `registry_request_items` get a guard, SQLSTATE `OP007`:
+
+| Table | Always immutable | Mutable until answered | Frozen when |
+|---|---|---|---|
+| `registry_requests` | `request_id`, `submission_id`, `origin`, `batch_index`, `idempotency_key`, `kind`, `key_version`, `item_count` | `attempts`, `sent_at`, `last_attempt_at`; the answer columns may be set once, together | `response_status` is not null: every column |
+| `registry_request_items` | `request_id`, `item_ref`, `position`, `loan_id` | the result columns may be set once, together | `result` is not null: every column |
+
+Both tables join the column classification test of decision 87. The app role can no longer rewrite what the registry answered, and neither can the owner without first disabling a trigger, which the controls show.
+
+### 107. Deep verification covers every decision the bank acts on (replaces the scope of SPEC 15.6 and decision 89 where wider; bank quality 2)
+
+A check result, a token, a loan state or a registry result that can be edited without a trace is not acceptable. Three mechanisms, each locating the finding to a table and a row or a tape and stage. Findings go in the `evidence` section.
+
+**(a) Stage digests.** When a stage completes, its `TAPE_STAGE_ADVANCED` audit entry carries digests of what the stage produced. Each digest is the SHA-256 of the canonical JSON of the rows, in a fixed order, with fixed columns:
+
+| Entry for the move to | Detail key | Rows covered, for this submission |
+|---|---|---|
+| CLEANED | `items_sha256`, `issues_sha256` | `submission_items` (row number, disposition, loan id); `cleaning_issues` (row number, field, problem, action) |
+| CHECKED | `checks_sha256` | `local_checks` (loan id, check type, result, reason code, evidence) |
+| SUBMITTED | `tokens_sha256`, `requests_sha256` | `loan_tokens` of every loan in the submission's request items (loan id, kind, key version, token); `registry_requests` and their items (idempotency key, key version, item refs, loan ids, every answer and result column, SHA-256 of the canonical stored response body) |
+
+`LOAN_RESUBMITTED` carries `requests_sha256` for its request. Deep verification recomputes every digest from the tables and compares. A difference is problem `DIGEST_MISMATCH` with the table, the submission id and the stage. This covers an edited or deleted check row, token, issue, item result and response body.
+
+**(b) Re-derivation.** Cleaning is a pure function of the raw row, so its results are checked by running it again. For every raw row deep verification re-runs `clean_row` and requires the stored issues to equal the result (covered already by the digest, and this names the row). For every loan it takes the loan's most recent accepted submission item, re-derives the canonical terms and balance from that raw row, and requires `vin`, `borrower_ref`, `origination_date`, `original_amount_cents`, `current_balance_cents` and `lender_loan_number` to equal them. A difference is `DERIVATION_MISMATCH` with the loan id. The raw rows themselves are already proven by their hashes.
+
+**(c) Replay of the audit log.** For every loan, the `LOAN_STATE_CHANGED` entries in order must form a chain from null to the current state through legal transitions; a loan with no entries, entries for a loan that does not exist, or a current state that differs is `STATE_MISMATCH`. The same replay is done for every tape from its `TAPE_UPLOADED`, `TAPE_STAGE_ADVANCED`, `TAPE_FAILED` and `TAPE_RETRY_REQUESTED` entries, and for every alert from `ALERT_RECEIVED`, `ALERT_REVIEW_STARTED`, `ALERT_POSITION_SUBMITTED` and `ALERT_CASE_UPDATED` (their details carry the resulting status and case status). `ALERT_RECEIVED` names the alert id as `object_id`, so a deleted alert is `ROW_MISSING` under decision 89.
+
+Reference data and users:
+
+- `REFERENCE_DATA_SEEDED` gains `content_sha256`: the digest of the `lenders` and `facilities` tables after the seed. Deep verification compares the current tables with the digest of the latest such entry (`DIGEST_MISMATCH` on `lenders` or `facilities`).
+- `USER_CREATED` and `USER_UPDATED` carry the resulting `role` and `active` values (codes, not secrets). Deep verification replays them per user and compares (`STATE_MISMATCH` on `users`).
+
+**What remains outside reach, and must be stated exactly so in `THREAT_MODEL_L1.md`** (this list replaces the residual statement of decision 89):
+
+1. A superuser who rewrites data and then rewrites the audit chain from that point on, the integrity runs, and every later entry consistently. Nothing inside one database detects that. An off-host copy of the head hash would.
+2. `users.password_hash`, `users.display_name`, `users.email`: a superuser can replace them undetected. Only role and active are replayed.
+3. `login_attempts` and the outbox ledger tables are operational records, not evidence, and are not reconciled.
+4. A local check's evidence proves what the outside source answered at the time. Deep verification detects a later edit of the stored result; it does not ask the source again.
+
+Tests: every tamper of bank review 3 quality finding 2 (a check flipped to PASS, a check deleted, a token changed, a loan's tokens deleted, an issue's action changed, a loan's state changed with the guard off, a loan's amount changed, an alert deleted, a held loan deleted with its items, an item result changed, a response body replaced), each made as a superuser with the relevant trigger disabled and re-enabled, each found by `integrity verify` with the stated problem and location. The dropped constraints and the added rule are found by decision 105.
+
+### 108. The JSON report carries everything the text report shows (bank F4; replaces nothing in decision 88, completes it)
+
+The contract gains the fields the findings need (decision 123). The JSON report then carries, and the text report renders from the same objects: the role violations with code and object; every quarantined message with its id, type, reason, time, whether its payload was withheld and whether it is open; the outbox state (last complete sync, blind or not, since when, reason); every evidence problem with table, row id, stage and problem. Lists are capped at 200 entries, newest first, each with a `total`. The `TEXT_ONLY` list is deleted and the test asserts both directions: every finding in the text is in the JSON and every finding in the JSON is in the text.
+
+Wrapping: a line breaks only between facts (after a comma or before a new key), never inside one, and never leaves a line ending in a colon.
+
+## E. WP1 review 4: remaining rulings
+
+### 109. `seed` validates every cell against the contract before anything is written (WP1 F1)
+
+1. **One validator per record type** (`TitleRecord`, `Payment`, `Contract`) in the domain of outside records, with every rule of `outside_records.yaml`: patterns, lengths, enums, minimums, formats, plus the text rule of decision 100 (no control characters, no U+0000). The CSV loader builds the record exactly as the API will return it and passes it to the validator.
+2. **Tested against the contract, not written twice.** A contract test reads `outside_records.yaml`, derives boundary probes from each field's schema (a string at `maxLength` and one longer, each enum value and one outside, values just inside and outside each minimum, and a hand-written list of matching and non-matching strings for each pattern), and asserts the domain validator and a JSON Schema validation of the same record agree on every probe. A field added to the YAML without a validator fails the test.
+3. **All or nothing.** Every row of all three files is validated, including uniqueness inside the files (`payment_id`, `contract_id`, one title per VIN), before the first write. On any problem nothing is loaded, exit 1.
+4. **Sentences name the place.** Each problem is `FILE line N, column NAME: PROBLEM` (for example `titles.csv line 2, column state: must be two upper case letters`). At most 20 are printed, followed by the count of the rest; `--json` carries the same list. The sentence "The database rejected the records because a constraint failed" no longer appears for a data problem.
+5. **The database holds the same rules.** Outside records gets check constraints for every contract rule (state pattern, status enum, name lengths, bank code pattern, hash pattern, no control characters) and the unique keys, as a new migration. A row that would make the API answer outside its contract cannot exist, whoever writes it. This adds to SPEC 6.1.
+6. `clients add` with a key that another client already has says so.
+
+Tests: each reproduction of the failure, one probe per contract rule, and a live check that after any refused seed the three lookups for the touched VIN answer exactly as before.
+
+### 110. Files are regular files inside the directory (extends decision 74; WP1 quality 6 and 7)
+
+Every path a tool opens, whether named in a file or fixed by convention (`examples/index.json`, `examples/vectors/`, `manifest.json`, `answer_key/`, each CSV), must be a regular file (or a real directory where a directory is expected) that resolves inside the directory given on the command line, with no symbolic link anywhere on the way. A link, a FIFO, a device or a socket is refused by name ("FILE is not a regular file" or "FILE is a link out of the directory") before it is opened. The checker and `verify` apply the same rule, an unexpected extra directory is reported by `verify`, and a directory where a file is expected is reported as that. Size limits: 5 MiB for JSON and YAML, 256 MiB for a seed CSV.
+
+### 111. The contract checker resolves every reference and contains its validator (WP1 F3 and quality 1)
+
+1. Before any library is called, the checker walks each YAML file and resolves every `$ref` itself. A reference must be local to the file (`#/...`) and must point at an existing node. Otherwise: `FAIL openapi FILE: the reference at POINTER does not resolve`, one line per bad reference, and the file's other checks are skipped with a `SKIP` line. A reference to another file is refused as such.
+2. The third-party validator is called behind one boundary that turns anything it raises into one `FAIL` line for that file. This is the single place in layer 1 where a broad catch is allowed, because the exception classes of that library are not a stable interface; it is commented as such and still prints no class name.
+3. Examples are validated against the schema reached through the operation (request body or response of the path), not only against the component by name, so an operation pointing at nothing or at the wrong schema fails.
+
+Tests: the five reproductions of failure 3 and the dangling request body reference of quality finding 1, each exiting 1 and naming the file.
+
+### 112. Remaining WP1 quality findings
+
+| # | Finding | Ruling |
+|---|---|---|
+| 2 | Unit isolation does not see a database connection, a file write or most child processes | **Fix.** Decision 116. |
+| 3 | One malformed `optest_` name would stop every session | **Fix.** Decision 115. |
+| 8 | Repeated headers accepted silently | **Fix (all services).** A request that repeats `Authorization`, `X-API-Key` or `X-Test-Control-Key` is 401 `UNAUTHENTICATED`. A request that repeats `Idempotency-Key`, `Content-Type`, `Content-Length` or `X-Request-ID` is 422 with `{"field": "<header>", "issue": "DUPLICATE"}`. |
+| 10 | Command line edges | **Fix.** Decision 121. |
+| 11 | `contracts/fakes/README.md` lists a module that no longer exists | **Fix**, and each package gets a test that every path named in a layout block of its README exists and every module of its `src/` tree is named there. |
+| 12 | Weak or shared secrets accepted | **Fix (all services).** Settings refuse: a signing seed of all zero bytes; two principals with the same key hash (a member and the auditor, two members, two clients); in the bank agent, any two of its four outbound API keys being equal (SPEC 16.4 says each is distinct), and a `JWT_SECRET` equal to any API key. A key holder scalar of L minus 1 is a valid scalar and stays accepted. |
+| 13 | The tooling's own tests create names no sweep finds | **Fix.** Decision 115. |
+
+Findings 1, 4, 5, 6, 7 and 9 are decisions 111, 103, 103, 110, 110 and 103. The directory `/nonexistent_ro` left at the file system root by a reviewer's probe is not a product defect; the coordinator removes it.
+
+## F. Bank review 3: remaining rulings
+
+### 113. Remaining quality findings and the reviewer's rulings on open items
+
+| Item | Ruling |
+|---|---|
+| Quality 7: a withheld payload is not marked | **Fix.** `payload_withheld`, decision 101. |
+| Quality 8: test gap on a database refusal in a handler | **Fix.** The test listed in decision 101. Added to the mutation list as number 14: treat `StoreRefusedError` as a deferral. |
+| Quality 9: `pytest-timeout` missing from `bank_agent[dev]` | **Fix.** Decision 117. |
+| Quality 10: help and README details | **Fix.** `worker --help` names all four dependencies and their variables. The README says `BANK_CODE` is any code of 3 to 12 upper case letters and gives the three demo codes as examples. `seed-reference` with a code that is not in `reference.json` says so. |
+| Quality 11: wrapping | **Fix.** Decision 108. |
+| Open item 1: text the bank cannot store is quarantined with the payload withheld (migration 0011) | **Accepted**, with the `payload_withheld` column and the timestamp class of decision 100. A compensating migration is as acceptable as an in-place edit until release; the chain must stay linear and the up, down, up test must pass. |
+| Open item 2: an unusable `type` blocks the page | **Not accepted.** Decision 101. |
+| Open item 3: no size limit on answers | **Not accepted.** Decision 102. |
+| Open item 4: `bank_testkit/independent.py` compares canonical values, not issue lists | **Accepted.** Decision 50 point 4 is amended: the bank agent's cleaning and the datagen oracle are each tested on every case of the neutral table for action, problems and canonical value; the test kit oracle is tested on every case for action and canonical value. Two independent implementations of the issue order plus the hand-written table are enough. |
+| Open item 5: a wrapped line ending in a colon | **Accepted** as read; the wrapping rule of decision 108 removes the possibility. |
+
+## G. Tests and tooling
+
+### 114. The process environment of this build
+
+Recorded because both reviews met it: several agents share one machine and one PostgreSQL. Nobody uses `pkill` or kills a process by name; a process is stopped by the pid its starter recorded. Every reviewer and implementer works in a private virtual environment (decision 81, finding 11) and under a private database prefix.
+
+### 115. Scratch objects: nothing left behind, and the sweep cannot fail (bank F6, WP1 quality 3 and 13)
+
+1. **Register before creating.** A fixture records the name it is about to create in the session's own list before the first `CREATE`, and SIGTERM is deferred for the duration of each provisioning call (create roles, create database, grant). The object being created when a signal arrives is therefore known and is dropped.
+2. **Drop by ownership at the end.** When the session ends for any reason other than SIGKILL (normal end, failure, SIGINT, SIGTERM), a final step drops every database and role whose name starts with this session's own `optest_<timestamp>_<pid>_` stem, whatever the fixtures did or did not finalise.
+3. **The sweep tolerates anything.** A name that starts with `optest_` and whose timestamp cannot be parsed (month 13, fourteen zeros, a year of 9999) is treated as stale and dropped. Any error while examining or dropping one object is caught, written as one warning line, and the sweep goes on. `pytest_sessionstart` never fails because of the sweep.
+4. **No test creates a name outside the scheme.** The tooling's own tests prove "never touches any other name" in two ways only: unit tests of the selection function with an injected list of names (pinning the Python side, which kills the surviving mutation), and integration tests that use `optest_` names with old and new timestamps. `sweepcheck_`, `sweephost_` and untimed names are removed.
+5. Test: a script sends SIGTERM to a running integration session at 20 different moments, including during provisioning, and after each the server holds no object with that session's stem.
+
+### 116. What the `unit` marker enforces is what its docstring says (WP1 quality 2)
+
+The isolation for tests marked `unit` is enforced through an interpreter audit hook (active only while a unit test runs) together with explicit replacement of the database entry points, and refuses, with a failure that names the rule: opening any socket connection or binding or sending on one (TCP and UDP); `psycopg.connect`, `psycopg.Connection.connect` and `sqlalchemy.create_engine`; starting any child process by any route (`subprocess`, `os.system`, `os.posix_spawn`, `os.fork`, `os.exec*`); and creating, writing, renaming or removing any file or directory (including through `tempfile`, `tmp_path` and `Path.write_*`). Reading files under the repository root is allowed.
+
+The docstring lists exactly these and claims nothing more. A test per refused operation (the seven probes of the review among them) shows it fails, and one shows a committed file can be read. If an operation cannot be intercepted, the docstring says so by name instead of claiming it.
+
+### 117. Each package can be tested from its own declaration
+
+Every plugin and package that the root pytest configuration or a package's own tests need is declared in that package's `dev` extra (`pytest-timeout` in `bank_agent[dev]`, and whatever else is missing). A test in each package reads its `pyproject.toml` and the root configuration and fails if a required plugin is not declared. `tools/onepledge_testtools` gets a `pyproject.toml` so it is installed like the other packages and declared as a dev dependency of the packages that use it, not loaded through a path setting.
+
+### 118. Mutation list
+
+RUBRIC TEST-04's list now has fourteen entries: the ten of the rubric, 12 and 13 of decision 91, and 14 (treat `StoreRefusedError` in an outbox handler as a deferral). Number 11 is the second half of rubric mutation 6. Each must fail a test.
+
+## H. Code and presentation rules
+
+### 119. `noqa`: ten in the whole repository, reached by removing the need (CODE-01)
+
+The limit of RUBRIC CODE-01 is for the repository and stays at 10 `noqa` and 10 `type: ignore`, counted with `git grep`. It is reached by changing code, not by moving the suppression into configuration:
+
+- No new per-file ignore is added to the ruff configuration. The only ones allowed remain those of SPEC 2.2 (`S101` and `PLR2004` under `tests/`).
+- Child processes in tests are started through one helper in `onepledge_testtools` (fixed interpreter, argument list, no shell). That one function carries the one `S603` suppression with its reason. The nine scattered ones go.
+- The wildcard address appears in tests through one named constant in `onepledge_testtools` carrying the one `S104` suppression. The four scattered ones go.
+- `PLR0913` on the test kit's `certificate` builder is removed by taking a small parameter object or keyword-only fields with defaults in a dataclass. `S608` in the deleted-evidence test is removed by building the statement from a fixed table of statements.
+- That leaves about four. From now on a commit that adds a `noqa` says in its message why the code could not be written to pass.
+
+### 120. Declared dependencies (CODE-05)
+
+`starlette` is added to the allowed runtime packages (it is the framework FastAPI is built on, and `ClientDisconnect` is only available from it). Every package that imports it declares it in its `pyproject.toml`: outside records and the doubles now, the bank agent when WP4 needs it. An architecture test's allow-list of web packages must equal what the package declares; a name on the allow-list that is not declared fails the test.
+
+### 121. Command lines: the same rules for every line and every argument (PRES-03, WP1 quality 10)
+
+1. **Width.** Every line a layer 1 tool prints for a human is at most 100 columns: results, errors, usage errors, help, and each line of `make help`. `--wide` lifts it for results only.
+2. **Usage errors are the product's own sentences.** The argument parser's built-in messages are replaced. An invalid choice reads `argument --profile must be one of: full, small, example`; no quotes, brackets or parentheses from a Python repr; no echo of the value typed. Each sentence is wrapped to the width.
+3. **Arguments are exact.** Abbreviated options are off (`--se` is a usage error). An option given twice is a usage error. `--json` takes no value; any argument that starts with `--json` selects the JSON form for the usage error that follows, so `--json=1` still prints one document.
+4. A test in each package runs every command with about a dozen malformed command lines and asserts width, absence of repr characters, exit 2, and one JSON document when asked.
+
+## I. Contract, rubric, order
+
+### 122. Service names in help and documents
+
+Unchanged rules, restated because two findings touched them: every statement in a README or help text is true of the code at that commit; a document that lists files lists the files that exist (decision 112, finding 11).
+
+### 123. Contract changes (draft, additive)
+
+This commit does not touch the YAML files. The WP1 implementer makes exactly these edits in `contracts/bank_agent.yaml`, re-runs `onepledge-contracts check`, and changes nothing else:
+
+- `DatabaseControlsSection`: new optional property `violations`, an array (at most 200) of objects with `additionalProperties: false`, required `control`, `code`, `object`: `control` and `code` refer to `Code`; `object` is a string of at most 200 characters or null. New optional integer `violations_total`.
+- `RegistryMessagesSection`: new optional property `messages`, an array (at most 200) of objects with `additionalProperties: false`, required `quarantine_id`, `message_id`, `message_type`, `reason`, `received_at`, `payload_withheld`, `open`: `quarantine_id` a UUID; `message_id` a UUID or null; `message_type` a string of at most 32 characters; `reason` refers to `Code`; `received_at` a date-time; the last two booleans. New optional property `outbox`, an object with `additionalProperties: false`, required `last_complete_sync_at` (date-time or null), `blind` (boolean), `blind_since` (date-time or null), `reason` (`Code` or null).
+- `EvidenceSection.problems[].problem`: add the values `DIGEST_MISMATCH`, `DERIVATION_MISMATCH`, `STATE_MISMATCH`, `UNREADABLE`. New optional property `stage` on a problem (a `TapeStatus` or null). New optional integer `problems_total` on the section.
+- `FailureCode` and the tape schemas are unchanged.
+
+`contracts/README.md` gains one line in its table of decisions for Vedant: the integrity report grew the sections and fields of decisions 95 and 123.
+
+### 124. How reviewers read the rubric from now on
+
+| Rubric text | Read as |
+|---|---|
+| SEC-12, BANK-08 | Decision 101 in full: no message and no page can block the outbox for good or go unrecorded; a blind bank does not submit; a short registry outage creates no permanent state. Decision 102: every answer bounded. Decision 100: no stored value that a reader cannot read. |
+| AUD-05 | Seven sections; fifteen controls (`TRIGGERS_FIRE_FOR_APP_ROLE` and `SCHEMA_MATCHES_MANIFEST` added to the thirteen); text and JSON carry the same findings in both directions (decision 108); the report renders whatever the tables hold (decision 100). |
+| AUD-03 | Also every tamper of decision 107 and every schema change of decision 105, each found and located. |
+| SEC-02, DATA-06 | Decision 72 with the ten points of decision 103. |
+| BANK-09, SEC-01 | Also: no table permits `DELETE` or `TRUNCATE` (`OP008`); an answered registry request and its items are frozen (`OP007`). SEC-01's insert-only list stays at ten. |
+| CODE-05 | 22 tables in the bank database (`registry_outbox_attempts` replaced by `registry_outbox_messages`; `registry_outbox_state` added). Outside records as SPEC 6.1 plus the constraints of decision 109. Declared dependencies per decisions 117 and 120. |
+| DATA-06 | Also decision 109: a seed that would make the service answer outside its contract is refused with file, line and column. |
+| DX-05 | Also decision 111: every reference resolved; a broken reference exits 1 and names the file. |
+| CODE-01 | At most 10 `noqa` and 10 `type: ignore` in the repository, no per-file ignore beyond SPEC 2.2 (decision 119). |
+| PRES-03 | Decision 121: 100 columns for every line including usage errors and `make help`; no repr in any message. |
+| TEST-01 | Also decision 115 (SIGTERM at any moment leaves nothing; the sweep cannot fail), decision 116 (unit isolation as documented), decision 117. |
+| TEST-02 | Also: no exemption list for a rule of this file (decision 99). |
+| TEST-04 | Fourteen mutations (decision 118). |
+| REL-06 | "Both extra workers exit 0" holds when the sync was complete and no tape failed (decision 101). |
+
+---
+
+## Round 6: changes for the WP1 implementer (`contracts/`, `datagen/`, `outside_records/`, root tooling, `tools/`)
+
+| # | Change | Decision |
+|---|---|---|
+| X1 | The YAML edits of decision 123 and the README line; `onepledge-contracts check` passes | 123 |
+| X2 | Outside records `seed`: record validators with every contract rule; contract test deriving probes from `outside_records.yaml`; validate everything before writing; `FILE line N, column NAME: PROBLEM`, at most 20 plus a count; new migration with the check constraints and unique keys; `clients add` duplicate key sentence | 109 |
+| X3 | Regular files inside the directory, no links, size limits, in the checker, `verify` and `seed`; the same sentences in all three | 110 |
+| X4 | Checker: own `$ref` resolution, local references only, validator behind one boundary, examples validated through the operation | 111 |
+| X5 | `inspect_role()` in outside records: points 5 (tightened), 7, 8, 9, 10; URL parameters refused; session parameters set by the service; advice per violation code; `db migrate` requires `DB_APP_ROLE` to be `{database}_app`; the two mirror-check sentences | 103 |
+| X6 | Startup as named checks with their own sentences and SQLSTATE, in outside records | 104 |
+| X7 | Repeated headers: 401 or 422 `DUPLICATE`, in outside records and both doubles | 112.8 |
+| X8 | Settings refuse an all-zero signing seed and duplicate key hashes among principals | 112.12 |
+| X9 | README layout test and the corrected doubles README | 112.11 |
+| X10 | Test tooling: register before create, signals deferred during provisioning, drop by session stem at exit, sweep that tolerates any name and any error, no test names outside the scheme, selection function unit tested, the 20 moment SIGTERM script | 115 |
+| X11 | Unit isolation by audit hook and database entry points; docstring equal to what is enforced; one test per refused operation | 116 |
+| X12 | `tools/onepledge_testtools` becomes an installable package declared by its users; each package's dev extra declares every required plugin; a test checks it | 117 |
+| X13 | One child process helper and one wildcard constant in `onepledge_testtools`; scattered `S603` and `S104` suppressions removed in WP1 packages | 119 |
+| X14 | `starlette` declared in outside records and the doubles; web allow-list equals the declaration | 120 |
+| X15 | Command lines: 100 columns everywhere including usage errors and `make help`; product sentences for usage errors; no abbreviations, no repeated options, `--json=...` handled; tests | 121 |
+| X16 | Canonical text bounds of decision 100 applied to what the doubles and outside records store or return (timestamps in range, text rule) | 100 |
+
+## Round 6: changes for the bank agent implementer (`bank_agent/`)
+
+| # | Change | Decision |
+|---|---|---|
+| Y1 | Round-trip rule: storable value objects, repositories take domain types only (architecture test), check constraints on externally supplied timestamps, readers guard each section and row, `UNREADABLE` problems, Hypothesis round-trip tests, the three F1 reproductions | 100 |
+| Y2 | Outbox per decision 101: page level and element level handling, `UNACKNOWLEDGEABLE`, unusable type quarantined, deferral without conversion, checkpoints not holding back other kinds, `UNMATCHED` case updates applied late, acknowledgement refusals, `registry_outbox_messages` and `registry_outbox_state`, complete and blind, `OUTBOX_BLIND_HALT_SECONDS`, fourth halt condition, exit rules of `worker --once` and `registry sync`, `payload_withheld`, every listed test | 101 |
+| Y3 | Bounded answers in all four clients: size, identity encoding, total deadline; tests | 102 |
+| Y4 | `inspect_role()` points 5 (tightened), 7 to 10; per-connection session parameters and `session_replication_role` check; URL parameters refused; advice per code; control `TRIGGERS_FIRE_FOR_APP_ROLE`; `db migrate` requires the exact app role name | 103 |
+| Y5 | Startup as named checks, never the last resort for an environment condition | 104 |
+| Y6 | Schema manifest replacing the guard manifest; control `SCHEMA_MATCHES_MANIFEST`; drift test | 105 |
+| Y7 | `OP008` no-delete triggers on every table that lacks one; `OP007` guards on `registry_requests` and `registry_request_items`; both tables in the column classification test | 106 |
+| Y8 | Deep verification: stage digests in the audit detail and their recomputation, re-derivation of issues and loan terms, replay for loans, tapes and alerts, reference data digest, user role and active replay; every tamper of the review as a test; the residual list recorded for WP5 | 107 |
+| Y9 | JSON report with violations, messages, outbox state and evidence problems; `TEXT_ONLY` removed; two-way parity test; wrapping rule | 108, 99 |
+| Y10 | Settings refuse equal outbound keys and a JWT secret equal to an API key | 112.12 |
+| Y11 | Repeated header rule built into the HTTP layer when WP4 writes it; README layout test now | 112.8, 112.11 |
+| Y12 | Help and README corrections; `seed-reference` with an unknown bank code | 113 |
+| Y13 | `bank_agent[dev]` declares `pytest-timeout` and `onepledge-testtools`; scattered suppressions removed (child process helper, wildcard constant, parameter object for `certificate`, fixed statements in the deleted-evidence test) | 117, 119 |
+| Y14 | Command line rules of decision 121 | 121 |
+| Y15 | The killing test for mutation 14 | 113, 118 |
+
+## Order
+
+1. X1 first: Y9 and Y8 need the contract fields.
+2. X12 and X13 before Y13: the bank agent uses the installable test tools and the shared helpers.
+3. X10 and X11 before the bank agent implementer's final run, so its suite runs under the corrected tooling.
+4. Inside the bank agent: Y1 before Y2 (the outbox uses the storable types); Y7 before Y8 (deep verification tests disable and re-enable the new guards); Y6 after Y7 and Y2 (the manifest must include their tables and triggers).
+
+Everything else is independent.
