@@ -47,13 +47,23 @@ class RegistrySettings(BaseModel):
             raise ConfigurationError("FAKE_REGISTRY_KEY_VERSION", "must look like 1.1")
         controls = env.boolean("FAKE_TEST_CONTROLS", default=False)
         control_key = env.test_control_key(controls)
+        seed = env.secret_base64_32("FAKE_REGISTRY_SIGNING_SEED_B64")
+        if not any(seed):
+            raise ConfigurationError("FAKE_REGISTRY_SIGNING_SEED_B64", "must not be all zero bytes")
+        members = env.members("FAKE_REGISTRY_MEMBERS")
+        auditor = env.sha256_hex("FAKE_REGISTRY_AUDITOR_KEY_SHA256")
+        # One key is one principal: the auditor's key is no member's key (SPEC_DECISIONS 112.12).
+        if any(member.api_key_sha256 == auditor for member in members):
+            raise ConfigurationError(
+                "FAKE_REGISTRY_AUDITOR_KEY_SHA256", "must differ from each member's key hash"
+            )
         return cls(
             bind_host=env.bind_host(),
             port=env.port(),
-            signing_seed=SecretBytes(env.secret_base64_32("FAKE_REGISTRY_SIGNING_SEED_B64")),
+            signing_seed=SecretBytes(seed),
             signing_key_id=key_id,
-            members=env.members("FAKE_REGISTRY_MEMBERS"),
-            auditor_key_sha256=env.sha256_hex("FAKE_REGISTRY_AUDITOR_KEY_SHA256"),
+            members=members,
+            auditor_key_sha256=auditor,
             key_version=key_version,
             daily_item_cap=env.integer("FAKE_REGISTRY_DAILY_ITEM_CAP", DEFAULT_DAILY_ITEM_CAP, minimum=1),
             test_controls=controls,

@@ -308,3 +308,44 @@ def test_a_value_with_other_whitespace_or_a_control_character_is_named(variable:
 def test_a_secret_with_a_trailing_newline_is_trimmed() -> None:
     env = key_holder_env(FAKE_TEST_CONTROLS="true", FAKE_TEST_CONTROL_KEY=CONTROL_KEY + "\n")
     assert KeyHolderSettings.from_env(env).test_control_key is not None
+
+
+# SPEC_DECISIONS 112.12: weak or shared secrets are refused.
+def test_an_all_zero_signing_seed_is_refused() -> None:
+    zero = base64.b64encode(bytes(32)).decode()
+    with pytest.raises(ConfigurationError) as raised:
+        RegistrySettings.from_env(registry_env(FAKE_REGISTRY_SIGNING_SEED_B64=zero))
+    assert raised.value.sentence() == (
+        "Configuration error: FAKE_REGISTRY_SIGNING_SEED_B64 must not be all zero bytes."
+    )
+
+
+def test_an_auditor_key_that_is_also_a_member_key_is_refused() -> None:
+    members = json.loads(_members_json())
+    environment = registry_env(
+        FAKE_REGISTRY_MEMBERS=json.dumps(members),
+        FAKE_REGISTRY_AUDITOR_KEY_SHA256=members[0]["api_key_sha256"],
+    )
+    with pytest.raises(ConfigurationError) as raised:
+        RegistrySettings.from_env(environment)
+    assert raised.value.sentence() == (
+        "Configuration error: FAKE_REGISTRY_AUDITOR_KEY_SHA256 must differ from each member's key hash."
+    )
+
+
+@pytest.mark.parametrize("variable", ["FAKE_REGISTRY_MEMBERS", "FAKE_KH_MEMBERS"])
+def test_two_members_with_the_same_key_hash_are_refused(variable: str) -> None:
+    members = json.loads(_members_json())
+    members[1]["api_key_sha256"] = members[0]["api_key_sha256"]
+    with pytest.raises(ConfigurationError) as raised:
+        if variable == "FAKE_REGISTRY_MEMBERS":
+            RegistrySettings.from_env(registry_env(FAKE_REGISTRY_MEMBERS=json.dumps(members)))
+        else:
+            KeyHolderSettings.from_env(key_holder_env(FAKE_KH_MEMBERS=json.dumps(members)))
+    assert raised.value.sentence() == f"Configuration error: {variable} contains a duplicate api_key_sha256."
+
+
+def test_a_key_holder_scalar_of_the_order_minus_one_is_still_accepted() -> None:
+    minus_one = base64.b64encode((RISTRETTO_ORDER - 1).to_bytes(32, "little")).decode()
+    settings = KeyHolderSettings.from_env(key_holder_env(FAKE_KH_KEYS=json.dumps({"1": minus_one})))
+    assert settings.scalars[1].get_secret_value() == (RISTRETTO_ORDER - 1).to_bytes(32, "little")

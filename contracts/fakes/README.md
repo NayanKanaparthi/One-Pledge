@@ -141,10 +141,10 @@ Registry double:
 |---|---|---|
 | `PORT` | required | TCP port. |
 | `BIND_HOST` | `127.0.0.1` | IP address to bind, validated as for the key holder. |
-| `FAKE_REGISTRY_SIGNING_SEED_B64` | required | Base64 of a 32 byte Ed25519 seed. |
+| `FAKE_REGISTRY_SIGNING_SEED_B64` | required | Base64 of a 32 byte Ed25519 seed; all zero bytes and the published test vector seeds are refused. |
 | `REGISTRY_SIGNING_KEY_ID` | required | Key id placed on certificates and checkpoints, `^[a-z0-9-]{1,64}$`. |
-| `FAKE_REGISTRY_MEMBERS` | required | JSON list of `{"member_id", "api_key_sha256"}`, in the order members join. |
-| `FAKE_REGISTRY_AUDITOR_KEY_SHA256` | required | SHA-256 of the auditor key that may read `view=full`. |
+| `FAKE_REGISTRY_MEMBERS` | required | JSON list of `{"member_id", "api_key_sha256"}`, in the order members join; ids and key hashes must be unique. |
+| `FAKE_REGISTRY_AUDITOR_KEY_SHA256` | required | SHA-256 of the auditor key that may read `view=full`; it must differ from every member's key hash. |
 | `FAKE_REGISTRY_KEY_VERSION` | `1.1` | The only key version accepted on submissions. |
 | `FAKE_REGISTRY_DAILY_ITEM_CAP` | `1000000` | Items per member per UTC day. |
 | `FAKE_TEST_CONTROLS`, `FAKE_TEST_CONTROL_KEY`, `LOG_LEVEL` | as above | |
