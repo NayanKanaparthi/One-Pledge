@@ -17,12 +17,13 @@ import pytest
 from onepledge_bank_agent.application.advance_submission import StageOutcome, StageRun
 from onepledge_bank_agent.application.audit_entries import FailureDetail
 from onepledge_bank_agent.application.run_pipeline_worker import WorkerReport
+from onepledge_bank_agent.application.seed_reference import SeedResult, UpsertCounts
 from onepledge_bank_agent.domain.enums import TapeStatus
 from onepledge_bank_agent.domain.errors import MESSAGES
 from onepledge_bank_agent.infrastructure.db import failures
 from onepledge_bank_agent.infrastructure.db.role_check import RoleViolation, Violation
 from onepledge_bank_agent.infrastructure.db.role_guard import refusal_sentence
-from onepledge_bank_agent.interface.cli.commands import TASK_FAILED, worker_report
+from onepledge_bank_agent.interface.cli.commands import TASK_FAILED, seed_summary, worker_report
 from onepledge_bank_agent.interface.cli.main import UNEXPECTED, main
 from onepledge_bank_agent.interface.cli.output import USAGE_MESSAGE, WIDTH, Output, fit
 
@@ -186,3 +187,20 @@ def test_the_least_privilege_refusal_is_one_line_for_every_violation_code() -> N
         sentence = refusal_sentence(RoleViolation(code, "public.audit_log"))
         assert len(sentence) <= WIDTH and fit(sentence) == sentence, code
         assert "DATABASE_URL" in sentence and code.value in sentence and "public.audit_log" not in sentence
+
+
+@pytest.mark.parametrize(
+    ("lenders", "facilities", "line"),
+    [
+        ((1, 0, 0), (0, 0, 0), "1 row inserted, 0 updated, 0 unchanged"),
+        ((2, 1, 0), (1, 0, 3), "3 rows inserted, 1 updated, 3 unchanged"),
+        ((0, 0, 1), (0, 0, 0), "Nothing changed: 1 row already up to date"),
+        ((0, 0, 2), (0, 0, 2), "Nothing changed: 4 rows already up to date"),
+    ],
+)
+def test_the_seed_summary_gives_the_audited_counts_with_the_right_noun(
+    lenders: tuple[int, int, int], facilities: tuple[int, int, int], line: str
+) -> None:
+    """SPEC_DECISIONS 23 (e) and 78: real counts, and one row is a row."""
+    result = SeedResult(UpsertCounts(*lenders), UpsertCounts(*facilities), "a" * 64)
+    assert seed_summary(result) == f"{line} (reference.json aaaaaaaaaaaa...)."

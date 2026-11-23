@@ -27,7 +27,7 @@ from onepledge_bank_agent.infrastructure.settings import (
     load_admin_settings,
     load_runtime_settings,
 )
-from onepledge_bank_agent.interface.cli.output import Output, short_hash
+from onepledge_bank_agent.interface.cli.output import Output, counted, short_hash
 from onepledge_bank_agent.interface.cli.registry_commands import (
     integrity_report,
     integrity_verify,
@@ -144,7 +144,7 @@ def _counts_row(table: str, counts: UpsertCounts) -> tuple[str, str, str, str]:
     return table, f"{counts.inserted:,}", f"{counts.updated:,}", f"{counts.unchanged:,}"
 
 
-def _seed_summary(result: SeedResult) -> str:
+def seed_summary(result: SeedResult) -> str:
     """The closing line: the counts the seed audits, never a fixed sentence (SPEC_DECISIONS 78)."""
     lenders, facilities = result.lenders, result.facilities
     inserted = lenders.inserted + facilities.inserted
@@ -152,8 +152,9 @@ def _seed_summary(result: SeedResult) -> str:
     unchanged = lenders.unchanged + facilities.unchanged
     source = f"reference.json {short_hash(result.source_sha256)}"
     if inserted == updated == 0:
-        return f"Nothing changed: {unchanged:,} rows already up to date ({source})."
-    return f"{inserted:,} rows inserted, {updated:,} updated, {unchanged:,} unchanged ({source})."
+        return f"Nothing changed: {counted(unchanged, 'row', 'rows')} already up to date ({source})."
+    changed = f"{counted(inserted, 'row', 'rows')} inserted, {updated:,} updated"
+    return f"{changed}, {unchanged:,} unchanged ({source})."
 
 
 def _seed_reference(
@@ -177,7 +178,7 @@ def _seed_reference(
         ("table", "inserted", "updated", "unchanged"),
         (_counts_row("lenders", result.lenders), _counts_row("facilities", result.facilities)),
         ("table seeded", "tables seeded"),
-        _seed_summary(result),
+        seed_summary(result),
     )
 
 
