@@ -12,7 +12,8 @@ from __future__ import annotations
 import argparse
 import signal
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from types import FrameType, MappingProxyType
 
 from onepledge_bank_agent.application.advance_submission import StageRun
@@ -252,12 +253,30 @@ def _worker(arguments: argparse.Namespace, output: Output, collaborators: Collab
         def request_stop(number: int, frame: FrameType | None) -> None:
             stop.request_stop()
 
-        signal.signal(signal.SIGTERM, request_stop)
-        signal.signal(signal.SIGINT, request_stop)
-        if arguments.once:
-            return worker_report(worker.run_once(), output)
-        worker.run_until_stopped()
+        with _handling(STOP_SIGNALS, request_stop):
+            if arguments.once:
+                return worker_report(worker.run_once(), output)
+            worker.run_until_stopped()
         return 0
+
+
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
+
+
+@contextmanager
+def _handling(
+    signals: tuple[signal.Signals, ...], handler: Callable[[int, FrameType | None], None]
+) -> Iterator[None]:
+    """`handler` for `signals` while the worker runs (SPEC_DECISIONS 51); the handlers found before are
+    given back afterwards, so a process that runs the command in-process (a test session) keeps its own."""
+    previous = [(number, signal.getsignal(number)) for number in signals]
+    for number in signals:
+        signal.signal(number, handler)
+    try:
+        yield
+    finally:
+        for number, earlier in previous:  # None: a handler not set from Python; the default stands in
+            signal.signal(number, earlier if earlier is not None else signal.SIG_DFL)
 
 
 UNGUARDED = frozenset({"report"})

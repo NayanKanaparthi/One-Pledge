@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import signal
 import subprocess
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -284,8 +285,12 @@ def test_worker_once_runs_every_runnable_stage_and_reports_it(
     with BankAgentHarness(bank_db, Services(small_outside, doubles)) as harness:
         submission = harness.ingest(small_data / TAPE, "HARBOR-SUMMIT", TapeKind.BACK_BOOK, date(2026, 9, 30))
         cli = cli_for(monkeypatch, harness.environment)
+        handlers = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT))
         report = cli("worker", "--once", "--json", collaborators=harness.collaborators)
         idle = cli("worker", "--once", "--quiet", collaborators=harness.collaborators)
+    assert (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT)) == handlers, (
+        "the worker gives back the handlers it found, so a SIGTERM still stops this test run"
+    )
     assert report.code == 0, report.err
     no_failure = dict.fromkeys(("stage", "failure_code", "attempts", "dependency", "http_status", "reason"))
     stage = {"submission_id": str(submission.submission_id), "outcome": "ADVANCED", **no_failure}
