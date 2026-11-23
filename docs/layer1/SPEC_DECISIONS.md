@@ -1835,3 +1835,94 @@ Bank agent implementer (`bank_agent/`):
 Order: Z1 before the bank agent implementer's final run (its suite uses the tooling). Nothing else depends on order.
 
 For WP5: the threat model takes over the residual list and the README keeps a pointer (decision 129).
+
+---
+
+# Round 8 (2026-11-23): two rulings before the fresh reviews
+
+Decisions 132 to 134.
+
+## 132. Outside records reads its schema revision the way the bank agent does
+
+**Question.** Decision 128 says the schema startup check passes only when the database's revision equals the head of the installed migrations. The outside records app role has no privilege on `alembic_version` (SPEC 6.1 gives it `SELECT` on four tables only), and decision 103 forbids a `SECURITY DEFINER` function.
+
+**Decision.** The outside records grant matrix gains one entry: `SELECT` on `alembic_version`. This is exactly what the bank agent's matrix already has (SPEC 12.2), and both services then verify the revision the same way: the app role reads `version_num` and compares it with the head revision of the migrations package installed next to the program.
+
+- The grant is issued by a new grants migration in outside records (a new revision, so existing scratch databases move forward by `db migrate`).
+- `inspect_role()` in outside records expects exactly `SELECT` on the five tables. `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES` or `TRIGGER` on `alembic_version`, or a column-level grant on it, stays a violation, as on every other table.
+- The check's two sentences are those of decision 128: tables missing (run `db migrate`), or the database is at another revision than this program expects. A missing `SELECT` on `alembic_version` is reported by the role inspection as `TABLE_PRIVILEGE_MISSING` with the advice "run db migrate as the owner", because that is what fixes it.
+- SPEC 6.1 is amended accordingly: the app role holds `SELECT` on the four data tables and on `alembic_version`, nothing else. "Read-only" is unchanged: the role can still write nothing.
+
+**Rationale.** The revision string is not sensitive, a read privilege does not weaken the read-only guarantee, and one mechanism in two services is better than a second mechanism invented to avoid one grant. The alternatives were worse: no check (a service running against a schema it was not built for), or a definer function (forbidden for good reason).
+
+**Affects.** WP1 implementer. DATA-06 (the reviewer's matrix for outside records is five tables with `SELECT`).
+
+## 133. Text is compared and ordered by code point everywhere, and that is pinned in the schema
+
+**Question.** Stage reads sort text columns with the database's default collation. Under a locale or ICU collation PostgreSQL's order can differ from the in-memory order, so a stage digest (decision 107) could differ between two banks, or between a bank and a re-derivation.
+
+**Facts the decision rests on.** Python compares `str` values by code point. PostgreSQL's `"C"` collation compares the bytes of the server encoding. For UTF-8 those two orders are the same for every valid string, including characters outside the Basic Multilingual Plane (UTF-8 was designed to preserve code point order; UTF-16 does not). Lone surrogates, the one case where they could differ, are already refused by the text rule of decision 100. The equivalence holds only when the database encoding is UTF8.
+
+The exposure is wider than ordering. A database default or column collation that is non-deterministic (for example a case-insensitive ICU collation) also changes **equality**: unique indexes, the `(facility_id, vin)` key, token lookups and email uniqueness would then treat different strings as equal.
+
+**Decision.** Four parts, all required, for every layer 1 service that has a database (the bank agent and outside records).
+
+1. **Encoding.** `db provision` creates the database with `ENCODING 'UTF8'` from `template0`. A startup check "database encoding" refuses to start, with its own sentence, when `server_encoding` is not `UTF8`. The schema manifest records it.
+
+2. **Every text column is declared `COLLATE "C"`.** Every column of type `text`, `char(n)`, `varchar` and every `text[]` in the schema carries an explicit `COLLATE "C"`, set in the migrations (a new migration alters the existing columns; SQLAlchemy models declare the collation so the drift test agrees). Comparisons, unique indexes, check constraints with patterns, and `ORDER BY` on those columns are then by code point whatever the database default is. A test walks the catalogue of a migrated database and fails if any text-typed column has another collation, so a column added later cannot be missed. The schema manifest of decision 105 includes each column's collation, so `SCHEMA_MATCHES_MANIFEST` turns false if one is changed.
+
+3. **Queries never depend on a default collation.** An `ORDER BY`, `DISTINCT`, `GROUP BY`, `min`, `max` or comparison on an expression that is not a plain column (a cast to text, a concatenation, a function result) states `COLLATE "C"` explicitly. Case mapping is not done in SQL on external text: lower casing an email or upper casing a code happens in the application under the ASCII rules already decided, and the stored value is compared as stored. An architecture test over the SQL of each service fails on an ordering or comparison of a text expression without an explicit collation.
+
+4. **Digests own their order.** The function that computes a stage digest sorts its rows itself, by a key defined once in the domain (tuples of canonical strings and integers; UUIDs as their canonical lower case text; null first), using Python's code point order. The digest therefore does not depend on the order in which a repository returned the rows. The port contract still states the order of each digest-feeding read, and the parity tests of decision 127 still compare it, so the two implementations cannot drift.
+
+Tests:
+
+- **A non-C database.** An integration test provisions a scratch bank database whose default collation is an ICU collation (`und-x-icu`, and a second one with a case-insensitive non-deterministic collation where the server supports it), migrates it, runs a tape whose values include upper and lower case letters, digits, punctuation and characters above U+FFFF in fields that are sorted (loan numbers, borrower references, reason codes, evidence strings), and asserts: every stage digest equals the digest computed on a `C` database and by the in-memory implementation; the parity cases of decision 127 pass; unique keys distinguish strings that differ only in case; deep verification is OK. If the build machine's PostgreSQL has no ICU support the test says so in its name and uses a libc locale other than `C` instead; it does not silently pass.
+- **A column moved off `"C"`.** A superuser alters one column's collation: the control turns false and the report names the column.
+- **Outside records** gets the same non-C database test for its three lookups (results and their order unchanged) and the catalogue test.
+
+**Exposure of the other components.**
+
+- **Outside records: yes, for equality and uniqueness, not for its documented orderings.** Its three lookups order by dates and UUIDs, which no collation affects. But VIN lookups, client name uniqueness and key hash lookups compare text, so parts 1 to 3 apply to it in full.
+- **The doubles: no.** They hold their state in memory and sort with Python. Nothing to change. The rule for them is only the one that already holds: no `locale` aware sorting or comparison anywhere (`locale.strcoll`, `str.casefold` for keys, `sorted(key=str.lower)` on external text).
+- **datagen and the scorecard (WP5): no database.** The same no-locale rule applies; determinism by seed already depends on it. An architecture test in every package bans `locale.strcoll`, `locale.strxfrm` and `functools.cmp_to_key` over them.
+
+**Rationale.** A digest that depends on where a database was created is not evidence. Declaring the collation on the columns, instead of only on the queries that happened to be noticed, fixes ordering and equality together and makes the property visible in the schema, checkable by the manifest, and impossible to forget on the next query.
+
+**Affects.** Both implementers. AUD-03, BANK-02, BANK-09 (the `(facility_id, vin)` key), CODE-05, DATA-06.
+
+## 134. Rubric reading
+
+- DATA-06: the outside records role holds `SELECT` on five tables (decision 132).
+- CODE-05: every text-typed column of both services is `COLLATE "C"`; the database encoding is UTF8 (decision 133).
+- AUD-03: also a changed column collation is found by `SCHEMA_MATCHES_MANIFEST`; digests are equal across database collations.
+
+No contract file changes.
+
+---
+
+## Round 8: changes
+
+WP1 implementer (`outside_records/`, and the no-locale test in `contracts/fakes/` and `datagen/`):
+
+| # | Change | Decision |
+|---|---|---|
+| Q1 | New grants migration: `SELECT` on `alembic_version` for the app role; matrix of five tables in `inspect_role()`; schema check reads the revision and passes only at head, with the two sentences; tests | 132 |
+| Q2 | `db provision` with `ENCODING 'UTF8'` from `template0`; startup check "database encoding" | 133.1 |
+| Q3 | Migration setting `COLLATE "C"` on every text-typed column; models declare it; catalogue test that no text column has another collation | 133.2 |
+| Q4 | Explicit collation on any ordering or comparison of a text expression; no case mapping of external text in SQL; architecture test over the SQL | 133.3 |
+| Q5 | Non-C scratch database test for the three lookups | 133 |
+| Q6 | Architecture test banning locale aware comparison in outside records, the doubles and datagen | 133 |
+
+Bank agent implementer (`bank_agent/`):
+
+| # | Change | Decision |
+|---|---|---|
+| R1 | `db provision` with `ENCODING 'UTF8'` from `template0`; startup check "database encoding"; encoding in the schema manifest | 133.1 |
+| R2 | Migration setting `COLLATE "C"` on every text-typed column and `text[]`; models declare it; catalogue test; collations in the schema manifest and the control | 133.2 |
+| R3 | Explicit collation on any ordering or comparison of a text expression; no case mapping of external text in SQL; architecture test over the SQL | 133.3 |
+| R4 | Digest function sorts its own rows by one domain key; port contracts keep their stated order | 133.4 |
+| R5 | Non-C scratch database test (ICU, and case-insensitive where supported): digests equal to the C database and to memory, parity cases pass, unique keys case-sensitive, deep verification OK; the altered-collation tamper test | 133 |
+| R6 | Architecture test banning locale aware comparison | 133 |
+
+No ordering dependency between the two implementers.
