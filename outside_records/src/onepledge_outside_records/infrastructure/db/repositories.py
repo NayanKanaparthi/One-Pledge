@@ -96,6 +96,7 @@ _MISSING_TABLES = text(
 )
 
 
+_ENCODING = text("SELECT current_setting('server_encoding') = 'UTF8', current_setting('server_encoding')")
 _REVISION_READABLE = text("SELECT has_table_privilege(current_user, 'public.alembic_version', 'SELECT')")
 _REVISION = text("SELECT (SELECT version_num FROM alembic_version LIMIT 1), current_database()")
 
@@ -115,6 +116,19 @@ class SqlRecordsReader:
         connection = self._open()
         with connection:
             connection.execute(text("SELECT 1"))
+
+    def ensure_utf8(self) -> None:
+        """The database encoding is UTF8, the one under which "C" orders by code point (SPEC_DECISIONS
+        133.1)."""
+        with self._open() as connection:
+            utf8, shown = connection.execute(_ENCODING).one()
+        if not utf8:
+            name = shown.decode("ascii", "replace") if isinstance(shown, bytes) else str(shown)
+            raise OperatorError(
+                f"The database of DATABASE_URL has the encoding {name}, not UTF8; create it again with "
+                "db provision, which makes it UTF8.",
+                "CONFIGURATION_ERROR",
+            )
 
     def ensure_session_parameters(self) -> None:
         """Every session parameter the service sets holds in the session (SPEC_DECISIONS 103.7)."""

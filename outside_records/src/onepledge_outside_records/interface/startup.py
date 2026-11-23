@@ -23,6 +23,7 @@ from onepledge_outside_records.interface.http.app import create_app
 CHECK_NAMES = (
     "settings",
     "database reachable",
+    "database encoding",
     "session parameters",
     "schema in place",
     "role inspection",
@@ -49,11 +50,12 @@ class Started:
 
 def start(composition: Composition) -> Started:
     """Run the checks of CHECK_NAMES in order, then build the app."""
-    settings_name, reachable, session, schema, role, bind = CHECK_NAMES
+    settings_name, reachable, encoding, session, schema, role, bind = CHECK_NAMES
     settings = startup_check(settings_name, load_serve_settings)
     port = startup_check(settings_name, settings.require_port)
     reader = composition.reader(settings)
     startup_check(reachable, reader.ensure_reachable)
+    startup_check(encoding, reader.ensure_utf8)
     startup_check(session, reader.ensure_session_parameters)
     startup_check(schema, lambda: reader.ensure_at_head(installed_head()))
     startup_check(role, reader.ensure_read_only)

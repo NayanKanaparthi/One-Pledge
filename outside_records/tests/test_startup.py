@@ -21,6 +21,7 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 from onepledge_outside_records.domain.errors import OperatorError
 from onepledge_outside_records.infrastructure.db.engines import make_engine
 from onepledge_outside_records.infrastructure.db.migrations import MigrationRunner, installed_head
+from onepledge_outside_records.infrastructure.db.provisioning import DatabaseProvisioner
 from onepledge_outside_records.infrastructure.db.session import SESSION_PARAMETERS, refuse_replica_sessions
 from onepledge_outside_records.interface.cli import main
 from onepledge_outside_records.interface.output import UNEXPECTED_ERROR, Console
@@ -79,6 +80,7 @@ def test_the_checks_are_named_in_the_order_of_the_decision() -> None:
     assert CHECK_NAMES == (
         "settings",
         "database reachable",
+        "database encoding",
         "session parameters",
         "schema in place",
         "role inspection",
@@ -237,4 +239,32 @@ def test_a_database_before_the_revision_grant_is_a_missing_privilege_of_the_role
         "",
         "The role of DATABASE_URL is not least-privilege (TABLE_PRIVILEGE_MISSING); the database was "
         "not provisioned or migrated correctly; run db migrate as the owner.\n",
+    )
+
+
+# SPEC_DECISIONS 133.1: serve refuses a database whose encoding is not UTF8.
+@pytest.mark.integration
+@pytest.mark.timeout(60)
+def test_a_database_that_is_not_utf8_is_refused_by_the_encoding_check(
+    provisioned_database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = provisioned_database.target
+    with psycopg.connect(provisioned_database.admin_url, autocommit=True) as admin:
+        admin.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(target.database)))
+        admin.execute(
+            sql.SQL("CREATE DATABASE {} OWNER {} ENCODING 'SQL_ASCII' LOCALE 'C' TEMPLATE template0").format(
+                sql.Identifier(target.database), sql.Identifier(target.owner_role)
+            )
+        )
+    # Provisioning again grants CONNECT; no migration is needed, the encoding is checked first.
+    DatabaseProvisioner(provisioned_database.admin_url).provision(target)
+    for name in VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+    for name, value in provisioned_database.environment(PORT=str(free_port())).items():
+        monkeypatch.setenv(name, value)
+    out, err = io.StringIO(), UnwrappingStream()
+    assert main(["serve"], Console(out, err)) == 1
+    assert err.getvalue() == (
+        "The database of DATABASE_URL has the encoding SQL_ASCII, not UTF8; create it again with "
+        "db provision, which makes it UTF8.\n"
     )

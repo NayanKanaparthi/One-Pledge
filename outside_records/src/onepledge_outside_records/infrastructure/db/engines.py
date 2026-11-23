@@ -28,7 +28,9 @@ def sqlalchemy_url(url: str) -> URL:
 def make_engine(url: str, service: bool = False) -> Engine:
     """A pooled engine with hidden parameters; the serving engine sets the service's own session
     parameters on every connection (SPEC_DECISIONS 103.7)."""
-    options = {"options": connect_options()} if service else {}
+    # The client side is UTF8 whatever the server is, so a database in another encoding reaches the
+    # encoding check as text, not as bytes the driver cannot read (SPEC_DECISIONS 133.1).
+    options = {"options": connect_options(), "client_encoding": "UTF8"} if service else {}
     return create_engine(sqlalchemy_url(url), hide_parameters=True, pool_pre_ping=True, connect_args=options)
 
 

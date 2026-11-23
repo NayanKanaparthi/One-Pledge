@@ -14,6 +14,8 @@ from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from psycopg import errors as pg_errors
 from psycopg import sql
+from psycopg.abc import Params, QueryNoTemplate
+from psycopg.rows import TupleRow
 from sqlalchemy import Engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 
@@ -324,3 +326,30 @@ def test_a_key_another_client_already_has_is_refused_by_name(
         RegisterClient(registry).run("lakeside-test", key)
     assert raised.value.sentence == "Another client already has this key; generate a new key for this client."
     assert raised.value.code == "INVALID_INPUT"
+
+
+# SPEC_DECISIONS 133.1: the database is UTF8, created from template0.
+def test_provisioning_creates_a_utf8_database_from_template0(
+    fresh_database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    statements: list[str] = []
+    original = psycopg.Connection.execute
+
+    def record(
+        connection: psycopg.Connection[TupleRow], query: QueryNoTemplate, params: Params | None = None
+    ) -> psycopg.Cursor[TupleRow]:
+        statements.append(query.as_string(connection) if isinstance(query, sql.Composable) else str(query))
+        return original(connection, query, params)
+
+    monkeypatch.setattr(psycopg.Connection, "execute", record)
+    DatabaseProvisioner(fresh_database.admin_url).provision(fresh_database.target)
+    monkeypatch.undo()
+    created = [statement for statement in statements if statement.startswith("CREATE DATABASE")]
+    assert len(created) == 1
+    assert "ENCODING 'UTF8'" in created[0] and "TEMPLATE template0" in created[0]
+    with psycopg.connect(fresh_database.admin_url) as admin:
+        encoding = admin.execute(
+            "SELECT pg_encoding_to_char(encoding) FROM pg_database WHERE datname = %s",
+            (fresh_database.target.database,),
+        ).fetchone()
+    assert encoding == ("UTF8",)

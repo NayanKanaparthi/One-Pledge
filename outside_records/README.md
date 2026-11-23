@@ -39,8 +39,12 @@ synthetic and comes from `onepledge-datagen`.
   `lock_timeout` 2s, `idle_in_transaction_session_timeout` 10s; and refuses every new
   pooled connection whose `session_replication_role` is not `origin`. `DATABASE_URL` and
   `MIGRATION_DATABASE_URL` may not carry query parameters.
-- `serve` starts through named checks, in order: settings, database reachable, session
-  parameters, schema in place, role inspection, bind probe (SPEC_DECISIONS 104). "Schema
+- `serve` starts through named checks, in order: settings, database reachable, database
+  encoding, session parameters, schema in place, role inspection, bind probe
+  (SPEC_DECISIONS 104, 133.1). "Database encoding" refuses a database that is not UTF8 ("The
+  database of DATABASE_URL has the encoding E, not UTF8; create it again with db provision,
+  which makes it UTF8."); `db provision` creates the database with `ENCODING 'UTF8'` from
+  `template0`. "Schema
   in place" reads `alembic_version` and passes only at the head revision of the installed
   migrations: "The outside records tables are missing; run db migrate first." or "The
   database D is at revision R, not at H as this program expects; run db migrate with this

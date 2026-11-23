@@ -64,8 +64,9 @@ class DatabaseProvisioner:
                 "SELECT 1 FROM pg_database WHERE datname = %s", (target.database,)
             ).fetchone()
             if exists is None:
+                # UTF8 from template0, whatever template1 holds (SPEC_DECISIONS 133.1).
                 connection.execute(
-                    sql.SQL("CREATE DATABASE {} OWNER {}").format(
+                    sql.SQL("CREATE DATABASE {} OWNER {} ENCODING 'UTF8' TEMPLATE template0").format(
                         sql.Identifier(target.database), sql.Identifier(target.owner_role)
                     )
                 )
