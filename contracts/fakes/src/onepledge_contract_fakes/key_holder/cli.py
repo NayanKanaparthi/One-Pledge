@@ -6,7 +6,13 @@ import argparse
 from collections.abc import Sequence
 
 from onepledge_contract_fakes.binding import BindError
-from onepledge_contract_fakes.cli_output import CliOutput, common_options, parse_arguments, run_guarded
+from onepledge_contract_fakes.cli_output import (
+    CliOutput,
+    ProductParser,
+    common_options,
+    parse_arguments,
+    run_guarded,
+)
 from onepledge_contract_fakes.errors import ConfigurationError
 from onepledge_contract_fakes.key_holder.app import create_key_holder_app
 from onepledge_contract_fakes.key_holder.settings import load_settings
@@ -18,7 +24,7 @@ SERVICE_NAME = "key_holder"
 
 def build_parser() -> argparse.ArgumentParser:
     """Argument parser with one `serve` subcommand."""
-    parser = argparse.ArgumentParser(
+    parser = ProductParser(
         prog="onepledge-fake-keyholder",
         description="Run the key holder TEST DOUBLE (contracts/key_holder.yaml). Not production code.",
     )

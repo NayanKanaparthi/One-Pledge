@@ -118,4 +118,5 @@ def test_serve_refuses_json_as_a_usage_error(
     with pytest.raises(SystemExit) as exited:
         cli_main(["serve", "--json"], CliOutput(io.StringIO(), io.StringIO()))
     assert exited.value.code == 2
-    assert "unrecognized arguments: --json" in capsys.readouterr().err
+    last = capsys.readouterr().err.splitlines()[-1]
+    assert last.endswith(": the command line holds an argument this command does not take.")

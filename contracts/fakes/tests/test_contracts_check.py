@@ -16,6 +16,7 @@ from onepledge_contract_fakes.cli_output import CliOutput
 from onepledge_contract_fakes.contracts_check.checker import ContractsChecker
 from onepledge_contract_fakes.contracts_check.cli import main
 from onepledge_contract_fakes.contracts_check.references import resolve
+from onepledge_testtools.command_lines import UnwrappingStream
 
 pytestmark = pytest.mark.contract
 
@@ -99,7 +100,7 @@ def test_an_invalid_openapi_document_fails(contracts_dir: Path, tmp_path: Path) 
 
 
 def test_a_missing_directory_is_one_sentence(tmp_path: Path) -> None:
-    err = io.StringIO()
+    err = UnwrappingStream()
     code = main(
         ["check", "--wide", "--contracts-dir", str(tmp_path / "absent")], CliOutput(io.StringIO(), err)
     )

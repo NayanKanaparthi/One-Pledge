@@ -15,7 +15,14 @@ from onepledge_datagen.domain.text import plural
 from onepledge_datagen.domain.text_values import MAX_INTEGER, IntegerIssue, parse_integer_text
 from onepledge_datagen.infrastructure.codec import FileCodec
 from onepledge_datagen.infrastructure.directory import LocalDataDirectory
-from onepledge_datagen.interface.output import Console, Json, common_options, parse_arguments, run_guarded
+from onepledge_datagen.interface.output import (
+    Console,
+    Json,
+    ProductParser,
+    common_options,
+    parse_arguments,
+    run_guarded,
+)
 
 MAX_LISTED_VIOLATIONS = 50
 
@@ -39,7 +46,7 @@ def directory_argument(text: str) -> Path:
 
 def build_parser() -> argparse.ArgumentParser:
     """Argument parser with the `generate` and `verify` subcommands."""
-    parser = argparse.ArgumentParser(
+    parser = ProductParser(
         prog="onepledge-datagen",
         description="Generate and verify the seeded synthetic data set of OnePledge layer 1.",
     )

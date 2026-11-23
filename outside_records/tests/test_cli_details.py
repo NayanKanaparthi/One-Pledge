@@ -11,6 +11,7 @@ from onepledge_outside_records.domain.errors import OperatorError
 from onepledge_outside_records.infrastructure.settings import ServeSettings
 from onepledge_outside_records.interface import cli
 from onepledge_outside_records.interface.output import WIDTH, Console, fit
+from onepledge_testtools.command_lines import Option, malformed, usage_problems, wants_json
 
 USAGE = {
     "ok": False,
@@ -95,3 +96,44 @@ def test_a_shared_setting_has_the_sentence_of_every_service(setting: tuple[str, 
         ServeSettings.from_env({name: value})
     assert raised.value.sentence == sentence
     assert not sentence.endswith(":") and len(sentence) <= WIDTH
+
+
+# SPEC_DECISIONS 121: every command with about a dozen malformed command lines.
+COMMAND_LINES: dict[str, tuple[list[str], list[Option]]] = {
+    "db provision": (["db", "provision"], []),
+    "db migrate": (["db", "migrate"], []),
+    "seed": (["seed"], [Option("--data-dir", "x")]),
+    "clients add": (["clients", "add"], [Option("--name", "harbor"), Option("--key-env", "KEY")]),
+    "serve": (["serve"], []),
+}
+MALFORMED = [
+    (name, variant, argv)
+    for name, (command, options) in COMMAND_LINES.items()
+    for variant, argv in malformed(command, options).items()
+]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("name", "variant", "argv"), MALFORMED, ids=[f"{n}: {v}" for n, v, _ in MALFORMED])
+@pytest.mark.parametrize("json_form", [False, True], ids=["text", "json"])
+def test_every_malformed_command_line_is_a_plain_usage_error(
+    name: str, variant: str, argv: list[str], json_form: bool, capsys: pytest.CaptureFixture[str]
+) -> None:
+    line = [*argv, "--json"] if json_form and not wants_json(argv) else argv
+    out = io.StringIO()
+    with pytest.raises(SystemExit) as raised:
+        cli.main(line, Console(out, io.StringIO()))
+    assert usage_problems(line, raised.value.code, out.getvalue(), capsys.readouterr().err) == []
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "argv", [[], ["db"], ["clients"], *(command for command, _ in COMMAND_LINES.values())]
+)
+def test_help_is_at_most_100_columns_whatever_the_terminal(
+    argv: list[str], capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("COLUMNS", "400")
+    with pytest.raises(SystemExit):
+        cli.main([*argv, "--help"])
+    assert max(len(line) for line in capsys.readouterr().out.splitlines()) <= WIDTH

@@ -12,6 +12,7 @@ from pathlib import Path
 from onepledge_contract_fakes.canonical_json import JsonValue
 from onepledge_contract_fakes.cli_output import (
     CliOutput,
+    ProductParser,
     common_options,
     parse_arguments,
     plural,
@@ -29,7 +30,7 @@ def directory_argument(text: str) -> Path:
 
 def build_parser() -> argparse.ArgumentParser:
     """Argument parser with one `check` subcommand."""
-    parser = argparse.ArgumentParser(
+    parser = ProductParser(
         prog="onepledge-contracts",
         description="Check the OnePledge contracts: OpenAPI validity, examples, references and test vectors.",
     )

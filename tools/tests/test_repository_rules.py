@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
+from onepledge_testtools.command_lines import (
+    CANARY,
+    USAGE_DOCUMENT,
+    Option,
+    UnwrappingStream,
+    malformed,
+    usage_problems,
+)
 from onepledge_testtools.declarations import undeclared_source_imports, undeclared_test_requirements
+from onepledge_testtools.processes import run
 from onepledge_testtools.repository_rules import (
     VIN_SHAPED,
     _named_paths,
@@ -131,3 +141,52 @@ def test_a_layout_block_is_read_as_a_tree_with_comments() -> None:
     assert REPOSITORY / "tools" / "pyproject.toml" in named
     assert {package / "processes.py", package / "network.py"} <= set(named)
     assert package / "no_such_module.py" in named and not (package / "no_such_module.py").exists()
+
+
+@pytest.mark.integration
+def test_every_line_of_make_help_is_at_most_100_columns() -> None:
+    """SPEC_DECISIONS 121.1; review 4 failure 6 measured 112, 101 and 107 columns."""
+    result = run(["make", "-s", "--no-print-directory", "-C", str(REPOSITORY), "help"])
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert len(lines) > 5
+    assert [line for line in lines if len(line) > 100] == []
+
+
+@pytest.mark.unit
+def test_the_command_line_helpers_find_every_kind_of_wrong_usage_error() -> None:
+    right = "usage: tool [-h]\ntool: argument --seed must be one of: a, b.\n"
+    assert usage_problems(["--seed", "x"], 2, "", right) == []
+    assert usage_problems(["--json=1"], 2, json.dumps(USAGE_DOCUMENT), right) == []
+    assert usage_problems(["x"], 1, "", right) == ["exit code 1, not 2"]
+    assert usage_problems(["x"], 2, "", "usage: tool\ntool: argument --seed: invalid choice: 'x'\n") == [
+        "no sentence after the usage text",
+        "repr characters in the sentence: tool: argument --seed: invalid choice: 'x'",
+    ]
+    long_usage = "usage: " + "x" * 94 + "\n" + right.split("\n", 1)[1]
+    assert usage_problems(["x"], 2, "", long_usage) == ["stderr line of 101 columns"]
+    assert usage_problems(["--json"], 2, "", right) == ["stdout is not one JSON document"]
+    assert usage_problems(["--json"], 2, "{}", right) == ["stdout is not the USAGE document"]
+    assert usage_problems(["x"], 2, "{}", right) == ["stdout is not empty"]
+    assert usage_problems(["x"], 2, "", f"tool: {CANARY} is wrong.\n") != []
+
+
+@pytest.mark.unit
+def test_malformed_lines_cover_each_kind_of_mistake() -> None:
+    lines = malformed(["make"], [Option("--seed", "1", checked=True), Option("--out", "x", required=False)])
+    assert lines["option abbreviated"] == ["make", "--se", "1", "--out", "x"]
+    assert lines["option given twice"] == ["make", "--seed", "1", "--out", "x", "--seed", "1"]
+    assert lines["required option missing"] == ["make", "--out", "x"]
+    assert lines["--seed typed with repr characters"] == ["make", "--out", "x", "--seed", CANARY]
+    assert "--out typed with repr characters" not in lines
+    assert len(lines) >= 12
+
+
+@pytest.mark.unit
+def test_an_unwrapping_stream_joins_only_the_continuations_of_one_write() -> None:
+    stream = UnwrappingStream()
+    stream.write("verify: 1 problem in /a/very/long/path\n  that continues.\n")
+    stream.write("  an item\n    continued\n")
+    assert (
+        stream.getvalue() == "verify: 1 problem in /a/very/long/path that continues.\n  an item continued\n"
+    )

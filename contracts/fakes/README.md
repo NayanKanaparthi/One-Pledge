@@ -88,11 +88,15 @@ type and its frames (file, line, function), never the exception message, a sourc
 a local variable. `serve` prints no result, so it refuses `--json` as a usage error. The
 checker writes no other log line, so its `--quiet` has no effect (it is kept for one
 interface across commands).
-Human readable output is at most 100 columns: a longer line wraps onto continuation lines
-indented two more spaces, and `--wide` turns the limit off. A usage error with `--json`
-among the arguments also prints `{"ok": false, "error": {"code": "USAGE", "message": "The
-command line is not valid. See the usage text."}}` on stdout, the usage text on stderr,
-exit 2. No message ends in a colon (SPEC_DECISIONS 78).
+Every line for a human (results, errors, usage errors, help) is at most 100 columns: a
+longer line wraps onto continuation lines indented two more spaces, and `--wide` lifts the
+limit for results only. Arguments are exact (SPEC_DECISIONS 121): an abbreviated option or
+an option given twice is a usage error, and `--json` takes no value. A usage error prints
+the usage text and the product's own sentence on stderr, never the value typed (`argument
+--profile must be one of: full, small, example.`), and exits 2; with any argument starting
+`--json` it also prints `{"ok": false, "error": {"code": "USAGE", "message": "The command
+line is not valid. See the usage text."}}` on stdout. No message ends in a colon
+(SPEC_DECISIONS 78).
 
 `onepledge-contracts check` (run from the repository root, or `make contracts-check`)
 first resolves every `$ref` of each OpenAPI file itself (SPEC_DECISIONS 111): a reference

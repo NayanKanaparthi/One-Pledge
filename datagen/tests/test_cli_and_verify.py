@@ -19,13 +19,14 @@ from onepledge_datagen.application.invariants import InvariantChecker
 from onepledge_datagen.infrastructure.directory import describe
 from onepledge_datagen.interface.cli import main
 from onepledge_datagen.interface.output import Console
+from onepledge_testtools.command_lines import UnwrappingStream
 
 pytestmark = pytest.mark.integration
 
 
 def run(*argv: str) -> tuple[int, str, str]:
-    """The command in process, with `--wide` so sentences naming long test paths stay one line each."""
-    out, err = io.StringIO(), io.StringIO()
+    """The command in process; error sentences naming long test paths are joined back into one line."""
+    out, err = io.StringIO(), UnwrappingStream()
     code = main([*argv, "--wide"], Console(out, err))
     return code, out.getvalue(), err.getvalue()
 
@@ -60,7 +61,9 @@ def test_an_unknown_profile_is_a_usage_error(capsys: pytest.CaptureFixture[str])
     with pytest.raises(SystemExit) as exited:
         main(["generate", "--seed", "1", "--profile", "nope", "--out", "x"])
     assert exited.value.code == 2
-    assert "invalid choice: 'nope'" in capsys.readouterr().err
+    assert capsys.readouterr().err.splitlines()[-1] == (
+        "onepledge-datagen generate: argument --profile must be one of: full, small, example."
+    )
 
 
 def test_verify_reports_tampering(small_dir: Path, tmp_path: Path) -> None:

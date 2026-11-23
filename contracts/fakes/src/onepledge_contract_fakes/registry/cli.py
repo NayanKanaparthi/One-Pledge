@@ -6,7 +6,13 @@ import argparse
 from collections.abc import Sequence
 
 from onepledge_contract_fakes.binding import BindError
-from onepledge_contract_fakes.cli_output import CliOutput, common_options, parse_arguments, run_guarded
+from onepledge_contract_fakes.cli_output import (
+    CliOutput,
+    ProductParser,
+    common_options,
+    parse_arguments,
+    run_guarded,
+)
 from onepledge_contract_fakes.errors import ConfigurationError
 from onepledge_contract_fakes.registry.app import create_registry_app
 from onepledge_contract_fakes.registry.settings import load_settings
@@ -18,7 +24,7 @@ SERVICE_NAME = "registry"
 
 def build_parser() -> argparse.ArgumentParser:
     """Argument parser with one `serve` subcommand."""
-    parser = argparse.ArgumentParser(
+    parser = ProductParser(
         prog="onepledge-fake-registry",
         description="Run the registry TEST DOUBLE (contracts/registry.yaml). Not production code.",
     )

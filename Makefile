@@ -77,7 +77,7 @@ define bank_unit_gate
 		> /dev/null || exit 1
 endef
 
-test: ## Run every test of every package with the coverage gates, then the bank agent's unit-only gate
+test: ## Run every test of every package with its coverage gate, then the bank unit gate
 	@echo "test: pytest with coverage"
 	@$(PYTHON) -m coverage erase
 	@$(PYTHON) -m pytest $(TEST_PATHS) -q $(foreach m,$(COVERAGE_PACKAGES),--cov=$(m)) \
@@ -94,7 +94,7 @@ test: ## Run every test of every package with the coverage gates, then the bank 
 	done
 	$(call bank_unit_gate,test)
 
-test-fast: ## Run only the unit and contract tests, and the bank agent's unit-only coverage gate
+test-fast: ## Run only the unit and contract tests, then the bank unit coverage gate
 	@echo "test-fast: pytest -m 'unit or contract'"
 	@$(PYTHON) -m pytest $(TEST_PATHS) -q -m "unit or contract"
 	$(call bank_unit_gate,test-fast)
@@ -108,7 +108,7 @@ ci: ## Run lint, typecheck, contracts-check and test, stopping at the first fail
 	@$(MAKE) --no-print-directory contracts-check
 	@$(MAKE) --no-print-directory test
 
-data: ## Generate the synthetic data set for SEED and PROFILE into var/data (FORCE=1 regenerates)
+data: ## Generate the data set for SEED and PROFILE into var/data (FORCE=1 regenerates)
 	@if [ -z "$(FORCE)" ] && [ -f "$(DATA_DIR)/checksums.json" ] \
 		&& onepledge-datagen verify --data-dir "$(DATA_DIR)" > /dev/null 2>&1; then \
 		echo "data: $(DATA_DIR) already holds a complete data set whose checksums verify; skipping (FORCE=1 regenerates)"; \

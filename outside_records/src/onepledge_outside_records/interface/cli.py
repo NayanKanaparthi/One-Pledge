@@ -25,6 +25,7 @@ from onepledge_outside_records.infrastructure.settings import (
 from onepledge_outside_records.interface.composition import Composition
 from onepledge_outside_records.interface.output import (
     Console,
+    ProductParser,
     common_options,
     parse_arguments,
     plural,
@@ -38,7 +39,7 @@ QUIET_LEVEL = "WARNING"
 
 def build_parser() -> argparse.ArgumentParser:
     """Argument parser with the commands of SPEC 6.3."""
-    parser = argparse.ArgumentParser(
+    parser = ProductParser(
         prog="onepledge-outside",
         description="Outside records: read-only title, payment and contract lookups for bank agents.",
     )
@@ -55,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-type Commands = argparse._SubParsersAction[argparse.ArgumentParser]
+type Commands = argparse._SubParsersAction[ProductParser]
 
 
 def _add_db_commands(commands: Commands) -> None:

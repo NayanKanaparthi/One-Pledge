@@ -23,6 +23,7 @@ from onepledge_outside_records.infrastructure.logging_setup import configure_log
 from onepledge_outside_records.interface.cli import main
 from onepledge_outside_records.interface.output import Console
 from onepledge_testtools import processes
+from onepledge_testtools.command_lines import UnwrappingStream
 from onepledge_testtools.network import LOOPBACK_IPV4, WILDCARD_IPV4
 
 if TYPE_CHECKING:
@@ -53,14 +54,15 @@ type Run = Callable[..., tuple[int, str, str]]
 
 @pytest.fixture
 def run(monkeypatch: pytest.MonkeyPatch) -> Run:
-    """`run(argv, **environment)` runs the command line in-process and returns code, stdout and stderr."""
+    """`run(argv, **environment)` runs the command line in-process: code, stdout and stderr with each
+    sentence joined back into one line."""
 
     def invoke(argv: list[str], **environment: str) -> tuple[int, str, str]:
         for name in VARIABLES:
             monkeypatch.delenv(name, raising=False)
         for name, value in environment.items():
             monkeypatch.setenv(name, value)
-        out, err = io.StringIO(), io.StringIO()
+        out, err = io.StringIO(), UnwrappingStream()
         code = main(argv, Console(out, err))
         return code, out.getvalue(), err.getvalue()
 
@@ -181,7 +183,9 @@ def test_serve_refuses_json_as_a_usage_error(run: Run, capsys: pytest.CaptureFix
     with pytest.raises(SystemExit) as raised:
         run(["serve", "--json"])
     assert raised.value.code == 2
-    assert "unrecognized arguments: --json" in capsys.readouterr().err
+    assert capsys.readouterr().err.splitlines()[-1] == (
+        "onepledge-outside: the command line holds an argument this command does not take."
+    )
 
 
 @pytest.mark.parametrize(
@@ -339,7 +343,9 @@ def test_an_empty_data_dir_is_a_usage_error(run: Run, capsys: pytest.CaptureFixt
         with pytest.raises(SystemExit) as raised:
             run(["seed", "--data-dir", value])
         assert raised.value.code == 2
-    assert "--data-dir: must name a directory, not be empty" in capsys.readouterr().err
+    assert capsys.readouterr().err.splitlines()[-1] == (
+        "onepledge-outside seed: argument --data-dir must name a directory, not be empty."
+    )
 
 
 # SPEC_DECISIONS 43.6: Alembic's own INFO lines are dropped; migrate writes one record per revision.

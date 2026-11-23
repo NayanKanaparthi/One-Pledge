@@ -44,11 +44,15 @@ function), never the exception message, a source line or a local variable. No ou
 holds a Python repr: lists are comma separated, alerts are written `ROLE MATCH_KIND`, an
 empty list is `none`. The generator writes no other log line; `--quiet` is kept for one
 interface across layer 1 and its help says it has no effect.
-Human readable output is at most 100 columns: a longer line wraps onto continuation lines
-indented two more spaces, and `--wide` turns the limit off. A usage error with `--json`
-among the arguments also prints `{"ok": false, "error": {"code": "USAGE", "message": "The
-command line is not valid. See the usage text."}}` on stdout, the usage text on stderr,
-exit 2. No message ends in a colon (SPEC_DECISIONS 78).
+Every line for a human (results, errors, usage errors, help) is at most 100 columns: a
+longer line wraps onto continuation lines indented two more spaces, and `--wide` lifts the
+limit for results only. Arguments are exact (SPEC_DECISIONS 121): an abbreviated option or
+an option given twice is a usage error, and `--json` takes no value. A usage error prints
+the usage text and the product's own sentence on stderr, never the value typed (`argument
+--profile must be one of: full, small, example.`), and exits 2; with any argument starting
+`--json` it also prints `{"ok": false, "error": {"code": "USAGE", "message": "The command
+line is not valid. See the usage text."}}` on stdout. No message ends in a colon
+(SPEC_DECISIONS 78).
 `--seed` is ASCII digits only, 0 to 999,999,999,999,999,999; an empty `--out` or
 `--data-dir` is a usage error (exit 2).
 
