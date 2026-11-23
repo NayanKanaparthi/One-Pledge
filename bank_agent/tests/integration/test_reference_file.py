@@ -144,3 +144,12 @@ def test_a_reference_path_that_is_a_directory_is_named_in_the_sentence(tmp_path:
     with pytest.raises(ReferenceDataError) as raised:
         ReferenceFileSource().load(tmp_path, "HARBOR")
     assert raised.value.sentence == f"{tmp_path}/reference.json: is a directory."
+
+
+def test_a_number_literal_longer_than_30_characters_is_not_valid_json(tmp_path: Path) -> None:
+    """Decision 74: the bounded parser of decision 38 refuses it before any value is built."""
+    text = json.dumps({"lenders": LENDERS, "facilities": [HARBOR_SUMMIT]}).replace("7500000000", "1" * 31, 1)
+    (tmp_path / "reference.json").write_text(text, encoding="utf-8")
+    with pytest.raises(ReferenceDataError) as raised:
+        ReferenceFileSource().load(tmp_path, "HARBOR")
+    assert raised.value.sentence == f"{tmp_path}/reference.json: not valid JSON."

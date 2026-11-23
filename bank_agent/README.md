@@ -214,9 +214,10 @@ abbreviated, so `--json` is always spelled in full.
   facilities were inserted, updated or unchanged, with the SHA-256 of `reference.json`;
   its closing line gives the same counts, and a run that changes nothing says so and is
   audited too. `reference.json` is read as hostile input (SPEC_DECISIONS 74): at most 5
-  MiB, at most 32 levels deep, no key twice, no text the database cannot store (U+0000, a
-  surrogate code point), numbers as JSON integers only and ids in their canonical
-  spelling, and each problem is one sentence that starts with the file's path.
+  MiB, at most 32 levels deep, no key twice, no number literal of more than 30 characters, no
+  text the database cannot store (U+0000, a surrogate code point), numbers as JSON
+  integers only and ids in their canonical spelling, and each problem is one sentence that
+  starts with the file's path.
 - `worker` writes `HALT_RULE_DISABLED` at every start while
   `HALT_ON_REGISTRY_INTEGRITY_FAILURE` is false.
 - `registry sync` prints the messages processed, alerts created, case updates applied

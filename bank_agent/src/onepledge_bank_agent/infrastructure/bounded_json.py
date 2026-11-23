@@ -2,8 +2,11 @@
 
 Every answer of a shared service, every registry outbox page and the reference data file
 is hostile input. Before any value is built, the nesting depth is measured on the raw
-text (strings skipped), so no document can exhaust the parser's recursion; a key given
-twice in one object is never resolved silently; `NaN` and `Infinity` are not JSON.
+text (strings skipped), so no document can exhaust the parser's recursion; a number
+literal of more than 30 characters is refused before it is converted (decision 38); a key
+given twice in one object is never resolved silently; `NaN` and `Infinity` are not JSON.
+An outbox page lifts the number bound (`max_number_length=None`), because there a number
+too large to store is the problem of its own message, VALUE_OUT_OF_RANGE (decision 85).
 `loads` raises `JsonRefusedError` with the problem (`TOO_DEEP` or `NOT_JSON`) for each of
 these and for anything else the parser refuses, so the caller names the file or the
 dependency and nothing reaches a last resort handler.
@@ -20,6 +23,7 @@ from collections.abc import Callable
 from enum import StrEnum
 
 MAX_DEPTH = 32
+MAX_NUMBER_LENGTH = 30
 MAX_BYTES = 5 * 1024 * 1024
 _OPENING, _CLOSING = frozenset("[{"), frozenset("]}")
 
@@ -93,10 +97,21 @@ def _no_constant(constant: str) -> object:
     raise JsonRefusedError(JsonProblem.NOT_JSON)
 
 
+def _bounded(parse: Callable[[str], object], max_length: int | None) -> Callable[[str], object]:
+    """`parse` for a number literal of at most `max_length` characters (no bound when None)."""
+
+    def number(literal: str) -> object:
+        if max_length is not None and len(literal) > max_length:
+            raise JsonRefusedError(JsonProblem.NOT_JSON)
+        return parse(literal)
+
+    return number
+
+
 def loads(
     content: bytes | str,
     *,
-    max_depth: int = MAX_DEPTH,
+    max_number_length: int | None = MAX_NUMBER_LENGTH,
     mark_duplicates: bool = False,
     parse_int: Callable[[str], object] | None = None,
     parse_float: Callable[[str], object] | None = None,
@@ -106,15 +121,15 @@ def loads(
         text = content.decode("utf-8") if isinstance(content, bytes) else content
     except UnicodeDecodeError:
         raise JsonRefusedError(JsonProblem.NOT_JSON) from None
-    if nesting_depth(text) > max_depth:
+    if nesting_depth(text) > MAX_DEPTH:
         raise JsonRefusedError(JsonProblem.TOO_DEEP)
     try:
         return json.loads(
             text,
             object_pairs_hook=_mark_duplicates if mark_duplicates else _refuse_duplicates,
             parse_constant=_no_constant,
-            parse_int=parse_int,
-            parse_float=parse_float,
+            parse_int=_bounded(parse_int or int, max_number_length),
+            parse_float=_bounded(parse_float or float, max_number_length),
         )
     except RecursionError:
         raise JsonRefusedError(JsonProblem.TOO_DEEP) from None

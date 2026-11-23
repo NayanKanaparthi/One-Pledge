@@ -239,3 +239,31 @@ def test_a_trust_anchor_in_a_non_canonical_base64_spelling_is_refused() -> None:
     assert raised.value.sentence.startswith("Configuration error: REGISTRY_PUBLIC_KEYS must be")
     verifier = Ed25519SignatureVerifier({"registry-local-1": key})
     assert not verifier.verifies("registry-local-1", b"m", LOOSE_SIGNATURE)
+
+
+@pytest.mark.parametrize("literal", ["1" * 31, "-" + "1" * 30, "1." + "0" * 29])
+def test_a_number_literal_longer_than_30_characters_is_not_json(literal: str) -> None:
+    """Decisions 38 and 74: the bounded parser refuses a number literal of more than 30 characters."""
+    assert bounded_json.loads('{"n": ' + "9" * 30 + "}") == {"n": int("9" * 30)}
+    with pytest.raises(bounded_json.JsonRefusedError) as raised:
+        bounded_json.loads('{"n": ' + literal + "}")
+    assert raised.value.problem is bounded_json.JsonProblem.NOT_JSON
+
+
+def test_an_answer_with_a_number_literal_longer_than_30_characters_is_malformed() -> None:
+    long_seq = json.dumps(decided(httpx.Request("POST", "http://registry.test")).json())
+    long_seq = long_seq.replace('"as_of_seq": 9', '"as_of_seq": ' + "1" * 31, 1)
+    with pytest.raises(RegistryRejectedError) as raised:
+        registry(lambda r: httpx.Response(201, content=long_seq.encode())).submit(
+            "f" * 64, SUBMISSION, lambda: None
+        )
+    assert raised.value.reason is FailureReason.MALFORMED_RESPONSE
+
+
+def test_an_outbox_number_longer_than_30_characters_is_its_messages_problem_not_the_pages() -> None:
+    """Decision 85: a 31 digit `last_event_seq` is VALUE_OUT_OF_RANGE for that message alone."""
+    body = {**BODY, "last_event_seq": 10**30}
+    first, second = outbox_of(message("CHECKPOINT", {**SIGNED, "body": body}), message("ALERT", ALERT))
+    assert isinstance(first.payload, QuarantinedPayload)
+    assert first.payload.reason.value == "VALUE_OUT_OF_RANGE"
+    assert not isinstance(second.payload, QuarantinedPayload)

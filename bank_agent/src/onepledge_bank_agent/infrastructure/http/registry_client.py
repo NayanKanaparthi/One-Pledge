@@ -270,7 +270,11 @@ class RegistryHttpClient:
         response = self._ok(self._caller.get(OUTBOX, OUTBOX, {"limit": limit}))
         try:
             page = bounded_json.loads(
-                response.content, mark_duplicates=True, parse_float=_FloatText, parse_int=_integer
+                response.content,
+                max_number_length=None,
+                mark_duplicates=True,
+                parse_float=_FloatText,
+                parse_int=_integer,
             )
         except ValueError:
             raise RegistryProtocolError(response.status_code) from None
