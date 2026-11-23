@@ -52,6 +52,9 @@ def test_reference_entities_validate_their_fields() -> None:
         replace(BASE, code="harbor")
     with pytest.raises(InvalidValueError):
         replace(BASE, credit_limit_cents=-1)
+    assert replace(BASE, credit_limit_cents=2**63 - 1).credit_limit_cents == 2**63 - 1
+    with pytest.raises(InvalidValueError):
+        replace(BASE, credit_limit_cents=2**63)  # does not fit the bigint column
     with pytest.raises(InvalidValueError):
         replace(BASE, advance_rate_bps=10_001)
     with pytest.raises(InvalidValueError):

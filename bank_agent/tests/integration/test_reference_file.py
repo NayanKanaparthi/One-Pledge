@@ -39,6 +39,9 @@ def facility(code: str, bank: str, lender: str) -> dict[str, object]:
     }  # fmt: skip
 
 
+HARBOR_SUMMIT = facility("HARBOR-SUMMIT", "HARBOR", "SUMMIT")
+
+
 def write(directory: Path, content: object) -> Path:
     (directory / "reference.json").write_text(json.dumps(content), encoding="utf-8")
     return directory
@@ -95,6 +98,33 @@ def test_a_missing_file_writes_nothing_and_is_refused(tmp_path: Path) -> None:
         (
             {"lenders": LENDERS, "facilities": [facility("bad code", "HARBOR", "SUMMIT")]},
             "reference.json has an invalid facility_code.",
+        ),
+        (
+            {"lenders": [{**LENDERS[0], "legal_name": "Summit\x00"}], "facilities": [HARBOR_SUMMIT]},
+            "{dir}/reference.json: holds text that cannot be stored.",
+        ),
+        (
+            {"lenders": [{**LENDERS[0], "legal_name": "Summit\ud800"}], "facilities": [HARBOR_SUMMIT]},
+            "{dir}/reference.json: holds text that cannot be stored.",
+        ),
+        (
+            {"lenders": LENDERS, "facilities": [{**HARBOR_SUMMIT, "credit_limit_cents": 7_500_000_000.0}]},
+            "{dir}/reference.json: not a reference data file.",
+        ),
+        (
+            {"lenders": LENDERS, "facilities": [{**HARBOR_SUMMIT, "advance_rate_bps": "8500"}]},
+            "{dir}/reference.json: not a reference data file.",
+        ),
+        (
+            {
+                "lenders": [{**LENDERS[0], "lender_id": LENDERS[0]["lender_id"].upper()}],
+                "facilities": [HARBOR_SUMMIT],
+            },
+            "{dir}/reference.json: not a reference data file.",
+        ),
+        (
+            {"lenders": LENDERS, "facilities": [{**HARBOR_SUMMIT, "credit_limit_cents": 2**63}]},
+            "reference.json has an invalid credit_limit_cents.",
         ),
     ],
 )

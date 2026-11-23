@@ -1,14 +1,16 @@
 """Reads one bank's lenders and facilities from datagen's `reference.json` (SPEC 5.3, 19 `seed-reference`).
 
 The file is hostile input (SPEC_DECISIONS 74): at most 5 MiB, parsed by the bounded parser
-(nesting at most 32 levels, no key twice in one object, no `NaN`), and every problem is one
-sentence that starts with the file's path: "PATH: no such file.", "PATH: larger than 5 MiB.",
-"PATH: nests too deeply.", "PATH: not valid JSON." or "PATH: not a reference data file."
+(nesting at most 32 levels, no key twice in one object, no `NaN`), holding no text the bank
+cannot store (U+0000, a surrogate code point), then validated with strict types (a number is
+a JSON integer, never a fraction or a string; an id is a UUID in its canonical spelling,
+SPEC_DECISIONS 75). Every problem is one sentence that starts with the file's path: "PATH: no
+such file.", "PATH: larger than 5 MiB.", "PATH: nests too deeply.", "PATH: not valid JSON.",
+"PATH: holds text that cannot be stored." or "PATH: not a reference data file."
 """
 
 from __future__ import annotations
 
-import uuid
 from datetime import date
 from pathlib import Path
 from types import MappingProxyType
@@ -22,6 +24,8 @@ from onepledge_bank_agent.domain.enums import FacilityStatus
 from onepledge_bank_agent.domain.errors import InvalidValueError, ReferenceDataError
 from onepledge_bank_agent.domain.values import Lei
 from onepledge_bank_agent.infrastructure import bounded_json
+from onepledge_bank_agent.infrastructure.encodings import holds_unstorable_text
+from onepledge_bank_agent.infrastructure.http.answers import CanonicalUuid
 
 REFERENCE_FILE = "reference.json"
 PROBLEMS = MappingProxyType(
@@ -33,18 +37,18 @@ PROBLEMS = MappingProxyType(
 
 
 class _Entry(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
 
 class _LenderEntry(_Entry):
-    lender_id: uuid.UUID
+    lender_id: CanonicalUuid
     lender_code: str
     legal_name: str
     lei: str
 
 
 class _FacilityEntry(_Entry):
-    facility_id: uuid.UUID
+    facility_id: CanonicalUuid
     facility_code: str
     bank_code: str
     lender_code: str
@@ -67,10 +71,14 @@ class ReferenceFileSource:
         path = data_dir / REFERENCE_FILE
         content = self._content(path)
         try:
-            parsed = _ReferenceFile.model_validate(bounded_json.loads(content))
+            document = bounded_json.loads(content)
         except bounded_json.JsonRefusedError as refused:
             problem = PROBLEMS[refused.problem]
             raise ReferenceDataError(f"{path}: {problem}.") from None
+        if holds_unstorable_text(document):
+            raise ReferenceDataError(f"{path}: holds text that cannot be stored.")
+        try:
+            parsed = _ReferenceFile.model_validate_json(content)
         except ValidationError:
             raise ReferenceDataError(f"{path}: not a reference data file.") from None
         facilities = [entry for entry in parsed.facilities if entry.bank_code == bank_code]

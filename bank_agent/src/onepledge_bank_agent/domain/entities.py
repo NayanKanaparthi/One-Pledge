@@ -23,6 +23,8 @@ from onepledge_bank_agent.domain.values import KeyVersion, Lei, Sha256Hex
 
 _FACILITY_CODE = re.compile(r"^[A-Z0-9-]{3,40}$")
 MAX_ADVANCE_RATE_BPS = 10_000
+MAX_CREDIT_LIMIT_CENTS = 2**63 - 1
+"""`credit_limit_cents` is a `bigint` (SPEC 12.1)."""
 MAX_ITEMS_PER_REQUEST = 500
 
 
@@ -57,7 +59,7 @@ class Facility:
         """Code shape and numeric ranges of SPEC 12.1."""
         if not _FACILITY_CODE.fullmatch(self.code):
             raise InvalidValueError("facility_code", "PATTERN_MISMATCH")
-        if self.credit_limit_cents < 0:
+        if not 0 <= self.credit_limit_cents <= MAX_CREDIT_LIMIT_CENTS:
             raise InvalidValueError("credit_limit_cents", "OUT_OF_RANGE")
         if not 0 <= self.advance_rate_bps <= MAX_ADVANCE_RATE_BPS:
             raise InvalidValueError("advance_rate_bps", "OUT_OF_RANGE")
