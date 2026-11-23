@@ -9,7 +9,11 @@ from pathlib import Path
 import pytest
 
 from onepledge_outside_records.infrastructure.db.role_check import GRANT_MATRIX
-from onepledge_testtools.declarations import undeclared_test_requirements
+from onepledge_testtools.declarations import (
+    runtime_declared,
+    undeclared_source_imports,
+    undeclared_test_requirements,
+)
 from onepledge_testtools.repository_rules import (
     markdown_files,
     markdown_problems,
@@ -226,3 +230,13 @@ def test_the_grant_matrix_is_spec_6_1_select_on_the_four_tables_and_nothing_else
 def test_the_tests_need_nothing_the_package_does_not_declare() -> None:
     """The root plugins and every third party import of the tests are declared (SPEC_DECISIONS 117)."""
     assert undeclared_test_requirements(PACKAGE_DIR, PACKAGE_DIR / "tests") == []
+
+
+def test_every_import_of_the_source_is_declared() -> None:
+    """SPEC 2.1 and SPEC_DECISIONS 120: a runtime import is declared by the package that makes it."""
+    assert undeclared_source_imports(PACKAGE_DIR, SOURCE) == []
+
+
+def test_the_web_allow_list_is_what_the_package_declares() -> None:
+    """Each web package the architecture test allows is a declared dependency (SPEC_DECISIONS 120)."""
+    assert runtime_declared(PACKAGE_DIR) >= WEB_PACKAGES

@@ -10,7 +10,10 @@ import pytest
 
 from onepledge_datagen.domain.errors import DataGenError
 from onepledge_datagen.domain.oracle.cleaning import TapeFormatError
-from onepledge_testtools.declarations import undeclared_test_requirements
+from onepledge_testtools.declarations import (
+    undeclared_source_imports,
+    undeclared_test_requirements,
+)
 from onepledge_testtools.repository_rules import markdown_files, markdown_problems, source_tree_problems
 
 pytestmark = pytest.mark.unit
@@ -183,3 +186,8 @@ def test_every_markdown_file_of_the_package_renders_its_tables_whole() -> None:
 def test_the_tests_need_nothing_the_package_does_not_declare() -> None:
     """The root plugins and every third party import of the tests are declared (SPEC_DECISIONS 117)."""
     assert undeclared_test_requirements(PACKAGE_DIR, PACKAGE_DIR / "tests") == []
+
+
+def test_every_import_of_the_source_is_declared() -> None:
+    """SPEC 2.1 and SPEC_DECISIONS 120: a runtime import is declared by the package that makes it."""
+    assert undeclared_source_imports(PACKAGE_DIR, SOURCE) == []

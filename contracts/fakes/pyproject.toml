@@ -9,6 +9,7 @@ description = "TEST DOUBLES of the layer 2 key holder and registry, plus the con
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.110",
+  "starlette>=0.37",
   "uvicorn>=0.29",
   "pydantic>=2.6",
   "oprf>=5.0",
