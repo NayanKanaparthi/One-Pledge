@@ -103,7 +103,7 @@ class PoisonRecorder:
     def quarantine(self, message: OutboxMessage, poison: Poison) -> bool:
         """Store and audit the message as poison; False when it was already held (a redelivery)."""
         evidence = message.evidence
-        held = QuarantinedPayload(poison.reason, evidence.payload, evidence.payload_sha256)
+        held = QuarantinedPayload(poison.reason, evidence.payload, evidence.payload_sha256, evidence.withheld)
         row = QuarantinedMessage(
             self._ids.new_id(), message.message_id, message.position, message.message_type, held,
             self._clock.now(),

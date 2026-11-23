@@ -10,6 +10,9 @@ the submit stage.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import uuid
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
@@ -83,3 +86,57 @@ def test_checkpoints_with_numbers_too_large_to_store_are_quarantined_and_nothing
     integrity = agent.report()
     assert integrity.registry_messages.status is SectionStatus.BROKEN
     assert integrity.registry_messages.quarantined == 2
+
+
+def escaped_sha256(payload: dict[str, object]) -> str:
+    """The hash a withheld payload is kept by: its canonical JSON with every non-ASCII character escaped."""
+    text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("ascii")).hexdigest()
+
+
+def test_messages_holding_text_postgresql_cannot_store_are_quarantined_by_their_hash_and_acknowledged(
+    agent: BankAgentHarness, bank_db: BankDatabase, small_data: Path, doubles: InProcessDoubles
+) -> None:
+    """U+0000 is refused by `jsonb` and a lone surrogate has no UTF-8 form. Before migration 0011 the
+    quarantine insert itself was refused, the message was never acknowledged and blocked the outbox."""
+    alert: dict[str, object] = {
+        "case_id": str(uuid.uuid4()), "role": "HOLDER", "asset_token": "d" * 64, "match_kind": "EXACT",
+        "match_basis": "ASSET", "kinds_matched": ["ASSET"], "opened_seq": 4,
+    }  # fmt: skip
+    note = {**body(), "note": "\x00"}
+    signed: dict[str, object] = {"body": note, "signature": SIGNATURE, "signing_key_id": "registry-local-1"}
+    poison: list[tuple[str, dict[str, object]]] = [
+        ("ALERT", {**alert, "opened_seq": None, "note": "a\x00b"}),
+        ("CHECKPOINT", signed),
+        ("ALERT", {**alert, "note": "\ud800"}),
+    ]
+    for kind, payload in poison:
+        doubles.inject_message("HARBOR", kind, payload)
+    doubles.inject_message("HARBOR", "ALERT", alert)  # matches no loan of this bank: applied, not poison
+    agent.sync()
+    held = pairs(
+        bank_db,
+        "SELECT payload_sha256, reason || ' ' || (payload IS NULL)::text FROM registry_messages_quarantined",
+    )
+    assert held == {escaped_sha256(payload): "SCHEMA_MISMATCH true" for _, payload in poison}
+    audited = pairs(
+        bank_db,
+        "SELECT a.detail->>'payload_sha256', a.detail->>'reason' FROM audit_log a "
+        "WHERE a.action = 'REGISTRY_MESSAGE_QUARANTINED'",
+    )
+    assert audited == dict.fromkeys(held, "SCHEMA_MISMATCH")
+    unmatched = pairs(bank_db, "SELECT 'n', count(*)::text FROM audit_log WHERE action = 'ALERT_UNMATCHED'")
+    assert unmatched == {"n": "1"}, "the message after the poison ones was applied"
+    assert doubles.forged_pending("HARBOR") == 0, "all four acknowledged"
+    tape = agent.ingest(small_data / TAPE, "HARBOR-LAKESIDE", TapeKind.PLEDGE, AS_OF)
+    assert agent.run_worker().task_failures == []
+    status = pairs(
+        bank_db,
+        "SELECT 'x', status || ' ' || coalesce(failure_code, '') FROM tape_submissions "
+        "WHERE submission_id = %s",
+        (tape.submission_id,),
+    )
+    assert status == {"x": "FAILED REGISTRY_INTEGRITY_BROKEN"}, "it ran up to submit; the halt holds"
+    integrity = agent.report()
+    assert integrity.registry_messages.status is SectionStatus.BROKEN
+    assert integrity.registry_messages.quarantined == len(poison)

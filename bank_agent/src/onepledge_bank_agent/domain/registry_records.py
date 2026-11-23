@@ -155,25 +155,33 @@ class CaseNotice:
 
 @dataclass(frozen=True)
 class MessageEvidence:
-    """An outbox message's payload as received, kept for quarantine: the payload (None when its
-    serialised form exceeds 64 KiB) and the SHA-256 of its canonical form."""
+    """An outbox message's payload as received, kept for quarantine, and the SHA-256 of its serialised form.
+
+    The payload is withheld (kept as its hash alone, `payload` None) when its serialised
+    form exceeds 64 KiB (`oversized`) or when it holds text the bank cannot store (U+0000
+    or a surrogate code point).
+    """
 
     payload: JsonValue
     payload_sha256: str
     oversized: bool = False
+    withheld: bool = False
 
 
 @dataclass(frozen=True)
 class QuarantinedPayload:
-    """The payload of a known message type that breaks the contract, kept as evidence (SPEC_DECISIONS 57).
+    """The payload of a known message type that breaks the contract, kept as evidence (SPEC_DECISIONS 57, 85).
 
-    `payload` is the payload as received, or None when its serialised form exceeds 64 KiB
-    (reason OVERSIZED); `payload_sha256` is always the hash of that serialised form.
+    `payload` is the payload as received. When `withheld` it is None and only
+    `payload_sha256` is kept: always for reason OVERSIZED (over 64 KiB), and for a payload
+    holding text the bank cannot store. `payload_sha256` is always the hash of the
+    serialised form.
     """
 
     reason: QuarantineReason
     payload: JsonValue
     payload_sha256: str
+    withheld: bool = False
 
 
 type MessagePayload = AlertNotice | CaseNotice | SignedCheckpoint | QuarantinedPayload | None

@@ -224,6 +224,29 @@ class TestQuarantine:
         with ports.units() as unit:
             assert unit.evidence.quarantine.all() == [earlier, later]
 
+    def test_a_withheld_payload_is_kept_as_its_hash_and_told_apart_from_a_json_null(
+        self, ports: PortWorld
+    ) -> None:
+        """Migration 0011: a payload the bank cannot store is withheld like an oversized one; a payload the
+        registry sent as JSON null is kept as such."""
+        base = quarantined(received=at(1))
+        withheld = replace(base, quarantined=replace(base.quarantined, payload=None, withheld=True))
+        sent_null = replace(quarantined(received=at(2)), quarantined=replace(base.quarantined, payload=None))
+        with ports.units() as unit:
+            assert unit.evidence.quarantine.add(withheld)
+            assert unit.evidence.quarantine.add(sent_null)
+            unit.commit()
+        with ports.units() as unit:
+            assert unit.evidence.quarantine.all() == [withheld, sent_null]
+
+    def test_an_oversized_payload_that_is_not_withheld_is_refused(self, ports: PortWorld) -> None:
+        oversized = quarantined(reason=QuarantineReason.OVERSIZED)
+        held = replace(oversized.quarantined, payload={"x": 1}, withheld=False)
+        kept = replace(oversized, quarantined=held)
+        with pytest.raises(StoreRefusedError) as raised, ports.units() as unit:
+            unit.evidence.quarantine.add(kept)
+        assert raised.value.sqlstate == "23514"
+
 
 class TestIntegrityRuns:
     """`integrity_runs`."""

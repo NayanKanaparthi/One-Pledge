@@ -17,8 +17,10 @@ number too large) or SCHEMA_MISMATCH, so the sync keeps it as evidence and the o
 never blocked. A number with a fraction or an exponent, or an integer literal of more
 than 4000 digits, is kept as its text. An id or a base64 value that is not spelled
 canonically, or an object that holds a key twice, fails the schema (SPEC_DECISIONS 74, 75),
-for a message of an unknown type too. Only a message without a parseable id or a type, or
-a page that is not one bounded JSON document (`bounded_json`), is a protocol error of the page.
+for a message of an unknown type too. A known message holding text the bank cannot store
+(U+0000 or a surrogate code point, `holds_unstorable_text`) fails it as well, and its payload
+is kept as its hash alone. Only a message without a parseable id or a usable type, or a page
+that is not one bounded JSON document (`bounded_json`), is a protocol error of the page.
 """
 
 from __future__ import annotations
@@ -54,7 +56,7 @@ from onepledge_bank_agent.domain.registry_records import (
 )
 from onepledge_bank_agent.domain.values import KeyVersion
 from onepledge_bank_agent.infrastructure import bounded_json
-from onepledge_bank_agent.infrastructure.encodings import canonical_uuid
+from onepledge_bank_agent.infrastructure.encodings import canonical_uuid, holds_unstorable_text
 from onepledge_bank_agent.infrastructure.http import classification
 from onepledge_bank_agent.infrastructure.http.answers import error_code, json_object, parse, plain_json
 from onepledge_bank_agent.infrastructure.http.base import JsonBody, OutboundRequest, RetryingHttpCaller
@@ -140,11 +142,22 @@ def _validation_copy(value: object) -> object:
     return value
 
 
+def _serialised(payload: JsonValue, unstorable: bool) -> bytes:
+    """The form a payload is hashed in: its canonical JSON, or, when it holds text the bank cannot store,
+    its canonical JSON with every character outside ASCII escaped (a surrogate has no UTF-8 form)."""
+    if not unstorable:
+        return canonical_json(payload)
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+
+
 def _evidence(payload: JsonValue) -> MessageEvidence:
-    """The payload as received and its hash; only the hash when it exceeds 64 KiB."""
-    serialised = canonical_json(payload)
+    """The payload as received and its hash; only the hash when it exceeds 64 KiB or holds text the bank
+    cannot store."""
+    unstorable = holds_unstorable_text(payload)
+    serialised = _serialised(payload, unstorable)
     oversized = len(serialised) > MAX_QUARANTINED_PAYLOAD_BYTES
-    return MessageEvidence(None if oversized else payload, sha256_hex(serialised), oversized)
+    withheld = oversized or unstorable
+    return MessageEvidence(None if withheld else payload, sha256_hex(serialised), oversized, withheld)
 
 
 def _rejection(model: type[BaseModel], value: object, evidence: MessageEvidence) -> QuarantineReason | None:
@@ -179,17 +192,23 @@ def message_id_is_canonical(document: Mapping[str, JsonValue]) -> bool:
 def outbox_message(value: object, status: int) -> OutboxMessage:
     """One outbox message: its notice, or a `QuarantinedPayload` with the reason it fails rule 1 of
     SPEC_DECISIONS 85. Only a message without a usable id or type is a protocol error of the page."""
-    envelope = _validate(MessageEnvelope, value, status)
     document = json_object(value)
+    envelope = _validate(
+        MessageEnvelope, {"message_id": document.get("message_id"), "type": document.get("type")}, status
+    )
     evidence = _evidence(document.get("payload"))
     position = _position(value)
     model = KNOWN_MESSAGES.get(envelope.type)
     well_formed = message_id_is_canonical(document) and not bounded_json.holds_duplicate_key(value)
     if model is None and well_formed:
         return OutboxMessage(envelope.message_id, position, envelope.type, None, evidence)
-    reason = _rejection(model, value, evidence) if model is not None and well_formed else SCHEMA_MISMATCH
+    reason = (
+        _rejection(model, value, evidence)
+        if model is not None and well_formed and not holds_unstorable_text(value)
+        else SCHEMA_MISMATCH
+    )
     if reason is not None:
-        quarantined = QuarantinedPayload(reason, evidence.payload, evidence.payload_sha256)
+        quarantined = QuarantinedPayload(reason, evidence.payload, evidence.payload_sha256, evidence.withheld)
         return OutboxMessage(envelope.message_id, position, envelope.type, quarantined, evidence)
     payload: MessagePayload
     if envelope.type == "ALERT":

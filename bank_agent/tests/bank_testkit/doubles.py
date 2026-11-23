@@ -37,6 +37,7 @@ REGISTRY_URL = "http://registry.test"
 KEY_HOLDER_URLS = {"kh1": "http://key-holder-1.test", "kh2": "http://key-holder-2.test"}
 SIGNING_KEY_ID = "registry-test-1"
 CONTROL_HEADER = "X-Test-Control-Key"
+JSON_TYPE = "application/json"
 BANKS = ("HARBOR", "NORTHGATE", "CALDER")
 
 
@@ -169,7 +170,8 @@ class InProcessDoubles:
             page = answer.json()
             last = max((message["position"] for message in page["messages"]), default=0)
             extra = [{**message, "position": last + n} for n, message in enumerate(forged, start=1)]
-            return httpx.Response(200, json={**page, "messages": [*page["messages"], *extra]})
+            content = json.dumps({**page, "messages": [*page["messages"], *extra]})  # escapes as the wire may
+            return httpx.Response(200, content=content.encode("ascii"), headers={"content-type": JSON_TYPE})
         return httpx.Response(answer.status_code, headers=answer.headers, content=answer.content)
 
     def tamper_certificate(self, certificate_id: str) -> dict[str, Any]:

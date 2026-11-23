@@ -209,9 +209,10 @@ def quarantined(
     reason: QuarantineReason = QuarantineReason.SCHEMA_MISMATCH,
     received: datetime = T0,
 ) -> QuarantinedMessage:
-    """A quarantined outbox message; an OVERSIZED one keeps no payload."""
-    payload: JsonValue = None if reason is QuarantineReason.OVERSIZED else {"unexpected": True}
-    held = QuarantinedPayload(reason, payload, hex64(message_type).value)
+    """A quarantined outbox message; an OVERSIZED one keeps no payload (it is withheld)."""
+    oversized = reason is QuarantineReason.OVERSIZED
+    payload: JsonValue = None if oversized else {"unexpected": True}
+    held = QuarantinedPayload(reason, payload, hex64(message_type).value, withheld=oversized)
     return QuarantinedMessage(uuid.uuid4(), message_id or uuid.uuid4(), 4, message_type, held, received)
 
 

@@ -1,7 +1,8 @@
 """Clients of the outside records service: titles, payments and contracts (`contracts/outside_records.yaml`).
 
-Responses are parsed into models that ignore unknown fields (additive evolution) and
-enforce the required ones. A 404 means "no record" only when the error code says so;
+Responses are read with the bounds of every answer (`answers.plain_json`, SPEC_DECISIONS
+74), then parsed into models that ignore unknown fields (additive evolution) and enforce
+the required ones. A 404 means "no record" only when the error code says so;
 every other failure is classified by `classification.py` (SPEC_DECISIONS 49), and an
 answer outside the contract or about another vehicle is MALFORMED_RESPONSE.
 """
@@ -22,7 +23,7 @@ from onepledge_bank_agent.domain.outside_records import (
     TitleRecord,
 )
 from onepledge_bank_agent.domain.vin import Vin
-from onepledge_bank_agent.infrastructure.http.answers import CanonicalUuid
+from onepledge_bank_agent.infrastructure.http.answers import CanonicalUuid, plain_json
 from onepledge_bank_agent.infrastructure.http.base import RetryingHttpCaller
 from onepledge_bank_agent.infrastructure.http.classification import failure
 
@@ -90,9 +91,12 @@ def _not_found(response: httpx.Response, code: str) -> bool:
 
 
 def _parse[M: BaseModel](model: type[M], response: httpx.Response) -> M:
+    """The model of a body read within the bounds of every answer (`plain_json`: no key twice, at most 32
+    levels deep, no float, no text the bank cannot store), then validated."""
     try:
+        plain_json(response)
         return model.model_validate_json(response.content)
-    except ValidationError:
+    except (ValidationError, ValueError):
         raise OutsideRecordsProtocolError(response.status_code) from None
 
 

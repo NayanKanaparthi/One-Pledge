@@ -34,6 +34,7 @@ from onepledge_bank_agent.domain.registry_records import (
     SignedCertificate,
     SignedCheckpoint,
 )
+from onepledge_bank_agent.infrastructure.encodings import holds_unstorable_text
 from onepledge_bank_agent.infrastructure.http.answers import (
     CanonicalUuid,
     Strict,
@@ -207,13 +208,21 @@ class CasePayloadBody(Strict):
         return CaseNotice(self.case_id, self.asset_token, self.status, self.resolved_seq)
 
 
+def _storable(text: str) -> str:
+    """A type the bank can store and name: no U+0000 and no surrogate code point."""
+    if holds_unstorable_text(text):
+        raise ValueError("type")
+    return text
+
+
 class MessageEnvelope(Strict):
     """What the bank needs to acknowledge any outbox message, whatever its type and the rest of it. The id
     is read in any spelling the uuid module parses, so a message whose id is not canonical can still be
-    quarantined and acknowledged; `MessageBody` and `message_id_is_canonical` refuse that spelling."""
+    quarantined and acknowledged; `MessageBody` and `message_id_is_canonical` refuse that spelling. A type
+    the bank cannot store is no usable type."""
 
     message_id: uuid.UUID
-    type: Annotated[str, Field(min_length=1, max_length=64)]
+    type: Annotated[str, Field(min_length=1, max_length=64), AfterValidator(_storable)]
 
 
 class MessageBody(Strict):

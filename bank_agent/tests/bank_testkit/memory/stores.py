@@ -30,7 +30,14 @@ from onepledge_bank_agent.domain.entities import (
     Lender,
     RegistryRequest,
 )
-from onepledge_bank_agent.domain.enums import LoanState, RequestOrigin, RowDisposition, TapeStatus, TokenKind
+from onepledge_bank_agent.domain.enums import (
+    LoanState,
+    QuarantineReason,
+    RequestOrigin,
+    RowDisposition,
+    TapeStatus,
+    TokenKind,
+)
 from onepledge_bank_agent.domain.errors import ConcurrentUploadError, ReferenceDataError
 from onepledge_bank_agent.domain.integrity import DatabaseControl
 from onepledge_bank_agent.domain.loan import Loan
@@ -384,6 +391,9 @@ class _Quarantine:
         self._state = state
 
     def add(self, message: QuarantinedMessage) -> bool:
+        held_payload = message.quarantined
+        if held_payload.reason is QuarantineReason.OVERSIZED and not held_payload.withheld:
+            raise StoreRefusedError("23514", "23514", "ck_registry_messages_quarantined_payload")
         if any(held.message_id == message.message_id for held in self._state.quarantined):
             return False
         self._state.quarantined.append(message)

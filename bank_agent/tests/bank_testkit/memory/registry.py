@@ -49,6 +49,7 @@ from onepledge_bank_agent.domain.enums import (
     FailureReason,
     MatchBasis,
     MatchKind,
+    QuarantineReason,
     RegistryItemResult,
     TapeKind,
     TokenKind,
@@ -348,7 +349,12 @@ class ScriptedRegistry:
         """Queue one outbox message."""
         wire = wire_payload(payload)
         evidence = (
-            MessageEvidence(payload.payload, payload.payload_sha256, payload.payload is None)
+            MessageEvidence(
+                payload.payload,
+                payload.payload_sha256,
+                payload.reason is QuarantineReason.OVERSIZED,
+                payload.withheld,
+            )
             if isinstance(payload, QuarantinedPayload)
             else MessageEvidence(wire, sha256_hex(canonical_json(wire)))
         )

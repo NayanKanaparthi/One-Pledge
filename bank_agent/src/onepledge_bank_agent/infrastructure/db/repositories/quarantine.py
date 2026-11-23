@@ -1,4 +1,8 @@
-"""`SqlQuarantineRepository`: `registry_messages_quarantined` (insert-only, SPEC_DECISIONS 57)."""
+"""`SqlQuarantineRepository`: `registry_messages_quarantined` (insert-only, SPEC_DECISIONS 57, 85).
+
+A withheld payload (oversized, or holding text the bank cannot store) is stored as SQL NULL
+beside its hash; a payload the registry sent as JSON `null` is stored as JSON `null`.
+"""
 
 from __future__ import annotations
 
@@ -22,7 +26,6 @@ class SqlQuarantineRepository:
     def add(self, message: QuarantinedMessage) -> bool:
         """Insert one row; False when the message is already quarantined (a delivery repeated)."""
         quarantined = message.quarantined
-        oversized = quarantined.reason is QuarantineReason.OVERSIZED
         statement = (
             insert(QuarantinedMessageRow)
             .values(
@@ -30,7 +33,7 @@ class SqlQuarantineRepository:
                 message_id=message.message_id,
                 position=message.position,
                 message_type=message.message_type,
-                payload=null() if oversized else quarantined.payload,
+                payload=null() if quarantined.withheld else quarantined.payload,
                 payload_sha256=quarantined.payload_sha256,
                 reason=quarantined.reason.value,
                 received_at=message.received_at,
@@ -53,12 +56,15 @@ class SqlQuarantineRepository:
 
     def all(self) -> list[QuarantinedMessage]:
         """Every quarantined message, oldest first."""
-        statement = select(QuarantinedMessageRow).order_by(
+        withheld = QuarantinedMessageRow.payload.is_(null())  # SQL NULL, not a JSON null payload
+        statement = select(QuarantinedMessageRow, withheld).order_by(
             QuarantinedMessageRow.received_at, QuarantinedMessageRow.quarantine_id
         )
         found = []
-        for row in self._session.execute(statement).scalars():
-            held = QuarantinedPayload(QuarantineReason(row.reason), row.payload, row.payload_sha256)
+        for row, kept_as_hash in self._session.execute(statement):
+            held = QuarantinedPayload(
+                QuarantineReason(row.reason), row.payload, row.payload_sha256, bool(kept_as_hash)
+            )
             found.append(
                 QuarantinedMessage(
                     row.quarantine_id, row.message_id, row.position, row.message_type, held, row.received_at

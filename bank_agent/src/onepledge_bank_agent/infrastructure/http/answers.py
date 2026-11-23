@@ -5,7 +5,9 @@ mode (wrong types, missing fields and out of range values are refused; unknown f
 are ignored, for additive evolution), and once as plain JSON with floats refused, which
 is the form a signature is checked over. Identifiers and base64 values must be spelled
 canonically (`CanonicalUuid`, `CanonicalBase64`, SPEC_DECISIONS 75); any other spelling
-fails the model like a wrong type. A body that does not parse is MALFORMED_RESPONSE
+fails the model like a wrong type. A body holding text the bank cannot store (U+0000, which
+PostgreSQL refuses, or a surrogate code point, which UTF-8 cannot carry) is refused before
+any of it is stored. A body that does not parse is MALFORMED_RESPONSE
 (SPEC_DECISIONS 49); a status that is not a success is classified in `classification.py`.
 """
 
@@ -20,7 +22,11 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, ValidationError
 
 from onepledge_bank_agent.domain.canonical_json import JsonValue
 from onepledge_bank_agent.infrastructure import bounded_json
-from onepledge_bank_agent.infrastructure.encodings import canonical_base64, canonical_uuid
+from onepledge_bank_agent.infrastructure.encodings import (
+    canonical_base64,
+    canonical_uuid,
+    holds_unstorable_text,
+)
 from onepledge_bank_agent.infrastructure.http.classification import DependencyErrors
 
 
@@ -66,8 +72,12 @@ def _refuse_float(text: str) -> float:
 
 def plain_json(response: httpx.Response) -> object:
     """The body as plain JSON within the bounds of `bounded_json` (no key twice, at most 32 levels deep),
-    refusing floats; raises `ValueError` when it is not such a document (SPEC_DECISIONS 74)."""
-    return bounded_json.loads(response.content, parse_float=_refuse_float)
+    refusing floats and text the bank cannot store (U+0000, a surrogate code point); raises `ValueError`
+    when it is not such a document (SPEC_DECISIONS 74)."""
+    document = bounded_json.loads(response.content, parse_float=_refuse_float)
+    if holds_unstorable_text(document):
+        raise ValueError("unstorable text")
+    return document
 
 
 def error_code(response: httpx.Response) -> str | None:
