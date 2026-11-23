@@ -16,6 +16,7 @@ from onepledge_bank_agent.infrastructure.operator_errors import (
     OperatorError,
 )
 
+STARTUP_CHECK_FAILED = "STARTUP_CHECK_FAILED"
 UNDEFINED_TABLE = "42P01"
 INSUFFICIENT_PRIVILEGE = "42501"
 SERVER_ANSWERED = "FATAL:"
@@ -87,4 +88,14 @@ def not_a_superuser() -> OperatorError:
     return OperatorError(
         "PG_ADMIN_URL connects as a role that is not a superuser; db provision needs a superuser.",
         CONFIGURATION_ERROR,
+    )
+
+
+def startup_check_refused(check: str, error: BaseException) -> OperatorError:
+    """A statement the database refused inside the named startup check (SPEC_DECISIONS 104)."""
+    return OperatorError(
+        f"The database refused a statement of the startup check {check} "
+        f"(SQLSTATE {sqlstate(error) or 'unknown'}); check the settings of the role of DATABASE_URL "
+        "and of its database.",
+        STARTUP_CHECK_FAILED,
     )

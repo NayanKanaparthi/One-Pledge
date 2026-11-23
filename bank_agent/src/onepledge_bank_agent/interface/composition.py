@@ -67,6 +67,7 @@ from onepledge_bank_agent.infrastructure.db.controls import SqlDatabaseControlIn
 from onepledge_bank_agent.infrastructure.db.engines import DatabaseTarget, EngineSet
 from onepledge_bank_agent.infrastructure.db.locks import SqlOutboxLock, SqlSubmissionLocks
 from onepledge_bank_agent.infrastructure.db.migrations import MigrationRunner, SchemaInspector, head_revision
+from onepledge_bank_agent.infrastructure.db.probe import DatabaseProbe
 from onepledge_bank_agent.infrastructure.db.provisioning import DatabaseProvisioner
 from onepledge_bank_agent.infrastructure.db.role_guard import OwnerRoleGuard, RuntimeRoleGuard
 from onepledge_bank_agent.infrastructure.db.session import SqlUnitOfWorkFactory
@@ -178,6 +179,10 @@ class RuntimeComposition(_Resources):
     def schema(self) -> SchemaInspector:
         """The schema revision, read as the app role."""
         return SchemaInspector(self._engines.engine(self._settings.require_database_url()))
+
+    def probe(self) -> DatabaseProbe:
+        """The reachability and session checks of startup, on the inspecting engine of DATABASE_URL."""
+        return DatabaseProbe(self._engines.engine(self._settings.require_database_url(), inspecting=True))
 
     def role_guard(self) -> RuntimeRoleGuard:
         """The check that the runtime role holds the app role's grants and nothing more."""

@@ -34,6 +34,7 @@ from onepledge_bank_agent.interface.cli.registry_commands import (
     registry_sync,
     sync_incomplete_sentence,
 )
+from onepledge_bank_agent.interface.cli.startup import start_runtime
 from onepledge_bank_agent.interface.composition import AdminComposition, Collaborators, RuntimeComposition
 
 QUIET_LEVEL = "WARNING"
@@ -271,8 +272,7 @@ def _worker(arguments: argparse.Namespace, output: Output, collaborators: Collab
     settings = load_runtime_settings()
     _route_logs(settings.bank_code, settings.log_level, arguments.quiet)
     with database_errors_as_operator_errors(), RuntimeComposition(settings, collaborators) as composition:
-        composition.schema().require_head()
-        composition.role_guard().require_least_privilege()
+        start_runtime(composition)
         composition.startup_record().run(WORKER_PROCESS)
         worker, stop = composition.worker(), composition.stop_signal()
 
@@ -318,9 +318,6 @@ def _runtime_command(
     _route_logs(settings.bank_code, settings.log_level, arguments.quiet)
     action = arguments.registry_command if arguments.command == "registry" else arguments.integrity_command
     with database_errors_as_operator_errors(), RuntimeComposition(settings, collaborators) as composition:
-        if action in UNGUARDED:  # SPEC_DECISIONS 72, 93.8: integrity report must show a false control
-            composition.schema().require_tables()
-        else:
-            composition.schema().require_head()
-            composition.role_guard().require_least_privilege()
+        # SPEC_DECISIONS 72, 93.8: integrity report must show a false control, so it is not guarded
+        start_runtime(composition, guarded=action not in UNGUARDED)
         return RUNTIME_HANDLERS[action](arguments, composition, output)

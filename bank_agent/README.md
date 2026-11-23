@@ -254,6 +254,12 @@ error, and a flag takes no value.
 - `worker` without `--once` runs until stopped and prints no result, so `--json`
   without `--once` is a usage error. The worker refuses a schema that is not at the
   latest revision.
+- Every runtime command starts through named checks (SPEC_DECISIONS 104,
+  `interface/cli/startup.py`): settings, database reachable, session parameters, schema at
+  head and role inspection (`integrity report`: the tables only, so it can show a false
+  control). Each has its own sentence; a statement the database refuses inside one is "The
+  database refused a statement of the startup check NAME (SQLSTATE X); check the settings of
+  the role of DATABASE_URL and of its database.", never the last resort sentence.
 - SIGTERM or SIGINT stops the worker after the unit it is in, not at the end of the
   stage (SPEC_DECISIONS 51): after the current check chunk, tokenise chunk, registry
   request with its stored response, certificate or outbox message, nothing further is
