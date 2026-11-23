@@ -115,7 +115,7 @@ def staged(ports: PortWorld, start: int = 0) -> Staged:
     tape = ports.tape(at(1 + start))
     rows = raw_rows(SUMMIT_HEADER, 3)
     loans = tuple(ports.loans(tape.submission_id, vins(2, start=start + 40)))
-    items = (
+    items: tuple[NewItem, ...] = (
         item(uuid.uuid4(), 1, RowDisposition.ACCEPTED_NEW, loans[0].loan_id),
         item(uuid.uuid4(), 2, RowDisposition.ACCEPTED_NEW, loans[1].loan_id),
         replace(item(uuid.uuid4(), 3, RowDisposition.REJECTED, None), issues=ISSUES),

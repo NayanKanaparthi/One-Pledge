@@ -25,7 +25,7 @@ from bank_testkit.records import (
     request,
 )
 from bank_testkit.scripted_http import registry
-from onepledge_bank_agent.domain.canonical_json import canonical_json
+from onepledge_bank_agent.domain.canonical_json import JsonValue, canonical_json
 from onepledge_bank_agent.domain.certificate_rules import delivered_sha256
 from onepledge_bank_agent.domain.entities import RegistryRequest
 from onepledge_bank_agent.domain.enums import (
@@ -303,7 +303,9 @@ class TestUnmatchedCaseUpdates:
             reason: QuarantineReason = QuarantineReason.UNMATCHED,
         ) -> QuarantinedMessage:
             made = quarantined(message_type=kind, reason=reason, received=at(received))
-            payload = {"case_id": str(case), "asset_token": token, "status": "CONFIRMED", "resolved_seq": 9}
+            payload: JsonValue = {
+                "case_id": str(case), "asset_token": token, "status": "CONFIRMED", "resolved_seq": 9,
+            }  # fmt: skip
             return replace(made, quarantined=replace(made.quarantined, payload=payload))
 
         older, newer = held(1), held(2)
