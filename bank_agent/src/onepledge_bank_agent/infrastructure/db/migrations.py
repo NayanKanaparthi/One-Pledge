@@ -205,13 +205,16 @@ class SchemaInspector:
             raise tables_missing()
 
     def require_head(self) -> None:
-        """Refuse to run against a database that is not migrated to the newest revision; a database that
-        was never migrated says its tables are missing (SPEC_DECISIONS 78: the real cause)."""
+        """Pass only at the head revision of the installed migrations (SPEC 12.5, SPEC_DECISIONS 128):
+        a database never migrated says its tables are missing, any other revision, older or newer,
+        says which one it is and which one this program expects."""
         status = self.status()
         if status.current_revision is None:
             raise tables_missing()
         if not status.at_head:
             raise OperatorError(
-                f"The database {status.database} is not at the latest revision; run db migrate.",
+                f"The database {status.database} is at revision {status.current_revision}, not at "
+                f"{status.head_revision} as this program expects; run db migrate with this program, or "
+                "run the program that matches the database.",
                 SCHEMA_NOT_CURRENT,
             )

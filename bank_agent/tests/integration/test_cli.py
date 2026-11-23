@@ -321,16 +321,23 @@ def test_worker_once_runs_every_runnable_stage_and_reports_it(
     assert idle.out.splitlines()[-2:] == ["0 stages run", "Nothing else is runnable now."]
 
 
-def test_the_worker_refuses_a_schema_that_is_not_at_the_latest_revision(
-    bank_db: BankDatabase, doubles: InProcessDoubles, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("revision", ["0003_grants", "0099_from_a_newer_program"], ids=["behind", "ahead"])
+def test_the_worker_refuses_a_schema_at_any_revision_but_the_head_and_names_both(
+    bank_db: BankDatabase, doubles: InProcessDoubles, monkeypatch: pytest.MonkeyPatch, revision: str
 ) -> None:
+    """SPEC_DECISIONS 128: the schema check passes only at the head revision of the installed
+    migrations; its sentence says the database is at another revision than this program expects."""
     cli = cli_for(monkeypatch, {**bank_db.environment(), **unreachable_services(doubles)})
     with bank_db.connect("owner") as connection:
-        connection.execute("UPDATE alembic_version SET version_num = '0003_grants'")
-    sentence = f"The database {bank_db.name} is not at the latest revision; run db migrate."
-    assert cli("worker", "--once").outcome() == (1, "", sentence + "\n")
-    refused = cli("worker", "--once", "--json")
-    assert refused.json() == {"ok": False, "error": {"code": "SCHEMA_NOT_CURRENT", "message": sentence}}
+        connection.execute("UPDATE alembic_version SET version_num = %s", (revision,))
+    sentence = (
+        f"The database {bank_db.name} is at revision {revision}, not at {head_revision()} as this program "
+        "expects; run db migrate with this program, or run the program that matches the database."
+    )
+    for command in (("worker", "--once"), ("registry", "sync"), ("integrity", "verify")):
+        assert " ".join(cli(*command).err.split()) == sentence, command
+        refused = cli(*command, "--json")
+        assert refused.json() == {"ok": False, "error": {"code": "SCHEMA_NOT_CURRENT", "message": sentence}}
 
 
 def test_worker_once_json_in_a_child_process_writes_one_document_and_only_log_lines_on_stderr(

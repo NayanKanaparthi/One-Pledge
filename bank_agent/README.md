@@ -147,6 +147,24 @@ What a reviewer can check, and where:
   still answers what a local check's evidence records (a later edit of the stored result is
   found; the source is not asked again).
 
+## Guard codes
+
+Every SQLSTATE the bank's own triggers raise (SPEC_DECISIONS 128). `StoreRefusedError`
+carries the same codes (`domain/store_errors.GUARD_CODES`), and `tests/unit/test_guard_codes.py`
+checks this table against that list and against the codes the migrations raise.
+
+| Code | What it refuses | Raised by |
+|---|---|---|
+| `OP001` | `UPDATE`, `DELETE` or `TRUNCATE` of an insert-only table (`loans_raw`, `audit_log` and the evidence tables) | `0002_guards.py` |
+| `OP002` | A loan created in another state than PENDING, or a state change outside SPEC 8.4 | `0002_guards.py`, `0005_state_guards.py`, `0010_column_guards.py` |
+| `OP003` | A change of a loan's identity, or of the terms of a tokenised loan, or of any column of a RELEASED loan | `0002_guards.py`, `0010_column_guards.py` |
+| `OP004` | A tape created in another status than RECEIVED, a skipped status, a FAILED entry or exit that breaks SPEC_DECISIONS 46, or a change of a COMPLETED tape | `0002_guards.py`, `0005_state_guards.py`, `0010_column_guards.py` |
+| `OP005` | An audit entry that does not extend the hash chain | `0002_guards.py` |
+| `OP006` | An alert or case transition outside SPEC 8.5, a change of an alert's facts, a second position, or a change of a closed alert | `0005_state_guards.py`, `0010_column_guards.py` |
+| `OP007` | A change of an answered registry request or of an item with its result, or an answer set apart from its status | `0014_no_delete.py` |
+| `OP008` | `DELETE` or `TRUNCATE` of any table without an insert-only trigger | `0014_no_delete.py` |
+| `OP009` | A change of an outbox ledger row's identity, or a second outcome except `QUARANTINED` to `APPLIED_LATE` | `0013_outbox_ledger.py` |
+
 ## Layout
 
 ```
@@ -293,7 +311,12 @@ error, and a flag takes no value.
 - Every runtime command starts through named checks (SPEC_DECISIONS 104,
   `interface/cli/startup.py`): settings, database reachable, session parameters, schema at
   head and role inspection (`integrity report`: the tables only, so it can show a false
-  control). Each has its own sentence; a statement the database refuses inside one is "The
+  control). Each has its own sentence. Schema at head passes only when the database's
+  revision is the head of the installed migrations (SPEC 12.5, SPEC_DECISIONS 128), and says
+  which of two things is wrong: "The bank database tables are missing; run db migrate
+  first.", or "The database DB is at revision R, not at H as this program expects; run db
+  migrate with this program, or run the program that matches the database." for any other
+  revision, older or newer; a statement the database refuses inside one is "The
   database refused a statement of the startup check NAME (SQLSTATE X); check the settings of
   the role of DATABASE_URL and of its database.", never the last resort sentence.
 - SIGTERM or SIGINT stops the worker after the unit it is in, not at the end of the
