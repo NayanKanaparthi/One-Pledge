@@ -31,7 +31,7 @@ from onepledge_outside_records.infrastructure.db.repositories import (
     SqlRecordsWriter,
 )
 from onepledge_outside_records.interface.http.app import create_app
-from onepledge_testtools.scratch_databases import new_name
+from onepledge_testtools.scratch_databases import deferred_signals, new_name
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 CONTRACT = REPOSITORY / "contracts" / "outside_records.yaml"
@@ -120,8 +120,9 @@ def fresh_database() -> Iterator[Database]:
 
 @pytest.fixture
 def provisioned_database(fresh_database: Database) -> Database:
-    """A provisioned but not migrated database."""
-    DatabaseProvisioner(ADMIN_URL).provision(fresh_database.target)
+    """A provisioned but not migrated database; SIGTERM waits until provisioning is done."""
+    with deferred_signals():
+        DatabaseProvisioner(ADMIN_URL).provision(fresh_database.target)
     return fresh_database
 
 
@@ -130,8 +131,9 @@ def database() -> Iterator[Database]:
     """The session's provisioned and migrated database."""
     found = new_database()
     provisioner = DatabaseProvisioner(ADMIN_URL)
-    provisioner.provision(found.target)
     try:
+        with deferred_signals():
+            provisioner.provision(found.target)
         MigrationRunner(found.owner_url, found.app_role).upgrade()
         yield found
     finally:

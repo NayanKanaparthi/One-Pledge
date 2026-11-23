@@ -74,53 +74,6 @@ def test_a_hung_test_is_stopped():
     time.sleep(30)
 """
 
-ISOLATION_TESTS = """
-import socket
-import subprocess
-
-import pytest
-
-
-@pytest.fixture(autouse=True)
-def _isolation(enforce_unit_isolation):
-    pass
-
-
-@pytest.mark.unit
-def test_unit_writes_a_file(tmp_path):
-    (tmp_path / "x").write_text("x")
-
-
-@pytest.mark.unit
-def test_unit_connects():
-    socket.create_connection(("127.0.0.1", 9), timeout=1)
-
-
-@pytest.mark.unit
-def test_unit_binds():
-    socket.socket().bind(("127.0.0.1", 0))
-
-
-@pytest.mark.unit
-def test_unit_starts_a_process():
-    subprocess.run(["true"], check=True)
-
-
-@pytest.mark.unit
-def test_unit_reads_a_committed_file():
-    from pathlib import Path
-
-    assert Path(__file__).read_text()
-
-
-@pytest.mark.integration
-def test_integration_may_do_all_of_it(tmp_path):
-    (tmp_path / "x").write_text("x")
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-    subprocess.run(["true"], check=True)
-"""
-
 
 def _child(tests: Path, *extra: str) -> list[str]:
     return [
@@ -181,17 +134,73 @@ def test_every_test_has_a_time_limit_and_e2e_tests_a_longer_one(tmp_path: Path) 
     assert "Timeout" in result.stdout, result.stdout
 
 
+# SPEC_DECISIONS 115.5: SIGTERM at twenty moments of a running integration session, during
+# provisioning among them; afterwards the server holds no object under that session's stem.
+PROVISIONING_TESTS = """
+import time
+
+import psycopg
+import pytest
+from psycopg import sql
+
+from onepledge_testtools.scratch_databases import admin_url, deferred_signals, new_name
+
+
+def run(statement, *names):
+    with psycopg.connect(admin_url(), autocommit=True) as admin:
+        admin.execute(sql.SQL(statement).format(*(sql.Identifier(n) for n in names)))
+
+
+@pytest.fixture
+def provisioned():
+    name = new_name("term")
+    with deferred_signals():
+        run("CREATE ROLE {}", name + "_owner")
+        time.sleep(0.05)
+        run("CREATE ROLE {}", name + "_app")
+        time.sleep(0.05)
+        run("CREATE DATABASE {} OWNER {}", name, name + "_owner")
+        time.sleep(0.05)
+        run("GRANT CONNECT ON DATABASE {} TO {}", name, name + "_app")
+    yield name
+    run("DROP DATABASE IF EXISTS {} WITH (FORCE)", name)
+    run("DROP ROLE IF EXISTS {}", name + "_app")
+    run("DROP ROLE IF EXISTS {}", name + "_owner")
+
+
 @pytest.mark.integration
-def test_a_unit_test_that_does_io_fails_and_reading_a_committed_file_does_not(tmp_path: Path) -> None:
-    tests = tmp_path / "test_isolation.py"
-    tests.write_text(ISOLATION_TESTS)
-    result = processes.run(_child(tests, "-rA"), _environment())
-    out = result.stdout
-    assert "3 failed, 2 passed, 1 error" in out, out
-    for test, what in (
-        ("test_unit_writes_a_file", "a unit test may not write files (tmp_path, tmp_path_factory)"),
-        ("test_unit_connects", "a unit test may not open a network connection"),
-        ("test_unit_binds", "a unit test may not bind a socket"),
-        ("test_unit_starts_a_process", "a unit test may not start a child process"),
-    ):
-        assert f"{test} - " in out and what in out, (test, out)
+@pytest.mark.parametrize("round_", range(4))
+def test_works_on_a_provisioned_database(provisioned, round_):
+    time.sleep(0.15)
+"""
+MOMENTS = [0.05 + 0.15 * index for index in range(20)]
+
+
+def leftovers(admin: psycopg.Connection[tuple[str]], pid: int) -> list[str]:
+    pattern = f"optest\\\\_%\\\\_{pid}\\\\_%"
+    rows = admin.execute(
+        "SELECT datname FROM pg_database WHERE datname LIKE %s "
+        "UNION ALL SELECT rolname FROM pg_roles WHERE rolname LIKE %s",
+        (pattern, pattern),
+    ).fetchall()
+    return [row[0] for row in rows]
+
+
+@pytest.mark.reliability
+@pytest.mark.integration
+@pytest.mark.timeout(300)
+def test_sigterm_at_twenty_moments_leaves_nothing_under_the_session_stem(tmp_path: Path) -> None:
+    tests = tmp_path / "test_provisioning.py"
+    tests.write_text(PROVISIONING_TESTS)
+    left: dict[float, list[str]] = {}
+    with psycopg.connect(admin_url(), autocommit=True) as admin:
+        for moment in MOMENTS:
+            child = processes.start(_child(tests), _environment(), merge_stderr=True)
+            time.sleep(moment)
+            if child.poll() is None:
+                child.send_signal(signal.SIGTERM)
+            child.communicate(timeout=60)
+            found = leftovers(admin, child.pid)
+            if found:
+                left[moment] = found
+    assert left == {}

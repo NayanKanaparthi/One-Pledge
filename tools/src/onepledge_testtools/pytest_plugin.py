@@ -12,14 +12,22 @@ from __future__ import annotations
 
 import signal
 import threading
+from collections.abc import Generator, Iterator
 from datetime import timedelta
 from types import FrameType
 
 import psycopg
 import pytest
 
-from onepledge_testtools.scratch_databases import SESSION_SWEEP_AGE, admin_url, sweep
-from onepledge_testtools.unit_isolation import enforce
+from onepledge_testtools.scratch_databases import (
+    SESSION_SWEEP_AGE,
+    admin_url,
+    deferred_signals,
+    drop_session,
+    registered,
+    sweep,
+)
+from onepledge_testtools.unit_isolation import CALL_PASSED, enforce
 
 E2E_TIMEOUT_SECONDS = 600
 
@@ -28,8 +36,15 @@ class TerminatedError(KeyboardInterrupt):
     """The run received SIGTERM; raised as an interrupt so pytest tears every fixture down."""
 
 
+_TERMINATING: list[bool] = []
+
+
 def _terminate(signum: int, _: FrameType | None) -> None:
-    raise TerminatedError(f"received signal {signal.Signals(signum).name}")
+    # Only the first SIGTERM interrupts; later ones arrive while the session is already ending
+    # and must not cut its final drop short.
+    if not _TERMINATING:
+        _TERMINATING.append(True)
+        raise TerminatedError(f"received signal {signal.Signals(signum).name}")
 
 
 def install_sigterm_handler() -> None:
@@ -38,12 +53,25 @@ def install_sigterm_handler() -> None:
         signal.signal(signal.SIGTERM, _terminate)
 
 
-def sweep_stale(older_than: timedelta = SESSION_SWEEP_AGE) -> int:
-    """Drop scratch objects older than `older_than`; 0 when the test server is not reachable."""
+def _write(session: pytest.Session, line: str) -> None:
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None:
+        reporter.write_line(line)
+
+
+def sweep_stale(session: pytest.Session, older_than: timedelta = SESSION_SWEEP_AGE) -> int:
+    """Drop stale scratch objects; never fails: an unreachable server is 0, any error one warning line."""
     try:
-        return sweep(admin_url(), older_than).dropped
+        with deferred_signals():
+            result = sweep(
+                admin_url(), older_than, warn=lambda line: _write(session, f"optest sweep: {line}")
+            )
     except psycopg.OperationalError:
         return 0
+    except psycopg.Error as error:
+        _write(session, f"optest sweep: stopped early: {type(error).__name__}")
+        return 0
+    return result.dropped
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -54,11 +82,28 @@ def pytest_configure(config: pytest.Config) -> None:
 
 def pytest_sessionstart(session: pytest.Session) -> None:
     """Drop what crashed runs left behind; the count is shown when it is not zero."""
-    dropped = sweep_stale()
+    dropped = sweep_stale(session)
     if dropped:
-        reporter = session.config.pluginmanager.get_plugin("terminalreporter")
-        if reporter is not None:
-            reporter.write_line(f"optest sweep: dropped {dropped} stale optest_ databases and roles")
+        _write(session, f"optest sweep: dropped {dropped} stale optest_ databases and roles")
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session: pytest.Session) -> None:
+    """After every fixture: drop whatever this session made, by its stem and its registered names.
+
+    It runs on a normal end, a failure, SIGINT and SIGTERM (SPEC_DECISIONS 115.2); signals are
+    held back while it runs, so it cannot be cut short.
+    """
+    if not registered():
+        return
+    try:
+        with deferred_signals():
+            result = drop_session(admin_url(), warn=lambda line: _write(session, f"optest cleanup: {line}"))
+    except psycopg.Error as error:
+        _write(session, f"optest cleanup: stopped early: {type(error).__name__}")
+        return
+    if result.dropped:
+        _write(session, f"optest cleanup: dropped {result.dropped} databases and roles left by this session")
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -68,7 +113,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             item.add_marker(pytest.mark.timeout(E2E_TIMEOUT_SECONDS))
 
 
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Generator[None, pytest.TestReport, pytest.TestReport]:
+    """Remember whether a test's call phase passed, for the unit isolation fixture's teardown."""
+    report: pytest.TestReport = yield
+    if call.when == "call":
+        item.stash[CALL_PASSED] = report.passed
+    return report
+
+
 @pytest.fixture
-def enforce_unit_isolation(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Hold a `unit` test to SPEC_DECISIONS 77; a package's conftest makes it autouse."""
-    enforce(request, monkeypatch)
+def enforce_unit_isolation(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Hold a `unit` test to SPEC_DECISIONS 77 and 116; a package's conftest makes it autouse."""
+    yield from enforce(request, monkeypatch)
