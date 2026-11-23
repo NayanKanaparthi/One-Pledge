@@ -217,6 +217,7 @@ def test_the_least_privilege_refusal_is_one_sentence_with_the_advice_for_every_v
         Violation.ROLE_HAS_SETTING: "remove the role's settings",
         Violation.PARAMETER_PRIVILEGE: "remove the role's settings",
         Violation.TRIGGERS_DISABLED_FOR_SESSION: "remove the role's settings",
+        Violation.DATABASE_HAS_SETTING: "remove the database setting",
     }
     for code in Violation:
         sentence = refusal_sentence(RoleViolation(code, "public.audit_log"))

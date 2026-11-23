@@ -59,6 +59,7 @@ class Violation(StrEnum):
     ROLE_HAS_SETTING = "ROLE_HAS_SETTING"
     PARAMETER_PRIVILEGE = "PARAMETER_PRIVILEGE"
     TRIGGERS_DISABLED_FOR_SESSION = "TRIGGERS_DISABLED_FOR_SESSION"
+    DATABASE_HAS_SETTING = "DATABASE_HAS_SETTING"
     SECURITY_DEFINER_FUNCTION = "SECURITY_DEFINER_FUNCTION"
     FUNCTION_PRIVILEGE = "FUNCTION_PRIVILEGE"
     DEFAULT_PRIVILEGE = "DEFAULT_PRIVILEGE"
@@ -66,7 +67,12 @@ class Violation(StrEnum):
 
 
 SETTING_CODES = frozenset(
-    {Violation.ROLE_HAS_SETTING, Violation.PARAMETER_PRIVILEGE, Violation.TRIGGERS_DISABLED_FOR_SESSION}
+    {
+        Violation.ROLE_HAS_SETTING,
+        Violation.PARAMETER_PRIVILEGE,
+        Violation.TRIGGERS_DISABLED_FOR_SESSION,
+        Violation.DATABASE_HAS_SETTING,
+    }
 )
 """Point 7 of SPEC_DECISIONS 103: what `TRIGGERS_FIRE_FOR_APP_ROLE` requires; every other code is
 `APP_ROLE_GRANTS_EXACT`'s."""
@@ -79,10 +85,12 @@ ADVICE: Mapping[Violation, str] = MappingProxyType(
         Violation.TABLE_PRIVILEGE_MISSING: NOT_MIGRATED,
         Violation.TABLE_NOT_IN_MATRIX: NOT_MIGRATED,
         **dict.fromkeys(SETTING_CODES, REMOVE_SETTINGS),
+        Violation.DATABASE_HAS_SETTING: "remove the database setting",
     }
 )
-"""The advice of the refusal for each code (SPEC_DECISIONS 103): an attribute, membership, ownership
-or extra privilege; a privilege the migrations should have given; a setting or a parameter."""
+"""The advice of the refusal for each code (SPEC_DECISIONS 103, 128): an attribute, membership,
+ownership or extra privilege; a privilege the migrations should have given; a role setting, a
+parameter or the session; a database setting."""
 
 
 @dataclass(frozen=True, order=True)

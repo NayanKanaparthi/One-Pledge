@@ -80,8 +80,11 @@ What a reviewer can check, and where:
   `CREATEDB`, `CREATEROLE`, `REPLICATION` or `BYPASSRLS`; a member of no role; owner of
   nothing; `CONNECT` and schema `USAGE` only; no column privilege, and on every table exactly
   the privileges of the grant matrix at table level, counting grants to `PUBLIC`; no sequence
-  privilege; no role setting, no parameter privilege, no database-wide
-  `session_replication_role`, and a session that fires triggers; no `SECURITY DEFINER`
+  privilege; no role setting (`ROLE_HAS_SETTING`), no parameter privilege, no database
+  setting of `session_replication_role` for every role (`DATABASE_HAS_SETTING`, object
+  `database X: session_replication_role`, advice "remove the database setting"), and a
+  session that fires triggers (`TRIGGERS_DISABLED_FOR_SESSION` only when neither setting
+  explains a session in `replica` or `local`; SPEC_DECISIONS 128); no `SECURITY DEFINER`
   function and `EXECUTE` on no function of a user schema (migration 0015 takes it from
   `PUBLIC`); no default privilege; nothing `WITH GRANT OPTION`. `integrity report` shows the
   same violations under `TRIGGERS_FIRE_FOR_APP_ROLE` (point 7) and `APP_ROLE_GRANTS_EXACT`

@@ -25,11 +25,12 @@ from onepledge_bank_agent.infrastructure.db.connection_settings import session_p
 from onepledge_bank_agent.infrastructure.db.controls import SqlDatabaseControlInspector
 from onepledge_bank_agent.infrastructure.db.engines import make_engine
 from onepledge_bank_agent.infrastructure.db.migrations import head_revision
-from onepledge_bank_agent.infrastructure.db.role_check import ADVICE, Violation
+from onepledge_bank_agent.infrastructure.db.role_check import ADVICE, Violation, inspect_role
 from onepledge_bank_agent.infrastructure.db.role_guard import (
     APP_ROLE_SENTENCE,
     OwnerRoleGuard,
     RuntimeRoleGuard,
+    refusal_sentence,
 )
 from onepledge_bank_agent.infrastructure.operator_errors import OperatorError
 
@@ -63,6 +64,7 @@ class Broken:
 
 EXTRA = Violation.TABLE_PRIVILEGE_EXTRA
 COLUMN, SETTING = Violation.COLUMN_PRIVILEGE, Violation.ROLE_HAS_SETTING
+DATABASE_SETTING = Violation.DATABASE_HAS_SETTING
 VIOLATIONS = [
     Broken("ALTER ROLE {app} CREATEDB", Violation.ROLE_HAS_ATTRIBUTE, "CREATEDB", frozenset({NOT_OWNER})),
     Broken("ALTER ROLE {app} CREATEROLE", Violation.ROLE_HAS_ATTRIBUTE, "CREATEROLE", frozenset({NOT_OWNER})),
@@ -95,8 +97,10 @@ VIOLATIONS = [
            control=TRIGGERS),
     Broken("GRANT SET ON PARAMETER session_replication_role TO {app}", Violation.PARAMETER_PRIVILEGE,
            "session_replication_role", control=TRIGGERS),
-    Broken("ALTER DATABASE {db} SET session_replication_role = replica",
-           Violation.TRIGGERS_DISABLED_FOR_SESSION, "database", control=TRIGGERS),
+    Broken("ALTER DATABASE {db} SET session_replication_role = replica", DATABASE_SETTING,
+           ": session_replication_role", control=TRIGGERS),
+    Broken("ALTER ROLE ALL IN DATABASE {db} SET session_replication_role = local", DATABASE_SETTING,
+           ": session_replication_role", control=TRIGGERS),
     Broken("CREATE FUNCTION public.optest_definer() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'; "
            "GRANT EXECUTE ON FUNCTION public.optest_definer() TO PUBLIC", Violation.SECURITY_DEFINER_FUNCTION,
            "public.optest_definer"),
@@ -202,6 +206,38 @@ def test_a_runtime_connection_whose_session_does_not_fire_triggers_is_refused(ba
         found = RuntimeRoleGuard(inspecting).violations()
     finally:
         inspecting.dispose()
+    codes = {v.code for v in found}
+    assert Violation.ROLE_HAS_SETTING in codes and Violation.TRIGGERS_DISABLED_FOR_SESSION not in codes, (
+        "SPEC_DECISIONS 128: the role setting explains the replica session, so it is the only code"
+    )
+
+
+def test_a_database_setting_is_named_with_its_database_and_is_the_only_code(bank_db: BankDatabase) -> None:
+    run_as_superuser(bank_db, "ALTER DATABASE {db} SET session_replication_role = replica")
+    inspecting = make_engine(bank_db.app_url, inspecting=True)
+    try:
+        found = RuntimeRoleGuard(inspecting).violations()
+        controls = SqlDatabaseControlInspector(inspecting, head_revision()).controls()
+    finally:
+        inspecting.dispose()
+    assert [(v.code, v.object_name) for v in found] == [
+        (DATABASE_SETTING, f"database {bank_db.name}: session_replication_role")
+    ]
+    assert refusal_sentence(found[0]) == (
+        "The role of DATABASE_URL is not least-privilege (DATABASE_HAS_SETTING); remove the database setting."
+    )
+    assert not controls[TRIGGERS] and controls[EXACT]
+
+
+def test_a_replica_session_no_setting_explains_is_the_session_code(bank_db: BankDatabase) -> None:
+    """Only a superuser may set the parameter in its own session: the unexplained case of decision 128."""
+    engine = make_engine(bank_db.admin_url.rsplit("/", 1)[0] + "/" + bank_db.name, inspecting=True)
+    try:
+        with engine.connect() as connection:
+            connection.exec_driver_sql("SET session_replication_role = replica")
+            found = inspect_role(connection)
+    finally:
+        engine.dispose()
     assert (Violation.TRIGGERS_DISABLED_FOR_SESSION, "session") in {(v.code, v.object_name) for v in found}
 
 
