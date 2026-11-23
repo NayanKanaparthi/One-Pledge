@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from onepledge_bank_agent.domain.canonical_json import ZERO_HASH, JsonValue, canonical_sha256
 from onepledge_bank_agent.domain.enums import ActorType, AuditAction, AuditObjectType, AuditOutcome, Role
 from onepledge_bank_agent.domain.errors import InvalidValueError
+from onepledge_bank_agent.domain.storable import require_document_size
 
 GENESIS_PREV_HASH = ZERO_HASH
 
@@ -65,6 +66,10 @@ class AuditDraft:
     outcome: AuditOutcome = AuditOutcome.SUCCESS
     detail: Mapping[str, JsonValue] = field(default_factory=dict)
     request_id: str | None = None
+
+    def __post_init__(self) -> None:
+        """A detail is a free-form document: at most 64 KiB (SPEC_DECISIONS 125)."""
+        require_document_size("detail", self.detail)
 
 
 @dataclass(frozen=True)

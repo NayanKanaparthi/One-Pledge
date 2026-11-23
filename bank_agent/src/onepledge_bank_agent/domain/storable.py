@@ -12,6 +12,14 @@ allows, what the PostgreSQL column holds and what the Python type that reads it 
 | Text | no control character (U+0000 to U+001F, U+007F to U+009F), no surrogate, at most 255 characters |
 | JSON for `jsonb` | every key and string a storable text, every number an integer in `bigint` range |
 
+The size of a stored JSON document depends on its class (SPEC_DECISIONS 125). A contract-bounded
+document (a registry answer, a certificate body, a checkpoint body) is stored only after full
+validation against its schema, whose limits bound it; its canonical form is never larger than
+the answer it was read from, which `HTTP_MAX_RESPONSE_BYTES` bounds. A free-form document is at
+most `FREE_FORM_BYTES` in canonical form (an audit detail, a check's evidence; a quarantined
+payload above it is withheld), an integrity report at most `REPORT_BYTES`; a tape's raw payload
+and cells are bounded by the tape limits of SPEC 10.1.
+
 `StorableTimestamp` and `StorableDate` are the value objects repositories take; the
 conversion to UTC is checked, so an offset that pushes a boundary value outside is refused
 (Python itself cannot hold the year 10000 or the year 0).
@@ -23,6 +31,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
+from onepledge_bank_agent.domain.canonical_json import canonical_json
 from onepledge_bank_agent.domain.errors import InvalidValueError
 
 EARLIEST_INSTANT = datetime(2000, 1, 1, tzinfo=UTC)
@@ -34,6 +43,8 @@ BIGINT_MAX = 2**63 - 1
 INT_MAX = 2**31 - 1
 MAX_TEXT = 255
 OUT_OF_RANGE = "OUT_OF_RANGE"
+FREE_FORM_BYTES = 64 * 1024
+REPORT_BYTES = 1024 * 1024
 _UNSTORABLE = re.compile("[\x00-\x1f\x7f-\x9f\ud800-\udfff]")
 
 
@@ -121,3 +132,9 @@ def storable_texts(value: object) -> bool:
         elif isinstance(item, list | tuple):
             pending.extend(item)
     return True
+
+
+def require_document_size(field: str, document: object, limit: int = FREE_FORM_BYTES) -> None:
+    """Refuse a JSON document whose canonical form is over `limit` bytes (SPEC_DECISIONS 125)."""
+    if len(canonical_json(document)) > limit:
+        raise InvalidValueError(field, OUT_OF_RANGE)

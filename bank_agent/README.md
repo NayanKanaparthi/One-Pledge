@@ -105,7 +105,15 @@ What a reviewer can check, and where:
   objects (`StorableTimestamp`, `StorableDate`), the database holds the same ranges as check
   constraints, and the integrity report and deep verification read each section inside its
   own guard, so a row forced past them is an `UNREADABLE` evidence problem naming the table
-  and the row, and every other section is still produced.
+  and the row, and every other section is still produced. The size of stored JSON depends on
+  its class (SPEC_DECISIONS 125): a contract-bounded document (a registry answer of up to 500
+  results, a certificate body of up to 500 items, a checkpoint body) is stored whole once it
+  passed its schema, up to `HTTP_MAX_RESPONSE_BYTES`, which bounds the answer it is read from;
+  a free-form document is at most 64 KiB in canonical form (an audit detail, a check's
+  evidence; a quarantined payload above it is withheld), an integrity report at most 1 MiB,
+  and a tape's raw payload and cells are bounded by the tape limits. Tests store and read back
+  a 500 result answer and a 500 item certificate of the longest legal form
+  (`tests/bank_testkit/longest.py` builds it from the contract).
 - **Others can check us without trusting us, and we check them.** Every certificate and
   checkpoint is verified with the keys of `REGISTRY_PUBLIC_KEYS` only, stored with its
   verdict, and failures are never removed: a certificate that failed stays as evidence

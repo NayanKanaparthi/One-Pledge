@@ -26,6 +26,7 @@ from onepledge_bank_agent.domain.registry_records import ItemOutcome, Quarantine
 from onepledge_bank_agent.domain.registry_results import StoredResult
 from onepledge_bank_agent.domain.replay import State
 from onepledge_bank_agent.domain.stage_digests import DigestRow, StagePart
+from onepledge_bank_agent.domain.storable import REPORT_BYTES, require_document_size
 
 
 @dataclass(frozen=True)
@@ -235,6 +236,10 @@ class IntegrityRun:
     triggered_by: uuid.UUID | None
     status: IntegrityRunStatus
     report: Mapping[str, JsonValue]
+
+    def __post_init__(self) -> None:
+        """A report is bounded by its capped lists (SPEC_DECISIONS 108) and at most 1 MiB (125)."""
+        require_document_size("report", self.report, REPORT_BYTES)
 
 
 class IntegrityRunRepository(Protocol):

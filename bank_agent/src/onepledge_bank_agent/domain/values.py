@@ -23,6 +23,7 @@ from onepledge_bank_agent.domain.enums import (
     TokenKind,
 )
 from onepledge_bank_agent.domain.errors import InvalidValueError
+from onepledge_bank_agent.domain.storable import require_document_size
 from onepledge_bank_agent.domain.text_rules import DIGITS, parse_integer
 from onepledge_bank_agent.domain.vin import Vin
 
@@ -237,9 +238,11 @@ class CheckResult:
     evidence: Mapping[str, JsonValue] = field(default_factory=dict, compare=False)
 
     def __post_init__(self) -> None:
-        """Only the combinations of SPEC 11.1 exist."""
+        """Only the combinations of SPEC 11.1 exist; the evidence is a free-form document of at most
+        64 KiB (SPEC_DECISIONS 125)."""
         if (self.outcome, self.reason) not in ALLOWED_CHECK_RESULTS[self.check_type]:
             raise InvalidValueError("check_result", "INVALID_VALUE")
+        require_document_size("evidence", self.evidence)
 
 
 @dataclass(frozen=True, order=True)
