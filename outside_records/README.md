@@ -174,6 +174,11 @@ query orders or compares a text expression under a default collation: the role i
 sorts its findings in Python by code point, a comparison of a function result states
 `COLLATE "C"`, and no SQL maps case; `tests/test_sql_collation.py` reads every SQL text of
 the package and its migrations and fails on any other use.
+`tests/test_collation_independence.py` provisions a scratch database whose default
+collation is the ICU collation `und`, seeds it like the session database (default
+`C.UTF-8`) and requires the same three answers, in the same order, for every VIN of the
+example records; a case-insensitive, non-deterministic ICU collation a superuser puts on a
+column is named by the catalogue check.
 
 Every command exits 0 on
 success and 1 with one sentence on stderr when something is wrong (PostgreSQL not
