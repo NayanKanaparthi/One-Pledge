@@ -76,7 +76,7 @@ QUERIES: tuple[tuple[str, str], ...] = (
         "rule",
         "SELECT c.relname || '.' || r.rulename, pg_get_ruledef(r.oid) FROM pg_rewrite r "
         "JOIN pg_class c ON c.oid = r.ev_class WHERE c.relnamespace = 'public'::regnamespace "
-        "AND NOT (c.relkind = 'v' AND r.rulename = '_RETURN')",
+        "AND (c.relkind <> 'v' OR r.rulename <> '_RETURN')",
     ),
     (
         "policy",
