@@ -14,7 +14,13 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
 
-from bank_testkit.database import drop, insert_user, new_bank_database, provision_and_migrate
+from bank_testkit.database import (
+    drop,
+    insert_user,
+    new_bank_database,
+    provision_and_migrate,
+    provision_and_migrate_icu,
+)
 from bank_testkit.memory.clocks import ManualClock
 from bank_testkit.memory.stores import MemoryStore, MemoryUnits
 from bank_testkit.records import T0, lei, loan
@@ -70,15 +76,16 @@ def memory_backend() -> PortBackend:
 
 
 @contextmanager
-def postgres_backend() -> Iterator[PortBackend]:
-    """A provisioned and migrated bank database, dropped on exit."""
+def postgres_backend(*, icu: bool = False) -> Iterator[PortBackend]:
+    """A provisioned and migrated bank database, dropped on exit; with `icu` its default collation is
+    ICU's `und` (SPEC_DECISIONS 133)."""
     database = new_bank_database()
-    provision_and_migrate(database)
+    (provision_and_migrate_icu if icu else provision_and_migrate)(database)
     app, owner = make_engine(database.app_url), make_engine(database.owner_url)
     clock = ManualClock()
     try:
         yield PortBackend(
-            "postgres",
+            "postgres-icu" if icu else "postgres",
             SqlUnitOfWorkFactory(app, HashChainedAuditWriter(clock, RandomIds()), RandomIds()),
             SqlUnitOfWorkFactory(owner, HashChainedAuditWriter(clock, RandomIds()), RandomIds()),
             lambda: insert_user(database, Role.ANALYST),

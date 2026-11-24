@@ -102,14 +102,16 @@ def doubles() -> Iterator[InProcessDoubles]:
     params=[
         pytest.param("memory", marks=pytest.mark.unit),
         pytest.param("postgres", marks=pytest.mark.integration),
+        pytest.param("postgres-icu", marks=pytest.mark.integration),
     ]
 )
 def ports(request: pytest.FixtureRequest) -> Iterator[PortWorld]:
-    """A seeded world over one implementation of the repository ports."""
+    """A seeded world over one implementation of the repository ports: memory, PostgreSQL, and
+    PostgreSQL on a database whose default collation is ICU's `und` (SPEC_DECISIONS 133)."""
     if request.param == "memory":
         yield PortWorld(memory_backend())
         return
-    with postgres_backend() as backend:
+    with postgres_backend(icu=request.param == "postgres-icu") as backend:
         yield PortWorld(backend)
 
 

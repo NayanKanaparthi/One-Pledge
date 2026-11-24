@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import psycopg
+from psycopg import sql
 from sqlalchemy.engine import make_url
 
 from onepledge_bank_agent.domain.audit import Actor, AuditDraft
@@ -101,6 +102,29 @@ def provision_and_migrate(database: BankDatabase) -> None:
     made (SPEC_DECISIONS 115)."""
     with deferred_signals():
         DatabaseProvisioner(database.admin_url).provision(database.target)
+        migration_runner(database).upgrade()
+
+
+ICU_DEFAULT = "und"
+"""The ICU root locale (`und-x-icu`): a default collation that orders text unlike code point."""
+
+
+def provision_and_migrate_icu(database: BankDatabase) -> None:
+    """As `provision_and_migrate`, on a database recreated with the ICU default collation `und`
+    (SPEC_DECISIONS 133): UTF8, but every comparison without a column collation is ICU's."""
+    with deferred_signals():
+        provisioner = DatabaseProvisioner(database.admin_url)
+        provisioner.provision(database.target)
+        name, owner = sql.Identifier(database.target.database), sql.Identifier(database.target.owner_role)
+        with psycopg.connect(database.admin_url, autocommit=True) as admin:
+            admin.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(name))
+            admin.execute(
+                sql.SQL(
+                    "CREATE DATABASE {} OWNER {} ENCODING 'UTF8' LOCALE_PROVIDER icu ICU_LOCALE {} "
+                    "LOCALE 'C.UTF-8' TEMPLATE template0"
+                ).format(name, owner, sql.Literal(ICU_DEFAULT))
+            )
+        provisioner.provision(database.target)
         migration_runner(database).upgrade()
 
 

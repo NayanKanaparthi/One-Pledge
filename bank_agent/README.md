@@ -121,7 +121,12 @@ What a reviewer can check, and where:
   so `SCHEMA_MATCHES_MANIFEST` names a column moved to another collation); no query orders or
   compares a text expression under a default collation (`tests/unit/test_sql_collation.py`),
   the role inspection sorts names in Python, and a stage digest sorts its own rows
-  (`stage_digests.digest_key`). Nothing compares text through a locale.
+  (`stage_digests.digest_key`). Nothing compares text through a locale. The tests run the
+  repository parity cases a third time on a database whose default collation is ICU's `und`
+  (`ports` fixture, `postgres-icu`), and `test_collation_independence.py` checks on such a
+  database that a text column orders by code point, that unique keys stay case-sensitive, that
+  one submission reads back the same stage rows and digests as in memory and on a "C" database,
+  and that a Harbor run verifies OK.
 - **Others can check us without trusting us, and we check them.** Every certificate and
   checkpoint is verified with the keys of `REGISTRY_PUBLIC_KEYS` only, stored with its
   verdict, and failures are never removed: a certificate that failed stays as evidence
