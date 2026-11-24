@@ -18,6 +18,7 @@ import pytest
 from bank_testkit.memory.bank import MemoryBank, vins
 from onepledge_bank_agent.application.deep_evidence import reference_digests, request_digest, stage_digests
 from onepledge_bank_agent.domain.audit import Actor, AuditDraft, AuditEntry
+from onepledge_bank_agent.domain.canonical_json import canonical_json
 from onepledge_bank_agent.domain.enums import (
     AuditAction,
     AuditObjectType,
@@ -35,7 +36,7 @@ from onepledge_bank_agent.domain.replay import (
     tape_step,
     user_step,
 )
-from onepledge_bank_agent.domain.stage_digests import body_sha256, cell, row, rows_sha256
+from onepledge_bank_agent.domain.stage_digests import body_sha256, cell, digest_key, row, rows_sha256
 from onepledge_bank_agent.domain.values import Money, Sha256Hex, Token
 
 pytestmark = pytest.mark.unit
@@ -199,3 +200,22 @@ def test_the_cells_of_a_digest_row_are_canonical() -> None:
     assert body_sha256(None) is None
     assert body_sha256({"a": 1}) == hashlib.sha256(b'{"a":1}').hexdigest()
     assert rows_sha256([row(1)]) == hashlib.sha256(b"[[1]]").hexdigest() != rows_sha256([row(2)])
+
+
+DIGEST_ROWS = [
+    row(None, "b"), row(2, "a"), row(10, "a"), row("Zeta", 1), row("alpha", 1), row("_x", 1), row("9", 1),
+    row("\U0001f600", 1), row("￯", 1), row("é", 1), row("E", 1), row([1, "x"], {"k": "v"}),
+]  # fmt: skip
+"""Rows whose order differs between code point and any locale or ICU collation."""
+
+
+def test_a_digest_orders_its_own_rows_by_one_domain_key() -> None:
+    """SPEC_DECISIONS 133.4: the digest does not depend on the order a store returned the rows."""
+    digest = rows_sha256(DIGEST_ROWS)
+    assert rows_sha256(list(reversed(DIGEST_ROWS))) == digest
+    assert rows_sha256(sorted(DIGEST_ROWS, key=str)) == digest
+    ordered = sorted(DIGEST_ROWS, key=digest_key)
+    assert [r[0] for r in ordered] == [
+        None, 2, 10, "9", "E", "Zeta", "_x", "alpha", "é", "￯", "\U0001f600", [1, "x"],
+    ], "null first, integers by value, text by code point (astral last), documents last"  # fmt: skip
+    assert digest == hashlib.sha256(canonical_json([list(r) for r in ordered])).hexdigest()
