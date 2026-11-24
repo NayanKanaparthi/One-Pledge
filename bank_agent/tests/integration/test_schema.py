@@ -75,7 +75,8 @@ ENUM_CHECKS: dict[str, type[StrEnum] | tuple[str, ...]] = {
 }
 
 SNAPSHOT = {
-    "columns": "SELECT table_name, column_name, data_type, is_nullable, coalesce(column_default, '') "
+    "columns": "SELECT table_name, column_name, data_type, is_nullable, coalesce(column_default, ''), "
+    "coalesce(collation_name, '') "
     "FROM information_schema.columns WHERE table_schema = 'public' ORDER BY 1, 2",
     "constraints": "SELECT conrelid::regclass::text, conname, pg_get_constraintdef(oid) FROM pg_constraint "
     "WHERE connamespace = 'public'::regnamespace ORDER BY 1, 2",

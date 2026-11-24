@@ -5,12 +5,19 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Boolean, Date, Identity, Index, Integer, Text, text
+from sqlalchemy import BigInteger, Boolean, Date, Identity, Index, Integer, text
 from sqlalchemy.dialects.postgresql import INET
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import CHAR
 
-from onepledge_bank_agent.infrastructure.db.models.base import Base, hash_column, timestamp, uuid_fk, uuid_pk
+from onepledge_bank_agent.infrastructure.db.models.base import (
+    C_TEXT,
+    Base,
+    hash_column,
+    timestamp,
+    uuid_fk,
+    uuid_pk,
+)
 
 
 class LenderRow(Base):
@@ -19,8 +26,8 @@ class LenderRow(Base):
     __tablename__ = "lenders"
 
     lender_id: Mapped[uuid.UUID] = uuid_pk()
-    legal_name: Mapped[str] = mapped_column(Text, unique=True)
-    lei: Mapped[str] = mapped_column(CHAR(20), unique=True)
+    legal_name: Mapped[str] = mapped_column(C_TEXT, unique=True)
+    lei: Mapped[str] = mapped_column(CHAR(20, collation="C"), unique=True)
     created_at: Mapped[datetime] = timestamp()
 
 
@@ -31,11 +38,11 @@ class FacilityRow(Base):
 
     facility_id: Mapped[uuid.UUID] = uuid_pk()
     lender_id: Mapped[uuid.UUID] = uuid_fk("lenders.lender_id")
-    code: Mapped[str] = mapped_column(Text, unique=True)
-    name: Mapped[str] = mapped_column(Text)
+    code: Mapped[str] = mapped_column(C_TEXT, unique=True)
+    name: Mapped[str] = mapped_column(C_TEXT)
     credit_limit_cents: Mapped[int] = mapped_column(BigInteger)
     advance_rate_bps: Mapped[int] = mapped_column(Integer)
-    status: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(C_TEXT)
     opened_on: Mapped[date] = mapped_column(Date)
 
 
@@ -45,10 +52,10 @@ class UserRow(Base):
     __tablename__ = "users"
 
     user_id: Mapped[uuid.UUID] = uuid_pk()
-    email: Mapped[str] = mapped_column(Text, unique=True)
-    display_name: Mapped[str] = mapped_column(Text)
-    role: Mapped[str] = mapped_column(Text)
-    password_hash: Mapped[str] = mapped_column(Text)
+    email: Mapped[str] = mapped_column(C_TEXT, unique=True)
+    display_name: Mapped[str] = mapped_column(C_TEXT)
+    role: Mapped[str] = mapped_column(C_TEXT)
+    password_hash: Mapped[str] = mapped_column(C_TEXT)
     active: Mapped[bool] = mapped_column(Boolean)
     token_version: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     created_at: Mapped[datetime] = timestamp()

@@ -5,7 +5,8 @@ object's kind and name mapped to its definition:
 
 - `database encoding`: the encoding of the database, UTF8 (SPEC_DECISIONS 133.1);
 - `table`: whether row security is enabled and forced;
-- `column`: type, nullability and default;
+- `column`: type, nullability, default and collation (`"C"` for every text-typed column,
+  SPEC_DECISIONS 133.2);
 - `constraint`: `pg_get_constraintdef`;
 - `index`: `pg_get_indexdef`;
 - `trigger`: `tgtype`, `tgenabled` and the function it calls;
@@ -50,8 +51,10 @@ QUERIES: tuple[tuple[str, str], ...] = (
         "|| CASE WHEN a.attnotnull THEN ' NOT NULL' ELSE '' END "
         "|| coalesce(' DEFAULT ' || pg_get_expr(d.adbin, d.adrelid), '') "
         "|| CASE WHEN a.attidentity <> '' THEN ' IDENTITY ' || a.attidentity::text ELSE '' END "
+        "|| coalesce(' COLLATE ' || quote_ident(l.collname), '') "
         "FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid "
         "LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum "
+        "LEFT JOIN pg_collation l ON l.oid = a.attcollation "
         "WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p') "
         "AND a.attnum > 0 AND NOT a.attisdropped",
     ),

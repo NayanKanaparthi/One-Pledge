@@ -11,12 +11,13 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Index, Text, UniqueConstraint, text
+from sqlalchemy import BigInteger, Boolean, DateTime, Index, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import CHAR
 
 from onepledge_bank_agent.infrastructure.db.models.base import (
+    C_TEXT,
     Base,
     hash_column,
     timestamp,
@@ -34,16 +35,16 @@ class AuditLogRow(Base):
     audit_id: Mapped[uuid.UUID] = uuid_pk()
     seq: Mapped[int] = mapped_column(BigInteger, unique=True)
     at: Mapped[datetime] = timestamp()
-    actor_type: Mapped[str] = mapped_column(Text)
+    actor_type: Mapped[str] = mapped_column(C_TEXT)
     actor_user_id: Mapped[uuid.UUID | None] = uuid_fk("users.user_id", nullable=True)
-    action: Mapped[str] = mapped_column(Text)
-    object_type: Mapped[str] = mapped_column(Text)
+    action: Mapped[str] = mapped_column(C_TEXT)
+    object_type: Mapped[str] = mapped_column(C_TEXT)
     object_id: Mapped[uuid.UUID | None] = uuid_column(nullable=True)
-    outcome: Mapped[str] = mapped_column(Text)
-    request_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcome: Mapped[str] = mapped_column(C_TEXT)
+    request_id: Mapped[str | None] = mapped_column(C_TEXT, nullable=True)
     detail: Mapped[dict[str, Any]] = mapped_column(JSONB)
     prev_hash: Mapped[str] = hash_column()
-    entry_hash: Mapped[str] = mapped_column(CHAR(64), unique=True)
+    entry_hash: Mapped[str] = mapped_column(CHAR(64, collation="C"), unique=True)
 
 
 class IntegrityRunRow(Base):
@@ -54,7 +55,7 @@ class IntegrityRunRow(Base):
     run_id: Mapped[uuid.UUID] = uuid_pk()
     ran_at: Mapped[datetime] = timestamp()
     triggered_by: Mapped[uuid.UUID | None] = uuid_fk("users.user_id", nullable=True)
-    status: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(C_TEXT)
     report: Mapped[dict[str, Any]] = mapped_column(JSONB)
 
 
@@ -75,11 +76,11 @@ class QuarantinedMessageRow(Base):
     quarantine_id: Mapped[uuid.UUID] = uuid_pk()
     message_id: Mapped[uuid.UUID | None] = uuid_column(nullable=True)
     position: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    message_type: Mapped[str] = mapped_column(Text)
+    message_type: Mapped[str] = mapped_column(C_TEXT)
     payload: Mapped[Any] = mapped_column(JSONB, nullable=True)
     payload_withheld: Mapped[bool] = mapped_column(Boolean)
     payload_sha256: Mapped[str] = hash_column()
-    reason: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(C_TEXT)
     received_at: Mapped[datetime] = timestamp()
 
 
@@ -89,12 +90,12 @@ class OutboxMessageRow(Base):
     __tablename__ = "registry_outbox_messages"
 
     message_id: Mapped[uuid.UUID] = uuid_pk()
-    message_type: Mapped[str] = mapped_column(Text)
+    message_type: Mapped[str] = mapped_column(C_TEXT)
     first_seen_at: Mapped[datetime] = timestamp()
     handled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    outcome: Mapped[str | None] = mapped_column(Text, nullable=True)
-    ack_status: Mapped[str] = mapped_column(Text)
-    last_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcome: Mapped[str | None] = mapped_column(C_TEXT, nullable=True)
+    ack_status: Mapped[str] = mapped_column(C_TEXT)
+    last_reason: Mapped[str | None] = mapped_column(C_TEXT, nullable=True)
     updated_at: Mapped[datetime] = timestamp()
 
 
@@ -106,5 +107,5 @@ class OutboxStateRow(Base):
     singleton: Mapped[bool] = mapped_column(Boolean, primary_key=True)
     last_complete_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     incomplete_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_reason: Mapped[str | None] = mapped_column(C_TEXT, nullable=True)
     blind_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

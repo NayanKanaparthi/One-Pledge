@@ -53,6 +53,8 @@ CHANGES: list[tuple[LiteralString, str, str]] = [
     ("ALTER TABLE alerts ALTER COLUMN note TYPE varchar(10)", "SCHEMA_OBJECT_CHANGED", "column alerts.note"),
     ("CREATE POLICY optest_all ON loans USING (true)", "SCHEMA_OBJECT_ADDED", "policy loans.optest_all"),
     ("ALTER TABLE loans ENABLE ROW LEVEL SECURITY", "SCHEMA_OBJECT_CHANGED", "table loans"),
+    ('ALTER TABLE facilities ALTER COLUMN name TYPE text COLLATE "und-x-icu"', "SCHEMA_OBJECT_CHANGED",
+     "column facilities.name"),
 ]  # fmt: skip
 
 

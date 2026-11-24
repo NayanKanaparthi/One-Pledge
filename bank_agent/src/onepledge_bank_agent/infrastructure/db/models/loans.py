@@ -6,12 +6,19 @@ import uuid
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, Date, Index, PrimaryKeyConstraint, Text, UniqueConstraint, text
+from sqlalchemy import BigInteger, Date, Index, PrimaryKeyConstraint, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import CHAR
 
-from onepledge_bank_agent.infrastructure.db.models.base import Base, hash_column, timestamp, uuid_fk, uuid_pk
+from onepledge_bank_agent.infrastructure.db.models.base import (
+    C_TEXT,
+    Base,
+    hash_column,
+    timestamp,
+    uuid_fk,
+    uuid_pk,
+)
 
 
 class LoanRow(Base):
@@ -33,13 +40,13 @@ class LoanRow(Base):
     loan_id: Mapped[uuid.UUID] = uuid_pk()
     facility_id: Mapped[uuid.UUID] = uuid_fk("facilities.facility_id")
     first_submission_id: Mapped[uuid.UUID] = uuid_fk("tape_submissions.submission_id")
-    lender_loan_number: Mapped[str] = mapped_column(Text)
-    vin: Mapped[str] = mapped_column(CHAR(17))
-    borrower_ref: Mapped[str] = mapped_column(Text)
+    lender_loan_number: Mapped[str] = mapped_column(C_TEXT)
+    vin: Mapped[str] = mapped_column(CHAR(17, collation="C"))
+    borrower_ref: Mapped[str] = mapped_column(C_TEXT)
     origination_date: Mapped[date] = mapped_column(Date)
     original_amount_cents: Mapped[int] = mapped_column(BigInteger)
     current_balance_cents: Mapped[int] = mapped_column(BigInteger)
-    state: Mapped[str] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(C_TEXT)
     created_at: Mapped[datetime] = timestamp()
     updated_at: Mapped[datetime] = timestamp()
 
@@ -57,9 +64,9 @@ class LocalCheckRow(Base):
     check_id: Mapped[uuid.UUID] = uuid_pk()
     loan_id: Mapped[uuid.UUID] = uuid_fk("loans.loan_id")
     submission_id: Mapped[uuid.UUID] = uuid_fk("tape_submissions.submission_id")
-    check_type: Mapped[str] = mapped_column(Text)
-    result: Mapped[str] = mapped_column(Text)
-    reason_code: Mapped[str] = mapped_column(Text)
+    check_type: Mapped[str] = mapped_column(C_TEXT)
+    result: Mapped[str] = mapped_column(C_TEXT)
+    reason_code: Mapped[str] = mapped_column(C_TEXT)
     evidence: Mapped[dict[str, Any]] = mapped_column(JSONB)
     checked_at: Mapped[datetime] = timestamp()
 
@@ -74,7 +81,7 @@ class LoanTokenRow(Base):
     )
 
     loan_id: Mapped[uuid.UUID] = uuid_fk("loans.loan_id")
-    token_kind: Mapped[str] = mapped_column(Text)
-    key_version: Mapped[str] = mapped_column(Text)
+    token_kind: Mapped[str] = mapped_column(C_TEXT)
+    key_version: Mapped[str] = mapped_column(C_TEXT)
     token: Mapped[str] = hash_column()
     created_at: Mapped[datetime] = timestamp()

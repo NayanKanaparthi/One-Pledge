@@ -13,7 +13,6 @@ from sqlalchemy import (
     Index,
     Integer,
     PrimaryKeyConstraint,
-    Text,
     UniqueConstraint,
     text,
 )
@@ -22,6 +21,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import CHAR
 
 from onepledge_bank_agent.infrastructure.db.models.base import (
+    C_TEXT,
     Base,
     hash_column,
     timestamp,
@@ -47,11 +47,11 @@ class RegistryRequestRow(Base):
 
     request_id: Mapped[uuid.UUID] = uuid_pk()
     submission_id: Mapped[uuid.UUID] = uuid_fk("tape_submissions.submission_id")
-    origin: Mapped[str] = mapped_column(Text)
+    origin: Mapped[str] = mapped_column(C_TEXT)
     batch_index: Mapped[int] = mapped_column(Integer)
-    idempotency_key: Mapped[str] = mapped_column(CHAR(64), unique=True)
-    kind: Mapped[str] = mapped_column(Text)
-    key_version: Mapped[str] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(CHAR(64, collation="C"), unique=True)
+    kind: Mapped[str] = mapped_column(C_TEXT)
+    key_version: Mapped[str] = mapped_column(C_TEXT)
     item_count: Mapped[int] = mapped_column(Integer)
     attempts: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -79,14 +79,14 @@ class RegistryRequestItemRow(Base):
     item_ref: Mapped[uuid.UUID] = uuid_column()
     position: Mapped[int] = mapped_column(Integer)
     loan_id: Mapped[uuid.UUID] = uuid_fk("loans.loan_id")
-    result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result: Mapped[str | None] = mapped_column(C_TEXT, nullable=True)
     already_held: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    match_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
-    match_basis: Mapped[str | None] = mapped_column(Text, nullable=True)
-    kinds_matched: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default=text("'{}'::text[]"))
+    match_kind: Mapped[str | None] = mapped_column(C_TEXT, nullable=True)
+    match_basis: Mapped[str | None] = mapped_column(C_TEXT, nullable=True)
+    kinds_matched: Mapped[list[str]] = mapped_column(ARRAY(C_TEXT), server_default=text("'{}'::text[]"))
     registry_case_id: Mapped[uuid.UUID | None] = uuid_column(nullable=True)
     lock_id: Mapped[uuid.UUID | None] = uuid_column(nullable=True)
-    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason: Mapped[str | None] = mapped_column(C_TEXT, nullable=True)
 
 
 class CertificateRow(Base):
@@ -116,16 +116,16 @@ class CertificateRow(Base):
     certificate_id: Mapped[uuid.UUID] = uuid_column()
     request_id: Mapped[uuid.UUID] = uuid_fk("registry_requests.request_id")
     registry_submission_id: Mapped[uuid.UUID] = uuid_column()
-    kind: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(C_TEXT)
     as_of_seq: Mapped[int] = mapped_column(BigInteger)
     issued_at: Mapped[datetime] = timestamp()
     body: Mapped[dict[str, Any]] = mapped_column(JSONB)
     body_hash: Mapped[str] = hash_column()
-    signature: Mapped[str] = mapped_column(Text)
-    signing_key_id: Mapped[str] = mapped_column(Text)
+    signature: Mapped[str] = mapped_column(C_TEXT)
+    signing_key_id: Mapped[str] = mapped_column(C_TEXT)
     verified: Mapped[bool] = mapped_column(Boolean)
     verified_at: Mapped[datetime] = timestamp()
-    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(C_TEXT, nullable=True)
     received_at: Mapped[datetime] = timestamp()
     delivered_body_sha256: Mapped[str] = hash_column()
 
@@ -149,12 +149,12 @@ class CheckpointSeenRow(Base):
     last_event_seq: Mapped[int] = mapped_column(BigInteger)
     head_hash: Mapped[str] = hash_column()
     signed_at: Mapped[datetime] = timestamp()
-    signature: Mapped[str] = mapped_column(Text)
-    signing_key_id: Mapped[str] = mapped_column(Text)
+    signature: Mapped[str] = mapped_column(C_TEXT)
+    signing_key_id: Mapped[str] = mapped_column(C_TEXT)
     received_at: Mapped[datetime] = timestamp()
     verified: Mapped[bool] = mapped_column(Boolean)
     verified_at: Mapped[datetime] = timestamp()
-    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(C_TEXT, nullable=True)
     first_bad_event_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     body: Mapped[dict[str, Any]] = mapped_column(JSONB)
 
@@ -172,18 +172,18 @@ class AlertRow(Base):
     alert_id: Mapped[uuid.UUID] = uuid_pk()
     registry_case_id: Mapped[uuid.UUID] = uuid_column()
     loan_id: Mapped[uuid.UUID] = uuid_fk("loans.loan_id")
-    role: Mapped[str] = mapped_column(Text)
-    match_kind: Mapped[str] = mapped_column(Text)
-    match_basis: Mapped[str] = mapped_column(Text)
-    kinds_matched: Mapped[list[str]] = mapped_column(ARRAY(Text))
-    kinds_not_matched: Mapped[list[str]] = mapped_column(ARRAY(Text))
-    explanation_text: Mapped[str] = mapped_column(Text)
-    explanation_source: Mapped[str] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(Text)
-    case_status: Mapped[str] = mapped_column(Text)
-    bank_position: Mapped[str | None] = mapped_column(Text, nullable=True)
+    role: Mapped[str] = mapped_column(C_TEXT)
+    match_kind: Mapped[str] = mapped_column(C_TEXT)
+    match_basis: Mapped[str] = mapped_column(C_TEXT)
+    kinds_matched: Mapped[list[str]] = mapped_column(ARRAY(C_TEXT))
+    kinds_not_matched: Mapped[list[str]] = mapped_column(ARRAY(C_TEXT))
+    explanation_text: Mapped[str] = mapped_column(C_TEXT)
+    explanation_source: Mapped[str] = mapped_column(C_TEXT)
+    status: Mapped[str] = mapped_column(C_TEXT)
+    case_status: Mapped[str] = mapped_column(C_TEXT)
+    bank_position: Mapped[str | None] = mapped_column(C_TEXT, nullable=True)
     position_submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    note: Mapped[str | None] = mapped_column(C_TEXT, nullable=True)
     received_at: Mapped[datetime] = timestamp()
     reviewed_by: Mapped[uuid.UUID | None] = uuid_fk("users.user_id", nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -114,6 +114,14 @@ What a reviewer can check, and where:
   and a tape's raw payload and cells are bounded by the tape limits. Tests store and read back
   a 500 result answer and a 500 item certificate of the longest legal form
   (`tests/bank_testkit/longest.py` builds it from the contract).
+- **Text is compared and ordered by code point, wherever the database was created**
+  (SPEC_DECISIONS 133). The database is UTF8; every text-typed column, `text[]` and
+  `alembic_version.version_num` included, is `COLLATE "C"` (migration 0016, declared by the
+  models, checked on the migrated catalogue and recorded per column in the schema manifest,
+  so `SCHEMA_MATCHES_MANIFEST` names a column moved to another collation); no query orders or
+  compares a text expression under a default collation (`tests/unit/test_sql_collation.py`),
+  the role inspection sorts names in Python, and a stage digest sorts its own rows
+  (`stage_digests.digest_key`). Nothing compares text through a locale.
 - **Others can check us without trusting us, and we check them.** Every certificate and
   checkpoint is verified with the keys of `REGISTRY_PUBLIC_KEYS` only, stored with its
   verdict, and failures are never removed: a certificate that failed stays as evidence
@@ -196,6 +204,7 @@ bank_agent/
       0013_outbox_ledger.py    # registry_outbox_messages and registry_outbox_state: 21 tables
       0014_no_delete.py        # no row is deleted; answered requests are frozen
       0015_function_privileges.py  # no function executable by PUBLIC
+      0016_collate_c.py         # COLLATE "C" on every text-typed column
   src/
     onepledge_bank_agent/
       domain/

@@ -2,7 +2,8 @@
 
 The models declare what Alembic autogenerate compares: tables, columns, keys, foreign
 keys, unique constraints and indexes. A test asserts they equal the migrated schema.
-CHECK constraints and triggers live in the migrations only; another test reads them
+Every text-typed column declares `COLLATE "C"` (`C_TEXT`, `CHAR(n, collation="C")`), as
+migration 0016 sets it. CHECK constraints and triggers live in the migrations only; another test reads them
 from the live catalogue and compares every value list with its enum.
 """
 
@@ -11,10 +12,14 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey
+from sqlalchemy import DateTime, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import CHAR
+
+C_TEXT = Text(collation="C")
+"""`text COLLATE "C"`: every text-typed column is compared and ordered by code point (SPEC_DECISIONS
+133.2, migration 0016)."""
 
 
 class Base(DeclarativeBase):
@@ -43,4 +48,4 @@ def timestamp() -> Mapped[datetime]:
 
 def hash_column() -> Mapped[str]:
     """A 64 character hash."""
-    return mapped_column(CHAR(64))
+    return mapped_column(CHAR(64, collation="C"))
