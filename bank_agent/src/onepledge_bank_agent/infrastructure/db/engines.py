@@ -38,7 +38,9 @@ def make_engine(url: str, pool_size: int = 5, *, inspecting: bool = False) -> En
         hide_parameters=True,
         pool_pre_ping=True,
         pool_size=pool_size,
-        connect_args={"options": connect_options()},
+        # The client side is UTF8 whatever the server is, so a database in another encoding reaches
+        # the encoding check as text, not as bytes the driver cannot read (SPEC_DECISIONS 133.1).
+        connect_args={"options": connect_options(), "client_encoding": "UTF8"},
     )
     if not inspecting:
         refuse_replica_sessions(engine)

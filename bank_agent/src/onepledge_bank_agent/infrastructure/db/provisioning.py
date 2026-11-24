@@ -22,6 +22,14 @@ from onepledge_bank_agent.infrastructure.operator_errors import CONFIGURATION_ER
 _NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 
 
+def create_database_statement(target: DatabaseTarget) -> sql.Composed:
+    """`CREATE DATABASE` in UTF8 from `template0`, whatever `template1` holds (SPEC_DECISIONS 133.1):
+    under UTF8 the collation "C" orders text by code point."""
+    return sql.SQL("CREATE DATABASE {} OWNER {} ENCODING 'UTF8' TEMPLATE template0").format(
+        sql.Identifier(target.database), sql.Identifier(target.owner_role)
+    )
+
+
 def _check_names(target: DatabaseTarget) -> None:
     for name in (target.database, target.owner_role, target.app_role):
         if not _NAME.fullmatch(name):
@@ -64,9 +72,7 @@ class DatabaseProvisioner:
             ).fetchone()
             database = sql.Identifier(target.database)
             if exists is None:
-                connection.execute(
-                    sql.SQL("CREATE DATABASE {} OWNER {}").format(database, sql.Identifier(target.owner_role))
-                )
+                connection.execute(create_database_statement(target))
             connection.execute(sql.SQL("REVOKE ALL ON DATABASE {} FROM PUBLIC").format(database))
             connection.execute(
                 sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(

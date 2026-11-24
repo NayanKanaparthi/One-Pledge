@@ -17,11 +17,13 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import LiteralString
 
+import psycopg
 import pytest
 from psycopg import sql
 
 from bank_testkit.database import BankDatabase
 from bank_testkit.doubles import InProcessDoubles
+from onepledge_bank_agent.infrastructure.db.provisioning import DatabaseProvisioner
 from onepledge_bank_agent.interface.cli.main import UNEXPECTED, main
 from onepledge_bank_agent.interface.cli.output import Output
 
@@ -111,3 +113,30 @@ def test_a_statement_refused_inside_a_check_is_that_checks_failure_with_its_sqls
             ), command
     finally:
         as_superuser(bank_db, "GRANT EXECUTE ON FUNCTION pg_catalog.aclexplode(aclitem[]) TO PUBLIC")
+
+
+ENCODING = (
+    "The database of DATABASE_URL has the encoding SQL_ASCII, not UTF8; create it again with db provision, "
+    "which makes it UTF8."
+)
+
+
+def test_a_database_that_is_not_utf8_is_refused_by_the_encoding_check(
+    cli: Cli, bank_db: BankDatabase
+) -> None:
+    """SPEC_DECISIONS 133.1: the check after "database reachable"; no command runs on such a database."""
+    target = bank_db.target
+    with psycopg.connect(bank_db.admin_url, autocommit=True) as admin:
+        admin.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(target.database)))
+        admin.execute(
+            sql.SQL("CREATE DATABASE {} OWNER {} ENCODING 'SQL_ASCII' LOCALE 'C' TEMPLATE template0").format(
+                sql.Identifier(target.database), sql.Identifier(target.owner_role)
+            )
+        )
+    DatabaseProvisioner(bank_db.admin_url).provision(
+        target
+    )  # the grants again; the encoding is checked first
+    for command in (*COMMANDS, ("integrity", "report")):
+        run = cli(*command)
+        assert (run.code, run.err.strip()) == (1, ENCODING), command
+        assert UNEXPECTED not in run.err

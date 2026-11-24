@@ -3,6 +3,7 @@
 `catalogue` renders the live catalogue of the `public` schema as one entry per object, the
 object's kind and name mapped to its definition:
 
+- `database encoding`: the encoding of the database, UTF8 (SPEC_DECISIONS 133.1);
 - `table`: whether row security is enabled and forced;
 - `column`: type, nullability and default;
 - `constraint`: `pg_get_constraintdef`;
@@ -32,6 +33,11 @@ from sqlalchemy import Connection, text
 
 MANIFEST_FILE = "schema_manifest.json"
 QUERIES: tuple[tuple[str, str], ...] = (
+    (
+        "database",
+        "SELECT 'encoding', pg_encoding_to_char(d.encoding) FROM pg_database d "
+        "WHERE d.datname = current_database()",
+    ),
     (
         "table",
         "SELECT c.relname, CASE WHEN c.relrowsecurity THEN 'row security' ELSE 'no row security' END || "

@@ -19,6 +19,9 @@ from onepledge_bank_agent.infrastructure.db.role_guard import RuntimeRoleGuard
 from onepledge_bank_agent.infrastructure.operator_errors import CONFIGURATION_ERROR, OperatorError
 
 VARIABLE = "DATABASE_URL"
+_ENCODING = text(
+    "SELECT current_setting('server_encoding') COLLATE \"C\" = 'UTF8', current_setting('server_encoding')"
+)
 
 
 def startup_check[T](name: str, action: Callable[[], T]) -> T:
@@ -39,6 +42,19 @@ class DatabaseProbe:
         """The database accepts a connection and answers one statement."""
         with self._open() as connection:
             connection.execute(text("SELECT 1"))
+
+    def ensure_utf8(self) -> None:
+        """The database encoding is UTF8, the one under which "C" orders by code point (SPEC_DECISIONS
+        133.1)."""
+        with self._open() as connection:
+            utf8, shown = connection.execute(_ENCODING).one()
+        if not utf8:
+            name = shown.decode("ascii", "replace") if isinstance(shown, bytes) else str(shown)
+            raise OperatorError(
+                f"The database of DATABASE_URL has the encoding {name}, not UTF8; create it again with "
+                "db provision, which makes it UTF8.",
+                CONFIGURATION_ERROR,
+            )
 
     def ensure_session_parameters(self) -> None:
         """Every session parameter the bank agent sets holds in the session."""

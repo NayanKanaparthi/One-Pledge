@@ -317,9 +317,13 @@ error, and a flag takes no value.
   without `--once` is a usage error. The worker refuses a schema that is not at the
   latest revision.
 - Every runtime command starts through named checks (SPEC_DECISIONS 104,
-  `interface/cli/startup.py`): settings, database reachable, session parameters, schema at
-  head and role inspection (`integrity report`: the tables only, so it can show a false
-  control). Each has its own sentence. Schema at head passes only when the database's
+  `interface/cli/startup.py`): settings, database reachable, database encoding, session
+  parameters, schema at head and role inspection (`integrity report`: the tables only, so it
+  can show a false control). Each has its own sentence. Database encoding refuses a database
+  that is not UTF8 ("The database of DATABASE_URL has the encoding E, not UTF8; create it
+  again with db provision, which makes it UTF8."); `db provision` creates the database with
+  `ENCODING 'UTF8'` from `template0`, and the schema manifest records the encoding
+  (SPEC_DECISIONS 133.1). Schema at head passes only when the database's
   revision is the head of the installed migrations (SPEC 12.5, SPEC_DECISIONS 128), and says
   which of two things is wrong: "The bank database tables are missing; run db migrate
   first.", or "The database DB is at revision R, not at H as this program expects; run db

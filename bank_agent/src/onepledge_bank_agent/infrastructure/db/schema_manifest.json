@@ -386,6 +386,7 @@
  "constraint users.ck_users_token_version": "CHECK ((token_version >= 0))",
  "constraint users.users_email_key": "UNIQUE (email)",
  "constraint users.users_pkey": "PRIMARY KEY (user_id)",
+ "database encoding": "UTF8",
  "function onepledge_alerts_guard()": "c3563d5a045549e9661d828d4499bd6cb611a82616d8be109c95da52875ebf92",
  "function onepledge_audit_guard()": "9511e72cfbae778738313a0a3b2bd660bd5a488be5af3f6402e9530fb9c9d808",
  "function onepledge_forbid_delete()": "4c77fa80d321037857d7bcb0183f6411851195fe4f4eec4df29c1437f2138129",
