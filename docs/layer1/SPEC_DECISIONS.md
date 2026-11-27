@@ -1926,3 +1926,49 @@ Bank agent implementer (`bank_agent/`):
 | R6 | Architecture test banning locale aware comparison | 133 |
 
 No ordering dependency between the two implementers.
+
+# Round 9 (2026-11-27): layer 2's gate on a clean tree
+
+Layer 2's owner ran layer 1's gate on a clean tree (macOS, Python 3.13, PostgreSQL 16.16, a fresh `pip install`) and reported four failures. Decisions 135 to 138 fix each as a class. No contract or rubric change.
+
+## 135. The em dash hook matches U+2014 as pygrep reads it
+
+**Cause.** pre-commit's `pygrep` compiles a hook's `entry` as a bytes pattern (`re.compile(entry.encode())`) and searches each file's bytes. The entry `\u2014` is a bad escape in a bytes pattern, so the hook crashed on every file.
+
+**Decision.** The entry is `\xe2\x80\x94`, the three UTF-8 bytes of U+2014. A test loads `.pre-commit-config.yaml` with pre-commit's own loader and, for every `pygrep` hook, compiles the entry as bytes with the hook's flags and runs pygrep's own program on it; the em dash pattern matches a line with U+2014 and no line with a hyphen, an en dash or a euro sign; `python -m pre_commit.languages.pygrep` fails a file with an em dash and passes one without. `tools` declares `pre-commit` (dev).
+
+## 136. A fresh install gets the tested dependency set
+
+**Cause.** The tests run outside records and the doubles in process through `fastapi.testclient`, which is Starlette's TestClient. Since Starlette 1.2.0 it is built on httpx2 and, when only httpx is installed, warns `StarletteDeprecationWarning` on import; under `filterwarnings = ["error"]` the bank agent's `conftest.py` cannot be loaded and every bank agent test errors. The build machine had httpx2 installed without any package declaring it, which hid this. The Starlette version is not the cause: 1.7.0 and 1.10.0 warn alike, and with httpx2 present the whole suite passes on Starlette 1.10.0 and anyio 4.16.0. No warning from anyio 4.16.0 was reproduced. The rest of the exposure is that every range was open, so each fresh install resolved whatever PyPI held that day.
+
+**Decision.**
+
+1. The bank agent declares `httpx2>=2.13,<3` (dev), the replacement Starlette names; the warning is not suppressed. This adds httpx2 to the dev-only packages of SPEC 2.1. A repository test requires every package whose code imports `fastapi.testclient` or `starlette.testclient` to declare httpx2.
+2. Upper bounds only where a major version is the risk the incident showed: `starlette<2` (outside records and the doubles) and `httpx2<3`. Other ranges stay open; the pins of point 3 make installs reproducible.
+3. `constraints.txt` at the root pins the exact version of every runtime and dev dependency, transitive ones included. `make setup` installs every package with `-c constraints.txt`. `make constraints` resolves the declared ranges afresh in a new virtual environment and rewrites the file; it is committed only after `make ci` passes on it. A repository test requires every declared dependency of every package to have exactly one `name==version` pin and `make setup` to pass the file to every install. The root README's "Getting started" says so.
+
+## 137. Every database session of both services runs in UTC
+
+**Cause.** PostgreSQL prints a `timestamptz` in the session's `TimeZone`, in query results and in catalogue text. The check constraints `ck_certificates_issued_at_range` and `ck_checkpoints_seen_signed_at_range` were captured into `schema_manifest.json` on the dev server (`TimeZone` America/New_York) as `'1999-12-31 19:00:00-05'`. On a UTC server a fresh bank database reported `SCHEMA_MATCHES_MANIFEST` false, and 48 bank agent integration tests failed (26 failed, 22 errors at setup).
+
+**Decision.**
+
+1. `TimeZone` joins the session parameters of decision 103.7 for the bank agent and for outside records: every connection is opened with `TimeZone=UTC`, which overrides any server, database or role default, and the startup check "session parameters" compares it like the others.
+2. `catalogue()` renders under UTC itself (`set_config('TimeZone', 'UTC', true)` for the current transaction) and refuses a connection in autocommit mode, where the setting would not hold, rather than return text in another time zone.
+3. The manifest is written by `python -m bank_testkit.schema_manifest_file`, which migrates a scratch database and writes the catalogue in one canonical form; the manifest test requires the committed file to equal that form byte for byte. Regenerated, the file differs in exactly the two constraints above, now `'2000-01-01 00:00:00+00'` and `'2100-01-01 00:00:00+00'`.
+4. Exposure elsewhere. The constraint literals in the migrations carry `+00`, so the stored instants never depended on the migrator's time zone; only their rendering did. No other catalogue text, constraint or SQL in either service or the test kit renders a timestamp as text. Outside records has no timestamp in its catalogue checks or its answers; point 1 applies to it so that nothing it reads later can depend on the server either.
+
+Tests: a bank database whose default `TimeZone` is Asia/Kolkata gives exactly the manifest and every control holds; a session set to Asia/Kolkata gives the manifest and is left as it was; a catalogue read in autocommit mode in another time zone is refused; outside records' serving engine shows `TimeZone` UTC on a database whose default is Asia/Kolkata.
+
+Verified on a second PostgreSQL 16 cluster: before the change, with `timezone=UTC`, the 48 bank agent tests failed; after it, `make ci` passes there (4,852 tests), and the integration tests of the bank agent and outside records pass with the server's time zone Asia/Kolkata (865 tests), as `make ci` does on the dev server in America/New_York.
+
+## 138. Tests hold on any operating system
+
+**Cause.** Two tests assumed Linux. The `seed-reference` CLI test named a missing directory under the session's temporary directory; the command line breaks a long line only at spaces, so it prints a path whole, and under macOS's long `TMPDIR` the sentence passed 100 columns and the width check of decision 121.1 failed. The datagen refusal test expected "permission denied" for `/sys/onepledge-test/data`, which is what Linux raises (EPERM as root, EACCES otherwise); macOS, where `/` is the read-only system volume, raises EROFS, and the product rightly says the file system is read-only.
+
+**Decision.**
+
+1. A test that checks the width of a sentence naming a path controls that path: the CLI test passes a relative `--data-dir` from a known working directory, so the line does not depend on where the system puts temporary directories. The product is unchanged.
+2. A test of an operating system refusal asserts the product's sentence for the error the system actually raised: the refusal test first makes the directory itself, takes the errno, and expects the plain words of decision 23 (d) for it, from a table written in the test. A second test makes each refusal deterministically (EACCES, EPERM, EROFS, ENOSPC, ENOTDIR) with a refusing `mkdir`, so every sentence is checked on every system and for root.
+3. Where the product prints the operating system's own description of an error, the test derives the expected words from the errno (`os.strerror`), not from one platform's text (the reference file that is a directory).
+4. The search for the same two classes in the rest of the suite: `make ci` passes with a `TMPDIR` of 162 characters (4,852 tests), so no other test depends on the length of the temporary path; the tests that compare an operating system's error text either build the error themselves from `os.strerror` or are the cases above. One test still matches a PostgreSQL message ("permission denied" when a role connects to another bank's database); that is the server's text, which depends on its `lc_messages`, not on the operating system, and the test servers run with `C.UTF-8`.
