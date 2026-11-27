@@ -197,11 +197,54 @@ def test_an_output_path_under_a_file_is_one_sentence(tmp_path: Path) -> None:
     )
 
 
+# The plain words of SPEC_DECISIONS 23 d for each refusal, written here independently of the
+# product's table, so a test compares the product with the decision and not with itself.
+PLAIN_WORDS = {
+    errno.EACCES: "permission denied",
+    errno.EPERM: "permission denied",
+    errno.EROFS: "the file system is read-only",
+    errno.ENOSPC: "no space is left on the device",
+    errno.ENOTDIR: "a part of the path is a file",
+}
+# A directory no process may create: on Linux `/sys` is sysfs, which refuses a new directory (EPERM,
+# or EACCES for a user other than root); on macOS `/` is the sealed system volume (EROFS).
+SYSTEM_REFUSED = Path("/sys/onepledge-test/data")
+
+
+def _refusal(target: Path) -> OSError:
+    """The error this operating system raises when a directory is made at `target`."""
+    try:
+        target.mkdir(parents=True)
+    except OSError as error:
+        return error
+    target.rmdir()
+    pytest.fail(f"{target} was created; this operating system refuses no part of it")
+
+
 def test_a_path_the_system_refuses_is_one_sentence() -> None:
-    target = Path("/sys/onepledge-test/data")
-    code, _, err = run("generate", "--seed", "1", "--profile", "example", "--out", str(target))
-    assert code == 1
-    assert err == f"Cannot write the data set to {target}: permission denied; choose another --out.\n"
+    """The sentence for the refusal this operating system actually raises, whichever it is."""
+    refusal = _refusal(SYSTEM_REFUSED)
+    assert refusal.errno in PLAIN_WORDS, f"an unexpected refusal: {refusal!r}"
+    code, out, err = run("generate", "--seed", "1", "--profile", "example", "--out", str(SYSTEM_REFUSED))
+    words = PLAIN_WORDS[refusal.errno]
+    assert (code, out) == (1, "")
+    assert err == f"Cannot write the data set to {SYSTEM_REFUSED}: {words}; choose another --out.\n"
+
+
+@pytest.mark.parametrize("number", sorted(PLAIN_WORDS), ids=[errno.errorcode[n] for n in sorted(PLAIN_WORDS)])
+def test_each_refusal_of_the_output_directory_is_one_sentence(
+    number: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same sentence for each refusal, made deterministically whatever the OS and the user."""
+    target = tmp_path / "out" / "data"
+
+    def refuse(path: Path, mode: int = 0o777, parents: bool = False, exist_ok: bool = False) -> None:
+        raise OSError(number, os.strerror(number), str(path))
+
+    monkeypatch.setattr(Path, "mkdir", refuse)
+    code, out, err = run("generate", "--seed", "1", "--profile", "example", "--out", str(target))
+    assert (code, out) == (1, "")
+    assert err == f"Cannot write the data set to {target}: {PLAIN_WORDS[number]}; choose another --out.\n"
 
 
 def test_a_missing_parent_is_created(tmp_path: Path) -> None:
@@ -230,11 +273,9 @@ def test_a_file_the_system_refuses_to_read_is_one_sentence(
 @pytest.mark.parametrize(
     ("number", "words"),
     [
-        (errno.EACCES, "permission denied"),
-        (errno.EROFS, "the file system is read-only"),
-        (errno.ENOSPC, "no space is left on the device"),
-        (errno.ENOTDIR, "a part of the path is a file"),
-        (errno.EIO, "input/output error"),
+        *sorted(PLAIN_WORDS.items()),
+        # An error the decision has no words for is the operating system's own description.
+        (errno.EIO, os.strerror(errno.EIO).lower()),
     ],
 )
 def test_file_system_problems_are_described_in_plain_words(number: int, words: str) -> None:

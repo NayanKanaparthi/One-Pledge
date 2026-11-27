@@ -275,11 +275,11 @@ def test_seed_reference_loads_the_bank_reference_data_audits_it_and_is_idempoten
         }] * 2,
     ], "the printed counts are the audited ones"  # fmt: skip
     assert first_broken_seq(bank_db) is None
-    missing = cli("seed-reference", "--data-dir", str(example_data / "nowhere"), "--json")
-    assert (
-        missing.code == 1
-        and unwrap(missing.err) == f"{example_data / 'nowhere'}/reference.json: no such file.\n"
-    )
+    # The sentence names the path as given. A relative one keeps the line's width independent of where
+    # the system puts temporary directories (a long TMPDIR on macOS), so the 100 column check holds.
+    monkeypatch.chdir(example_data)
+    missing = cli("seed-reference", "--data-dir", "nowhere", "--json")
+    assert missing.code == 1 and unwrap(missing.err) == "nowhere/reference.json: no such file.\n"
     assert missing.json() == {
         "ok": False,
         "error": {"code": "REFERENCE_DATA_INVALID", "message": unwrap(missing.err).strip()},

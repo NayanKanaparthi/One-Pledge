@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import os
 import uuid
 from pathlib import Path
 
@@ -143,7 +145,8 @@ def test_a_reference_path_that_is_a_directory_is_named_in_the_sentence(tmp_path:
     (tmp_path / "reference.json").mkdir()
     with pytest.raises(ReferenceDataError) as raised:
         ReferenceFileSource().load(tmp_path, "HARBOR")
-    assert raised.value.sentence == f"{tmp_path}/reference.json: is a directory."
+    # The operating system's own words for the error, as the product prints them (not one platform's).
+    assert raised.value.sentence == f"{tmp_path}/reference.json: {os.strerror(errno.EISDIR).lower()}."
 
 
 def test_a_number_literal_longer_than_30_characters_is_not_valid_json(tmp_path: Path) -> None:
