@@ -20,7 +20,9 @@ repos:
         types: [python]
       - id: no-em-dash
         name: reject the em dash character (U+2014)
-        entry: '\u2014'
+        # pygrep compiles the entry as a bytes pattern and searches the file's bytes, where `\u` is
+        # a bad escape: the pattern is U+2014 as its three UTF-8 bytes (SPEC_DECISIONS 135).
+        entry: '\xe2\x80\x94'
         language: pygrep
         types: [text]
       - id: no-env-file

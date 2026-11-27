@@ -36,7 +36,7 @@ strict = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-module = ["oprf", "oprf.*", "oblivious", "oblivious.*"]
+module = ["oprf", "oprf.*", "oblivious", "oblivious.*", "pre_commit", "pre_commit.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
