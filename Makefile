@@ -9,6 +9,9 @@ FORCE ?=
 # Installable packages, in dependency order: the test tools first, since every package's dev extra
 # declares them (SPEC_DECISIONS 117).
 PACKAGES := tools contracts/fakes datagen outside_records bank_agent
+# The exact versions `make ci` last passed with, transitive dependencies included (SPEC_DECISIONS 136).
+CONSTRAINTS := $(CURDIR)/constraints.txt
+CONSTRAINTS_VENV := var/constraints-venv
 # Import name of each package, used for the per package coverage gates.
 COVERAGE_PACKAGES := onepledge_contract_fakes onepledge_datagen onepledge_outside_records
 # The bank agent gate covers its domain and application layers combined (SPEC 2.2).
@@ -22,18 +25,39 @@ TEST_PATHS := $(foreach p,$(PACKAGES),$(p)/tests)
 DATA_DIR := var/data/$(PROFILE)-$(SEED)
 
 .DEFAULT_GOAL := help
-.PHONY: help setup lint format typecheck contracts-check test test-fast test-sweep ci data clean
+.PHONY: help setup constraints lint format typecheck contracts-check test test-fast test-sweep ci data clean
 
 help: ## List the targets with one line each
 	@echo "OnePledge layer 1 targets:"
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z][a-z-]*:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-setup: ## Install every layer 1 package in editable mode with its dev tools
+setup: ## Install every package editable with its dev tools, pinned by constraints.txt
 	@for p in $(PACKAGES); do \
 		echo "setup: installing $$p"; \
-		$(PYTHON) -m pip install --quiet $(PIP_FLAGS) -e "$$p[dev]" || exit 1; \
+		$(PYTHON) -m pip install --quiet $(PIP_FLAGS) -c $(CONSTRAINTS) -e "$$p[dev]" || exit 1; \
 	done
 	@echo "setup: done"
+
+# A new virtual environment without the constraints, so pip resolves the declared ranges afresh;
+# its frozen versions become constraints.txt. Run `make ci` on them before committing the file.
+constraints: ## Resolve every dependency afresh in a new environment and rewrite constraints.txt
+	@echo "constraints: resolving the declared ranges in $(CONSTRAINTS_VENV)"
+	@rm -rf $(CONSTRAINTS_VENV)
+	@$(PYTHON) -m venv $(CONSTRAINTS_VENV)
+	@for p in $(PACKAGES); do \
+		$(CONSTRAINTS_VENV)/bin/python -m pip install --quiet $(PIP_FLAGS) -e "$$p[dev]" || exit 1; \
+	done
+	@{ \
+		echo "# The exact versions of every runtime and dev dependency of layer 1, transitive ones"; \
+		echo "# included (SPEC_DECISIONS 136). make setup installs with -c constraints.txt; make"; \
+		echo "# constraints rewrites this file, and make ci must pass on it before it is committed."; \
+		printf '# Resolved with Python %s on %s.\n' \
+			"$$($(CONSTRAINTS_VENV)/bin/python -c 'import platform; print(platform.python_version())')" \
+			"$$(uname -s)"; \
+		$(CONSTRAINTS_VENV)/bin/python -m pip freeze --exclude-editable; \
+	} > $(CONSTRAINTS).new
+	@mv $(CONSTRAINTS).new $(CONSTRAINTS)
+	@echo "constraints: wrote $$(grep -c '==' $(CONSTRAINTS)) pins to constraints.txt; run make ci on them"
 
 lint: ## Check lint rules and formatting with ruff
 	@echo "lint: ruff check"

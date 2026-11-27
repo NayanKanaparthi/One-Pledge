@@ -9,7 +9,7 @@ description = "Read-only stand-in for title offices, payment deposits and a cont
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.110",
-  "starlette>=0.37",
+  "starlette>=0.37,<2",
   "uvicorn>=0.29",
   "pydantic>=2.6",
   "sqlalchemy>=2.0",

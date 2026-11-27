@@ -168,10 +168,19 @@ Needs Python 3.12 or later and PostgreSQL 16.
 ```bash
 git clone https://github.com/NayanKanaparthi/One-Pledge.git && cd One-Pledge
 python3 -m venv .venv && . .venv/bin/activate
-make setup            # every package editable, with its dev tools
+make setup            # every package editable, with its dev tools, at the pinned versions
 make data             # generate a data set into var/data (SEED and PROFILE optional)
 make help             # every target
 ```
+
+Use a new virtual environment as above, not an interpreter that already has packages installed:
+`make setup` installs every package with `pip install -c constraints.txt`, and the pins only hold
+for what it installs. `constraints.txt` holds the exact version of every runtime and dev
+dependency, transitive ones included, that `make ci` passes with, so a fresh install gets the
+tested set instead of whatever PyPI holds that day. The `pyproject.toml` files keep ranges.
+To move to newer versions, run `make constraints` (it resolves the ranges afresh in
+`var/constraints-venv` and rewrites the file), then `make setup` and `make ci` in a new virtual
+environment, and commit the file only when they pass.
 
 Tests need a PostgreSQL superuser URL in `PG_ADMIN_URL` (default
 `postgresql://postgres@localhost:55432/postgres`). They create and drop their own
