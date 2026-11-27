@@ -5,7 +5,9 @@ connection of the serving engine is opened with these parameters as connection o
 PostgreSQL applies after (and so over) any role or database setting, before the first
 statement. The values are written as `SHOW` prints them, so the startup check compares the
 session with this table as it is. Every new pooled connection is also refused unless its
-session fires triggers (`session_replication_role` is `origin`).
+session fires triggers (`session_replication_role` is `origin`). `TimeZone` is UTC whatever the
+server, role or database default, as in the bank agent (SPEC_DECISIONS 137), so no timestamp the
+service reads depends on where the server runs.
 """
 
 from __future__ import annotations
@@ -23,11 +25,13 @@ SESSION_PARAMETERS: Mapping[str, str] = MappingProxyType(
         "statement_timeout": "5s",
         "lock_timeout": "2s",
         "idle_in_transaction_session_timeout": "10s",
+        "TimeZone": "UTC",
     }
 )
 _SHOWN = text(
     "SELECT current_setting('search_path'), current_setting('statement_timeout'), "
-    "current_setting('lock_timeout'), current_setting('idle_in_transaction_session_timeout')"
+    "current_setting('lock_timeout'), current_setting('idle_in_transaction_session_timeout'), "
+    "current_setting('TimeZone')"
 )
 _REPLICATION_ROLE = "SELECT current_setting('session_replication_role')"
 

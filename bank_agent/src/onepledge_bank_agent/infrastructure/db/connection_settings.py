@@ -7,6 +7,11 @@ are written as `SHOW` prints them, so the startup check compares the session wit
 it is. Every new pooled connection is also refused unless its session fires triggers
 (`session_replication_role` is `origin`): a session that does not fire them would pass every
 guard of the schema.
+
+`TimeZone` is UTC whatever the server, role or database default (SPEC_DECISIONS 137): PostgreSQL
+prints a `timestamptz` in the session's time zone, in query results and in catalogue text such
+as a check constraint's definition, so the schema manifest and every timestamp the bank agent
+reads would otherwise depend on where the server runs.
 """
 
 from __future__ import annotations
@@ -24,11 +29,13 @@ SESSION_PARAMETERS: Mapping[str, str] = MappingProxyType(
         "statement_timeout": "5min",
         "lock_timeout": "1min",
         "idle_in_transaction_session_timeout": "10min",
+        "TimeZone": "UTC",
     }
 )
 _SHOWN = text(
     "SELECT current_setting('search_path'), current_setting('statement_timeout'), "
-    "current_setting('lock_timeout'), current_setting('idle_in_transaction_session_timeout')"
+    "current_setting('lock_timeout'), current_setting('idle_in_transaction_session_timeout'), "
+    "current_setting('TimeZone')"
 )
 _REPLICATION_ROLE = "SELECT current_setting('session_replication_role')"
 

@@ -163,6 +163,7 @@ def test_the_service_sets_its_session_parameters_whatever_the_database_defaults(
     database = sql.Identifier(migrated.target.database)
     admin.execute(sql.SQL("ALTER DATABASE {} SET statement_timeout = '1ms'").format(database))
     admin.execute(sql.SQL("ALTER DATABASE {} SET search_path = pg_temp").format(database))
+    admin.execute(sql.SQL("ALTER DATABASE {} SET TimeZone = 'Asia/Kolkata'").format(database))
     engine = make_engine(migrated.app_url, service=True)
     try:
         with engine.connect() as connection:
@@ -170,6 +171,7 @@ def test_the_service_sets_its_session_parameters_whatever_the_database_defaults(
     finally:
         engine.dispose()
     assert shown == dict(SESSION_PARAMETERS)
+    assert shown["TimeZone"] == "UTC", "SPEC_DECISIONS 137: whatever the server or database default"
 
 
 @pytest.mark.integration

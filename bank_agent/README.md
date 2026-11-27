@@ -89,11 +89,12 @@ What a reviewer can check, and where:
   `PUBLIC`); no default privilege; nothing `WITH GRANT OPTION`. `integrity report` shows the
   same violations under `TRIGGERS_FIRE_FOR_APP_ROLE` (point 7) and `APP_ROLE_GRANTS_EXACT`
   (every other point) instead. Every connection is opened with the bank agent's own
-  `search_path`, `statement_timeout`, `lock_timeout` and `idle_in_transaction_session_timeout`
-  (`infrastructure/db/connection_settings.py`), and a new pooled connection whose session would
-  not fire triggers is refused; `DATABASE_URL` and `MIGRATION_DATABASE_URL` may not carry query
-  parameters. `db migrate` and `seed-reference` refuse a `MIGRATION_DATABASE_URL` role that does
-  not own the database ("... is not the owner of the database; use the owner role.") or a
+  `search_path`, `statement_timeout`, `lock_timeout`, `idle_in_transaction_session_timeout` and
+  `TimeZone` UTC (`infrastructure/db/connection_settings.py`; UTC so that no timestamp and no
+  catalogue text depends on the server's time zone), and a new pooled connection whose session
+  would not fire triggers is refused; `DATABASE_URL` and `MIGRATION_DATABASE_URL` may not carry
+  query parameters. `db migrate` and `seed-reference` refuse a `MIGRATION_DATABASE_URL` role that
+  does not own the database ("... is not the owner of the database; use the owner role.") or a
   schema with a table another role owns ("... the schema was changed outside db migrate.");
   `db migrate` also refuses a `DB_APP_ROLE` that is not `{database}_app` of that database.
 - **Nothing is stored that cannot be read back.** A value another party supplies is checked
@@ -141,7 +142,9 @@ What a reviewer can check, and where:
   SPEC_DECISIONS 90), and `SCHEMA_MATCHES_MANIFEST` compares the whole schema (tables,
   columns, constraints, indexes, triggers, functions, rules, policies and every other object)
   with `infrastructure/db/schema_manifest.json`, naming every object that differs
-  (SPEC_DECISIONS 105); a test keeps the file equal to a database migrated to head. The halt rule
+  (SPEC_DECISIONS 105); a test keeps the file equal to a database migrated to head, and
+  `python -m bank_testkit.schema_manifest_file` (from `tests/`) rewrites it. The catalogue is
+  read in UTC whatever the server's time zone (SPEC_DECISIONS 137). The halt rule
   (`HALT_ON_REGISTRY_INTEGRITY_FAILURE`, SPEC_DECISIONS 56) stops every submission,
   resubmission and case position while a checkpoint failed, a request has a failed
   certificate and no verified one, a CHECKPOINT message is quarantined, or the bank is

@@ -16,11 +16,17 @@ object's kind and name mapped to its definition:
 - `relation`: every other relation (views, sequences, foreign tables), by kind;
 - `type`: every type defined in the schema other than a table's row type.
 
+The catalogue is rendered with `TimeZone` UTC whatever the session's own (SPEC_DECISIONS 137):
+PostgreSQL prints a `timestamptz` constant of a check constraint in the session's time zone, so
+the same schema would otherwise read differently on a server in another time zone.
+
 `schema_manifest.json` beside this module holds the expected entries; an integration test
 migrates a fresh database to head and requires its catalogue to equal the file, so the file
-cannot drift from the migrations. Control `SCHEMA_MATCHES_MANIFEST` is true when the SHA-256 of
-the canonical JSON of the live catalogue equals that of the file; when it is false, `differences`
-names every object added, missing or changed.
+cannot drift from the migrations. `python -m bank_testkit.schema_manifest_file` (from
+`bank_agent/tests`) writes the file from a freshly migrated scratch database. Control
+`SCHEMA_MATCHES_MANIFEST` is true when the SHA-256 of the canonical JSON of the live catalogue
+equals that of the file; when it is false, `differences` names every object added, missing or
+changed.
 """
 
 from __future__ import annotations
@@ -33,6 +39,9 @@ from importlib import resources
 from sqlalchemy import Connection, text
 
 MANIFEST_FILE = "schema_manifest.json"
+RENDERING_TIME_ZONE = "UTC"
+_RENDER_IN_UTC = text("SELECT set_config('TimeZone', :zone, true)").bindparams(zone=RENDERING_TIME_ZONE)
+_TIME_ZONE = text("SELECT current_setting('TimeZone')")
 QUERIES: tuple[tuple[str, str], ...] = (
     (
         "database",
@@ -105,12 +114,23 @@ QUERIES: tuple[tuple[str, str], ...] = (
 )
 
 
+class CatalogueTimeZoneError(RuntimeError):
+    """The catalogue could not be read with `TimeZone` UTC (a connection in autocommit mode)."""
+
+
 def catalogue(connection: Connection) -> dict[str, str]:
-    """Every object of the `public` schema, `kind name` to its definition."""
+    """Every object of the `public` schema, `kind name` to its definition, rendered in UTC.
+
+    `TimeZone` is set for the current transaction only, so the session is left as it was; a
+    connection in autocommit mode would drop the setting after one statement, and is refused.
+    """
+    connection.execute(_RENDER_IN_UTC)
     found: dict[str, str] = {}
     for kind, query in QUERIES:
         for name, definition in connection.execute(text(query)):
             found[f"{kind} {name}"] = str(definition)
+    if connection.execute(_TIME_ZONE).scalar_one() != RENDERING_TIME_ZONE:
+        raise CatalogueTimeZoneError("the catalogue must be read inside a transaction")
     return found
 
 

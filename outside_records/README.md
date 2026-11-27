@@ -36,9 +36,9 @@ synthetic and comes from `onepledge-datagen`.
   privileges, never the URL, and does not depend on the search path.
 - `serve` sets its own session parameters on every connection, as connection options that
   override role and database defaults: `search_path` `public`, `statement_timeout` 5s,
-  `lock_timeout` 2s, `idle_in_transaction_session_timeout` 10s; and refuses every new
-  pooled connection whose `session_replication_role` is not `origin`. `DATABASE_URL` and
-  `MIGRATION_DATABASE_URL` may not carry query parameters.
+  `lock_timeout` 2s, `idle_in_transaction_session_timeout` 10s, `TimeZone` UTC; and refuses
+  every new pooled connection whose `session_replication_role` is not `origin`. `DATABASE_URL`
+  and `MIGRATION_DATABASE_URL` may not carry query parameters.
 - `serve` starts through named checks, in order: settings, database reachable, database
   encoding, session parameters, schema in place, role inspection, bind probe
   (SPEC_DECISIONS 104, 133.1). "Database encoding" refuses a database that is not UTF8 ("The
