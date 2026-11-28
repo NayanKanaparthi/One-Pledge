@@ -137,3 +137,11 @@ Precedence for layer 2:
 **Question.** `BUILD_PLAN.md` gives the `docs/` folder to Vedant. Nayan already added `docs/layer1/`.
 
 **Decision.** `docs/layer2/` is Shreyas's spec set: `CONTEXT.md`, `SPEC.md`, `WORK_PACKAGES.md`, `RUBRIC.md`, `SPEC_DECISIONS.md`. It does not move or edit `docs/layer1/` or `docs/BUILD_PLAN.md`.
+
+## 14. Test dependencies beyond SPEC section 3 (BUILD_INSTRUCTIONS C3)
+
+**Question.** `SPEC.md` section 3 allows the dev dependencies pytest, pytest-cov, hypothesis, ruff and mypy. The root `conftest.py` loads `onepledge_testtools.pytest_plugin` for every test run from the repository root, and the root `pyproject.toml` sets `timeout = 120`, which needs pytest-timeout. An in-process call of `/healthz` needs httpx. A test that checks a response against the `Health` schema in `contracts/*.yaml` needs PyYAML and jsonschema. `outside_records/pyproject.toml`, the shape layer 2 copies, declares all of these.
+
+**Decision.** At WP1, asked which dev dependencies layer 2 may declare, Shreyas selected the option labelled "outside_records dev set (Recommended)". That option read: "Dev only: pytest-timeout, onepledge-testtools, httpx, PyYAML, jsonschema, types-PyYAML, types-jsonschema. This is the same as the package shape SPEC says to copy. Runtime stays exactly at the SPEC list, with no starlette import in WP1." So layer 2 packages may declare, as dev dependencies only, pytest-timeout, onepledge-testtools, httpx, PyYAML, jsonschema, types-PyYAML and types-jsonschema. Each package declares only the ones its tests use. Runtime dependencies stay the `SPEC.md` section 3 list. starlette is not declared, and `src/` does not import it, until a later decision.
+
+**Affects.** WP1 and every later package's `pyproject.toml`.
