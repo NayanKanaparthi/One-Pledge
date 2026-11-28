@@ -1,1 +1,1 @@
-"""Infrastructure of the key holder: settings from the environment."""
+"""Infrastructure of the key holder: settings, the scalar, the clock, logging and the database."""

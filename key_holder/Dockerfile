@@ -1,8 +1,9 @@
 # OnePledge key holder (SPEC section 3). Build context: key_holder.
-# One image serves both holders; HOLDER_ID, ACTIVE_KEY_VERSION and PORT come from the
-# environment at run time, and no secret is in any image layer. For example:
-#   docker run -e HOLDER_ID=kh1 -e ACTIVE_KEY_VERSION=1 -e PORT=8301 -p 8301:8301 IMAGE
-#   docker run -e HOLDER_ID=kh2 -e ACTIVE_KEY_VERSION=1 -e PORT=8302 -p 8302:8302 IMAGE
+# One image serves both holders; HOLDER_ID, ACTIVE_KEY_VERSION, OPRF_SCALAR_B64, DATABASE_URL and
+# PORT come from the environment at run time (README "Configuration"), and no secret is in any
+# image layer. For example, with one env file per holder:
+#   docker run --env-file kh1.env -p 8301:8301 IMAGE
+#   docker run --env-file kh2.env -p 8302:8302 IMAGE
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

@@ -1,1 +1,1 @@
-"""Migration revisions of the key holder database. The schema of SPEC section 4.1 arrives in WP2."""
+"""Migration revisions of the key holder database: the SPEC 4.1 tables and the app role's grants."""
