@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "onepledge-ledger-verifier"
+version = "0.1.0"
+description = "OnePledge ledger verifier: recomputes the registry's hash chain and signatures (layer 2)."
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+# SPEC section 3 plus SPEC_DECISIONS 14 (the outside_records dev set, only what these tests use).
+dev = [
+  "pytest>=8",
+  "pytest-cov>=5",
+  "pytest-timeout>=2.3",
+  "onepledge-testtools>=1.0",
+  "hypothesis>=6.100",
+  "ruff>=0.5",
+  "mypy>=1.10",
+  "PyYAML>=6.0",
+  "types-PyYAML>=6.0",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["onepledge_ledger_verifier"]
+
+[tool.setuptools.package-data]
+onepledge_ledger_verifier = ["py.typed"]
